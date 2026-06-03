@@ -1,25 +1,26 @@
 from django.urls import path
-from . import views
+from . import views as v
 
 urlpatterns = [
-    # Dashboard
-    path("dashboard/summary/", views.DashboardSummaryView.as_view()),
-    path("dashboard/charts/status-donut/", views.StatusDonutView.as_view()),
-    path("dashboard/charts/category-completion/", views.CategoryCompletionView.as_view()),
-    path("dashboard/charts/submission-trend/", views.SubmissionTrendView.as_view()),
-    path("dashboard/charts/overdue-by-form/", views.OverdueByFormView.as_view()),
-    # Periods
-    path("periods/", views.ReportingPeriodListView.as_view()),
-    path("periods/<int:pk>/", views.ReportingPeriodDetailView.as_view()),
-    path("periods/<int:pk>/activate/", views.ActivatePeriodView.as_view()),
-    # Expected submissions
-    path("expected-submissions/", views.ExpectedSubmissionListView.as_view()),
-    path("expected-submissions/<int:pk>/", views.ExpectedSubmissionDetailView.as_view()),
-    path("expected-submissions/<int:pk>/start/", views.StartSubmissionView.as_view()),
-    # Submissions
-    path("submissions/<int:pk>/", views.SubmissionDetailView.as_view()),
-    path("submissions/<int:pk>/sections/<str:section_code>/values/", views.SectionValuesView.as_view()),
-    path("submissions/<int:pk>/completion/", views.SubmissionCompletionView.as_view()),
-    path("submissions/<int:pk>/submit-for-approval/", views.SubmitForApprovalView.as_view()),
-    path("submissions/<int:pk>/official-submit/", views.OfficialSubmitView.as_view()),
+    path("dashboard/summary/", v.DashboardSummaryView.as_view()),
+    path("dashboard/charts/status-donut/", v.StatusDonutView.as_view()),
+    path("dashboard/charts/category-completion/", v.CategoryCompletionView.as_view()),
+    path("dashboard/charts/submission-trend/", v.SubmissionTrendView.as_view()),
+    path("dashboard/charts/overdue-by-form/", v.OverdueByFormView.as_view()),
+    path("periods/", v.ReportingPeriodListView.as_view()),
+    path("periods/<int:pk>/", v.ReportingPeriodDetailView.as_view()),
+    path("periods/<int:pk>/activate/", v.ActivatePeriodView.as_view()),
+    path("expected-submissions/", v.ExpectedSubmissionListView.as_view()),
+    path("expected-submissions/<int:pk>/", v.ExpectedSubmissionDetailView.as_view()),
+    path("expected-submissions/<int:pk>/start/", v.StartSubmissionView.as_view()),
+    path("submissions/<int:pk>/", v.SubmissionDetailView.as_view()),
+    path("submissions/<int:pk>/sections/<str:section_code>/values/", v.SectionValuesView.as_view()),
+    path("submissions/<int:pk>/completion/", v.SubmissionCompletionView.as_view()),
+    path("submissions/<int:pk>/submit-for-approval/", v.SubmitForApprovalView.as_view()),
+    path("submissions/<int:pk>/official-submit/", v.OfficialSubmitView.as_view()),
+    path("submissions/<int:pk>/review/history/", v.ReviewHistoryView.as_view()),
+    path("submissions/<int:pk>/review/approve/", v.ReviewApproveView.as_view()),
+    path("submissions/<int:pk>/review/reject/", v.ReviewRejectView.as_view()),
+    path("submissions/<int:pk>/review/request-correction/", v.ReviewRequestCorrectionView.as_view()),
+    path("submissions/<int:pk>/review/add-note/", v.ReviewAddNoteView.as_view()),
 ]

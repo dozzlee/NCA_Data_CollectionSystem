@@ -7,24 +7,22 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.audit.models import AuditEvent
-from .models import ReportingPeriod, ExpectedSubmission, Submission, SubmissionValue
+from .models import (
+    ReportingPeriod, ExpectedSubmission, Submission,
+    SubmissionValue, ReviewAction
+)
 from .serializers import (
     ReportingPeriodSerializer, ExpectedSubmissionSerializer,
-    SubmissionSerializer, SubmissionValueSerializer,
+    SubmissionSerializer, SubmissionValueSerializer, ReviewActionSerializer,
 )
 
 
 def write_audit(request, action, entity_type, entity_id, before=None, after=None):
     AuditEvent.objects.create(
-        user=request.user,
-        user_email=request.user.email,
-        role=request.user.role,
+        user=request.user, user_email=request.user.email, role=request.user.role,
         organization=request.user.organization.name if request.user.organization else "",
-        action=action,
-        entity_type=entity_type,
-        entity_id=str(entity_id),
-        before_value=before,
-        after_value=after,
+        action=action, entity_type=entity_type, entity_id=str(entity_id),
+        before_value=before, after_value=after,
         ip_address=request.META.get("REMOTE_ADDR"),
     )
 
@@ -36,13 +34,11 @@ class DashboardSummaryView(APIView):
 
     def get(self, request):
         qs = ExpectedSubmission.objects.all()
-        period_id = request.query_params.get("period_id")
-        if period_id:
-            qs = qs.filter(period_id=period_id)
-
+        if pid := request.query_params.get("period_id"):
+            qs = qs.filter(period_id=pid)
         total = qs.count()
         approved = qs.filter(workflow_status="APPROVED").count()
-        summary = {
+        return Response({
             "total_expected": total,
             "not_started": qs.filter(workflow_status="NOT_STARTED").count(),
             "draft": qs.filter(workflow_status="DRAFT").count(),
@@ -56,8 +52,7 @@ class DashboardSummaryView(APIView):
             "overdue": qs.filter(due_state="OVERDUE").count(),
             "due_soon": qs.filter(due_state="DUE_SOON").count(),
             "completion_pct": round((approved / total) * 100, 1) if total else 0,
-        }
-        return Response(summary)
+        })
 
 
 class StatusDonutView(APIView):
@@ -67,8 +62,7 @@ class StatusDonutView(APIView):
         qs = ExpectedSubmission.objects.all()
         if pid := request.query_params.get("period_id"):
             qs = qs.filter(period_id=pid)
-        data = qs.values("workflow_status").annotate(count=Count("id")).order_by("workflow_status")
-        return Response(list(data))
+        return Response(list(qs.values("workflow_status").annotate(count=Count("id")).order_by("workflow_status")))
 
 
 class CategoryCompletionView(APIView):
@@ -82,16 +76,11 @@ class CategoryCompletionView(APIView):
             total=Count("id"),
             approved=Count("id", filter=Q(workflow_status="APPROVED")),
         )
-        result = [
-            {
-                "category": c["provider__category"],
-                "completion_pct": round((c["approved"] / (c["total"] or 1)) * 100, 1),
-                "total": c["total"],
-                "approved": c["approved"],
-            }
-            for c in cats
-        ]
-        return Response(result)
+        return Response([{
+            "category": c["provider__category"],
+            "completion_pct": round((c["approved"] / (c["total"] or 1)) * 100, 1),
+            "total": c["total"], "approved": c["approved"],
+        } for c in cats])
 
 
 class SubmissionTrendView(APIView):
@@ -100,12 +89,9 @@ class SubmissionTrendView(APIView):
     def get(self, request):
         cutoff = timezone.now() - timedelta(days=365)
         data = (
-            Submission.objects
-            .filter(submitted_at__gte=cutoff, submitted_at__isnull=False)
+            Submission.objects.filter(submitted_at__gte=cutoff, submitted_at__isnull=False)
             .extra(select={"month": "DATE_TRUNC('month', submitted_at)"})
-            .values("month")
-            .annotate(count=Count("id"))
-            .order_by("month")
+            .values("month").annotate(count=Count("id")).order_by("month")
         )
         return Response(list(data))
 
@@ -114,17 +100,14 @@ class OverdueByFormView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        data = (
-            ExpectedSubmission.objects
-            .filter(due_state="OVERDUE")
+        return Response(list(
+            ExpectedSubmission.objects.filter(due_state="OVERDUE")
             .values("form_template__form_code", "form_template__name")
-            .annotate(count=Count("id"))
-            .order_by("-count")
-        )
-        return Response(list(data))
+            .annotate(count=Count("id")).order_by("-count")
+        ))
 
 
-# ── Periods ───────────────────────────────────────────────────────────────────
+# ── Periods ──────────────────────────────────────────────────────────────────
 
 class ReportingPeriodListView(generics.ListCreateAPIView):
     queryset = ReportingPeriod.objects.all()
@@ -149,15 +132,13 @@ class ActivatePeriodView(APIView):
             return Response({"detail": "Only DRAFT periods can be activated."}, status=400)
         period.activate()
         write_audit(request, "PERIOD_ACTIVATED", "ReportingPeriod", period.id)
-        return Response({"detail": "Period activated.", "expected_count": period.expected_submissions.count()})
+        return Response({"detail": "Activated.", "expected_count": period.expected_submissions.count()})
 
 
 # ── Expected Submissions ──────────────────────────────────────────────────────
 
 class ExpectedSubmissionListView(generics.ListAPIView):
-    queryset = ExpectedSubmission.objects.select_related(
-        "provider", "form_template", "period", "assigned_officer"
-    )
+    queryset = ExpectedSubmission.objects.select_related("provider", "form_template", "period", "assigned_officer")
     serializer_class = ExpectedSubmissionSerializer
     filterset_fields = ["workflow_status", "due_state", "form_template", "period", "provider", "assigned_officer"]
     search_fields = ["provider__registered_name", "form_template__form_code"]
@@ -165,7 +146,6 @@ class ExpectedSubmissionListView(generics.ListAPIView):
 
     def get_queryset(self):
         qs = super().get_queryset()
-        # Providers only see their own
         if self.request.user.is_provider and self.request.user.organization:
             qs = qs.filter(provider__organization=self.request.user.organization)
         return qs
@@ -176,7 +156,7 @@ class ExpectedSubmissionDetailView(generics.RetrieveUpdateAPIView):
     serializer_class = ExpectedSubmissionSerializer
 
 
-# ── Submissions & Values ──────────────────────────────────────────────────────
+# ── Submissions ───────────────────────────────────────────────────────────────
 
 class StartSubmissionView(APIView):
     permission_classes = [IsAuthenticated]
@@ -186,10 +166,8 @@ class StartSubmissionView(APIView):
             expected = ExpectedSubmission.objects.get(pk=pk)
         except ExpectedSubmission.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
-
         if expected.workflow_status not in ("NOT_STARTED", "CORRECTION_REQUESTED"):
-            return Response({"detail": "Cannot start submission in current state."}, status=400)
-
+            return Response({"detail": "Cannot start in current state."}, status=400)
         last = expected.versions.order_by("-version").first()
         version = (last.version + 1) if last else 1
         submission = Submission.objects.create(expected=expected, version=version)
@@ -212,10 +190,8 @@ class SectionValuesView(APIView):
             submission = Submission.objects.get(pk=pk)
         except Submission.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
-
         values = SubmissionValue.objects.filter(
-            submission=submission,
-            field__section__section_code=section_code,
+            submission=submission, field__section__section_code=section_code
         ).select_related("field", "grid", "grid_column")
         return Response(SubmissionValueSerializer(values, many=True).data)
 
@@ -224,13 +200,11 @@ class SectionValuesView(APIView):
             submission = Submission.objects.get(pk=pk)
         except Submission.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
-
         if submission.expected.workflow_status not in ("DRAFT", "CORRECTION_REQUESTED"):
-            return Response({"detail": "Submission is not editable."}, status=400)
+            return Response({"detail": "Not editable."}, status=400)
 
-        values_data = request.data.get("values", [])
         saved = []
-        for v in values_data:
+        for v in request.data.get("values", []):
             obj, _ = SubmissionValue.objects.update_or_create(
                 submission=submission,
                 field_id=v.get("field"),
@@ -246,20 +220,39 @@ class SectionValuesView(APIView):
             )
             saved.append(obj)
 
-        # Recompute completion
-        form = submission.expected.form_template
-        total_required = sum(
+        total_req = sum(
             s.fields.filter(is_required=True).count()
-            for s in form.sections.all()
+            for s in submission.expected.form_template.sections.all()
         )
-        provided = submission.values.filter(value_status="PROVIDED").count()
-        pct = round((provided / total_required) * 100, 2) if total_required else 0
+        provided = submission.values.filter(value_status__in=["PROVIDED","NOT_APPLICABLE","NOT_AVAILABLE","NOT_REQUIRED","SYSTEM_CALCULATED"]).count()
+        pct = round((provided / total_req) * 100, 2) if total_req else 0
         submission.completion_pct = pct
         submission.save(update_fields=["completion_pct"])
-
         write_audit(request, "SECTION_VALUES_SAVED", "Submission", submission.id,
-                    after={"section_code": section_code, "values_count": len(saved)})
+                    after={"section": section_code, "count": len(saved)})
         return Response({"saved": len(saved), "completion_pct": float(pct)})
+
+
+class SubmissionCompletionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            submission = Submission.objects.get(pk=pk)
+        except Submission.DoesNotExist:
+            return Response({"detail": "Not found."}, status=404)
+        sections = []
+        for section in submission.expected.form_template.sections.prefetch_related("fields").all():
+            required = section.fields.filter(is_required=True).count()
+            provided = submission.values.filter(
+                field__section=section,
+                value_status__in=["PROVIDED","NOT_APPLICABLE","NOT_AVAILABLE","NOT_REQUIRED","SYSTEM_CALCULATED"],
+            ).count()
+            sections.append({
+                "section_code": section.section_code, "title": section.title,
+                "required": required, "provided": provided, "complete": provided >= required,
+            })
+        return Response({"completion_pct": float(submission.completion_pct), "sections": sections})
 
 
 class SubmitForApprovalView(APIView):
@@ -270,10 +263,8 @@ class SubmitForApprovalView(APIView):
             submission = Submission.objects.get(pk=pk)
         except Submission.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
-
         if submission.expected.workflow_status != "DRAFT":
-            return Response({"detail": "Only DRAFT submissions can be submitted for approval."}, status=400)
-
+            return Response({"detail": "Only DRAFT can be submitted for approval."}, status=400)
         submission.expected.workflow_status = "PENDING_APPROVAL"
         submission.expected.save(update_fields=["workflow_status"])
         write_audit(request, "SUBMITTED_FOR_APPROVAL", "Submission", submission.id)
@@ -288,10 +279,8 @@ class OfficialSubmitView(APIView):
             submission = Submission.objects.get(pk=pk)
         except Submission.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
-
         if submission.expected.workflow_status != "PENDING_APPROVAL":
-            return Response({"detail": "Only PENDING_APPROVAL submissions can be officially submitted."}, status=400)
-
+            return Response({"detail": "Only PENDING_APPROVAL can be officially submitted."}, status=400)
         submission.expected.workflow_status = "SUBMITTED"
         submission.expected.refresh_due_state()
         submission.submitted_by = request.user
@@ -301,32 +290,110 @@ class OfficialSubmitView(APIView):
         return Response({"detail": "Officially submitted to NCA."})
 
 
-class SubmissionCompletionView(APIView):
+# ── NCA Review ────────────────────────────────────────────────────────────────
+
+class ReviewHistoryView(generics.ListAPIView):
+    serializer_class = ReviewActionSerializer
+
+    def get_queryset(self):
+        return ReviewAction.objects.filter(submission_id=self.kwargs["pk"]).select_related("created_by")
+
+
+class ReviewApproveView(APIView):
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, pk):
+    def post(self, request, pk):
         try:
             submission = Submission.objects.get(pk=pk)
         except Submission.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
+        submission.expected.workflow_status = "APPROVED"
+        submission.expected.refresh_due_state()
+        submission.reviewed_by = request.user
+        submission.reviewed_at = timezone.now()
+        submission.save(update_fields=["reviewed_by", "reviewed_at"])
+        submission.expected.save(update_fields=["workflow_status", "due_state"])
+        ReviewAction.objects.create(
+            submission=submission, action="APPROVE",
+            comment=request.data.get("comment", ""), created_by=request.user,
+        )
+        write_audit(request, "SUBMISSION_APPROVED", "Submission", submission.id)
+        return Response({"detail": "Submission approved."})
 
-        form = submission.expected.form_template
-        sections = []
-        for section in form.sections.prefetch_related("fields").all():
-            required = section.fields.filter(is_required=True).count()
-            provided = submission.values.filter(
-                field__section=section,
-                value_status__in=("PROVIDED", "NOT_APPLICABLE", "NOT_AVAILABLE", "NOT_REQUIRED", "SYSTEM_CALCULATED"),
-            ).count()
-            sections.append({
-                "section_code": section.section_code,
-                "title": section.title,
-                "required": required,
-                "provided": provided,
-                "complete": provided >= required,
-            })
 
-        return Response({
-            "completion_pct": float(submission.completion_pct),
-            "sections": sections,
-        })
+class ReviewRejectView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            submission = Submission.objects.get(pk=pk)
+        except Submission.DoesNotExist:
+            return Response({"detail": "Not found."}, status=404)
+        submission.expected.workflow_status = "REJECTED"
+        submission.expected.save(update_fields=["workflow_status"])
+        submission.reviewed_by = request.user
+        submission.reviewed_at = timezone.now()
+        submission.save(update_fields=["reviewed_by", "reviewed_at"])
+        ReviewAction.objects.create(
+            submission=submission, action="REJECT",
+            comment=request.data.get("comment", ""), created_by=request.user,
+        )
+        write_audit(request, "SUBMISSION_REJECTED", "Submission", submission.id)
+        return Response({"detail": "Submission rejected."})
+
+
+class ReviewRequestCorrectionView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            submission = Submission.objects.get(pk=pk)
+        except Submission.DoesNotExist:
+            return Response({"detail": "Not found."}, status=404)
+        targets = request.data.get("targets", [])  # [{type, id, comment}]
+        comment = request.data.get("comment", "")
+
+        submission.expected.workflow_status = "CORRECTION_REQUESTED"
+        submission.expected.save(update_fields=["workflow_status"])
+
+        # Mark targeted fields as WAITING_CORRECTION
+        for t in targets:
+            if t.get("type") == "FIELD" and t.get("id"):
+                SubmissionValue.objects.filter(
+                    submission=submission, field_id=t["id"]
+                ).update(value_status="WAITING_CORRECTION")
+
+        ReviewAction.objects.create(
+            submission=submission, action="REQUEST_CORRECTION",
+            target_type="SUBMISSION", comment=comment,
+            is_provider_visible=True, created_by=request.user,
+        )
+        for t in targets:
+            ReviewAction.objects.create(
+                submission=submission, action="REQUEST_CORRECTION",
+                target_type=t.get("type", "FIELD"),
+                target_id=str(t.get("id", "")),
+                comment=t.get("comment", ""),
+                is_provider_visible=True, created_by=request.user,
+            )
+        write_audit(request, "CORRECTION_REQUESTED", "Submission", submission.id,
+                    after={"targets": len(targets)})
+        return Response({"detail": "Correction requested.", "targets": len(targets)})
+
+
+class ReviewAddNoteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            submission = Submission.objects.get(pk=pk)
+        except Submission.DoesNotExist:
+            return Response({"detail": "Not found."}, status=404)
+        is_provider = request.data.get("provider_visible", False)
+        action = "ADD_PROVIDER_COMMENT" if is_provider else "ADD_NOTE"
+        ReviewAction.objects.create(
+            submission=submission, action=action,
+            comment=request.data.get("comment", ""),
+            is_provider_visible=is_provider, created_by=request.user,
+        )
+        return Response({"detail": "Note added."})
