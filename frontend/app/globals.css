@@ -1,0 +1,95 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+  color-scheme: light;
+
+  /* Core palette */
+  --primary:              #001836;
+  --primary-container:    #002d5b;
+  --secondary:            #275fa5;
+  --surface:              #f7f9fb;
+  --surface-container:    #eceef0;
+  --surface-container-low: #f2f4f6;
+  --surface-glass:        rgba(255, 255, 255, 0.70);
+  --on-surface:           #191c1e;
+  --on-surface-variant:   #43474f;
+  --outline:              #737780;
+  --outline-variant:      #c3c6d0;
+  --data-blue:            #0066cc;
+  --nca-red:              #e31937;
+  --nca-gold:             #ffd100;
+  --success:              #1f7a4d;
+  --success-soft:         #e5f4eb;
+  --warning-soft:         #fff3bf;
+  --critical-soft:        #ffe8e8;
+
+  /* Shadows — navy tinted, never pure black */
+  --shadow-card:          0 16px 42px rgba(0, 45, 91, 0.10);
+  --shadow-glass:         0 8px 32px rgba(0, 45, 91, 0.08);
+  --shadow-modal:         0 24px 64px rgba(0, 45, 91, 0.16);
+
+  /* Radii */
+  --radius-sm:            8px;
+  --radius-lg:            16px;
+  --radius-pill:          9999px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background-color: var(--surface);
+  color: var(--on-surface);
+  min-height: 100vh;
+}
+
+/* Glass card utility */
+.glass-card {
+  background: var(--surface-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  box-shadow: var(--shadow-glass);
+}
+
+/* Data mono numbers */
+.data-mono {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  font-weight: 500;
+}
+
+/* Focus ring — data blue */
+:focus-visible {
+  outline: 3px solid rgba(0, 102, 204, 0.40);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Scrollbar — subtle */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--outline-variant); border-radius: var(--radius-pill); }
+::-webkit-scrollbar-thumb:hover { background: var(--outline); }
+
+/* Label uppercase utility */
+.label-caps {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
