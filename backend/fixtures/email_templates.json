@@ -1,0 +1,30 @@
+[
+  {"model": "compliance.emailtemplate", "pk": 1, "fields": {
+    "template_type": "PERIOD_OPEN",
+    "subject": "Regulatory Data Collection Period Open — {{period_name}}",
+    "body": "Dear {{provider_name}},\n\nThe {{period_name}} regulatory data collection period is now open. Please log in to the NCA Data Collection System to complete and submit your {{form_name}} return.\n\nDue date: {{due_date}}\n\nIf you have any questions, contact the NCA Data Management Team.\n\nRegards,\nNational Communications Authority",
+    "placeholders": ["{{provider_name}}", "{{period_name}}", "{{form_name}}", "{{due_date}}"],
+    "created_at": "2025-01-01T00:00:00Z", "updated_at": "2025-01-01T00:00:00Z"
+  }},
+  {"model": "compliance.emailtemplate", "pk": 2, "fields": {
+    "template_type": "REMINDER",
+    "subject": "Reminder: {{form_name}} Return Due {{due_date}}",
+    "body": "Dear {{provider_name}},\n\nThis is a reminder that your {{form_name}} submission for {{period_name}} is due on {{due_date}}.\n\nCurrent status: {{workflow_status}}\n\nPlease log in to the NCA Data Collection System to complete your submission.\n\nRegards,\nNational Communications Authority",
+    "placeholders": ["{{provider_name}}", "{{form_name}}", "{{period_name}}", "{{due_date}}", "{{workflow_status}}"],
+    "created_at": "2025-01-01T00:00:00Z", "updated_at": "2025-01-01T00:00:00Z"
+  }},
+  {"model": "compliance.emailtemplate", "pk": 3, "fields": {
+    "template_type": "OVERDUE",
+    "subject": "OVERDUE: {{form_name}} Return for {{period_name}}",
+    "body": "Dear {{provider_name}},\n\nYour {{form_name}} submission for {{period_name}} was due on {{due_date}} and has not yet been received.\n\nPlease submit your return immediately via the NCA Data Collection System. Continued non-compliance may result in regulatory action.\n\nRegards,\nNational Communications Authority",
+    "placeholders": ["{{provider_name}}", "{{form_name}}", "{{period_name}}", "{{due_date}}"],
+    "created_at": "2025-01-01T00:00:00Z", "updated_at": "2025-01-01T00:00:00Z"
+  }},
+  {"model": "compliance.emailtemplate", "pk": 4, "fields": {
+    "template_type": "CORRECTION_REQUEST",
+    "subject": "Correction Required: {{form_name}} Submission for {{period_name}}",
+    "body": "Dear {{provider_name}},\n\nYour {{form_name}} submission for {{period_name}} has been reviewed by NCA. Corrections are required before the submission can be approved.\n\nPlease log in to the NCA Data Collection System to view the specific fields requiring correction and resubmit.\n\nRegards,\nNational Communications Authority",
+    "placeholders": ["{{provider_name}}", "{{form_name}}", "{{period_name}}"],
+    "created_at": "2025-01-01T00:00:00Z", "updated_at": "2025-01-01T00:00:00Z"
+  }}
+]
