@@ -1,5 +1,6 @@
 "use client";
 
+import Cookies from "js-cookie";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { SessionTimeoutModal } from "@/components/ui/SessionTimeoutModal";
@@ -7,14 +8,14 @@ import { useSessionTimeout } from "@/hooks/useSessionTimeout";
 import { api } from "@/lib/api";
 
 async function refreshToken(): Promise<boolean> {
-  const refresh = localStorage.getItem("refresh_token");
+  const refresh = Cookies.get("refresh_token");
   if (!refresh) return false;
   try {
     const data = await api<{ access: string }>("/auth/refresh/", {
       method: "POST",
       body: JSON.stringify({ refresh }),
     });
-    localStorage.setItem("access_token", data.access);
+    Cookies.set("access_token", data.access, { expires: 1 / 96 });
     return true;
   } catch {
     return false;

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { SectionStepper } from "@/components/forms/SectionStepper";
 import { FieldRenderer } from "@/components/forms/FieldRenderer";
 import { GridRenderer } from "@/components/forms/GridRenderer";
@@ -223,6 +224,15 @@ export default function FormEntryPage() {
   const params = useParams();
   const expectedId = Number(params.id);
 
+  // Current user — to gate actions by role
+  const { data: currentUser } = useQuery<import("@/lib/types").User>({
+    queryKey: ["me"],
+    queryFn: () => api("/auth/me/"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const isApprover = currentUser?.role === "PROVIDER_APPROVER";
+  const isDataEntry = currentUser?.role === "PROVIDER_DATA_ENTRY";
+
   const expectedQ = useExpectedSubmission(expectedId);
   const expected = expectedQ.data;
 
@@ -322,17 +332,43 @@ export default function FormEntryPage() {
           <p className="text-[13px] text-[#737780] mt-0.5">{expected.period_name}</p>
         </div>
 
-        {expected.workflow_status === "DRAFT" && (
-          <button
-            onClick={handleSubmitForApproval}
-            disabled={submitMutation.isPending || (completion?.completion_pct ?? 0) < 1}
-            className="flex items-center gap-2 rounded-[8px] bg-[#1f7a4d] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#185e3b] disabled:opacity-50 transition-colors"
-            title="Complete all required fields before submitting"
-          >
-            <Send size={13} />
-            {submitMutation.isPending ? "Submitting…" : "Submit for approval"}
-          </button>
-        )}
+        <div className="flex gap-2 shrink-0">
+          {/* DATA ENTRY: can submit draft to approver */}
+          {isDataEntry && expected.workflow_status === "DRAFT" && (
+            <button
+              onClick={handleSubmitForApproval}
+              disabled={submitMutation.isPending || (completion?.completion_pct ?? 0) < 1}
+              className="flex items-center gap-2 rounded-[8px] bg-[#1f7a4d] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#185e3b] disabled:opacity-50 transition-colors"
+              title="Complete all required fields before submitting to your approver"
+            >
+              <Send size={13} />
+              {submitMutation.isPending ? "Submitting…" : "Submit to Approver"}
+            </button>
+          )}
+          {/* APPROVER: can return to data entry or officially submit to NCA */}
+          {isApprover && expected.workflow_status === "PENDING_APPROVAL" && (
+            <>
+              <button
+                onClick={async () => {
+                  await api(`/submissions/${submission?.id}/return-to-draft/`, { method: "POST" });
+                  expectedQ.refetch();
+                }}
+                className="flex items-center gap-2 rounded-[8px] border border-[#c3c6d0] px-4 py-2.5 text-[13px] font-medium text-[#43474f] hover:bg-[#f2f4f6] transition-colors"
+              >
+                Return to Data Entry
+              </button>
+              <button
+                onClick={async () => {
+                  await api(`/submissions/${submission?.id}/official-submit/`, { method: "POST" });
+                  expectedQ.refetch();
+                }}
+                className="flex items-center gap-2 rounded-[8px] bg-[#001836] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#002d5b] transition-colors"
+              >
+                <Send size={13} /> Submit to NCA
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Main layout: stepper + content */}

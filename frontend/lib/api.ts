@@ -61,15 +61,19 @@ async function refreshTokens(): Promise<boolean> {
   }
 }
 
-export const api = {
-  get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
-  patch: <T>(path: string, body: unknown) =>
-    request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
-  put: <T>(path: string, body: unknown) =>
-    request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
-  delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
-};
+// api can be called directly as api(path, init?) for GET, or via api.get/post/patch/put/delete
+function apiFn<T>(path: string, init?: RequestInit): Promise<T> {
+  return request<T>(path, init);
+}
+apiFn.get    = <T>(path: string) => request<T>(path);
+apiFn.post   = <T>(path: string, body?: unknown) =>
+  request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+apiFn.patch  = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+apiFn.put    = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: "PUT", body: JSON.stringify(body) });
+apiFn.delete = <T>(path: string) => request<T>(path, { method: "DELETE" });
+
+export const api = apiFn;
 
 export { ApiError };

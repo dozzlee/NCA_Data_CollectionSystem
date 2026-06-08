@@ -154,7 +154,7 @@ class GridColumn(models.Model):
 
 class GridRow(models.Model):
     """Pre-populated row labels for FIXED grids (e.g. Ghana regions)."""
-    grid = models.ForeignKey(FormGrid, on_delete=models.CASCADE, related_name="fixed_rows")
+    grid = models.ForeignKey(FormGrid, null=True, blank=True, on_delete=models.CASCADE, related_name="fixed_rows")
     row_label = models.CharField(max_length=255)
     sort_order = models.PositiveIntegerField(default=0)
 

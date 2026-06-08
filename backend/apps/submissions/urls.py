@@ -10,6 +10,8 @@ urlpatterns = [
     path("periods/", v.ReportingPeriodListView.as_view()),
     path("periods/<int:pk>/", v.ReportingPeriodDetailView.as_view()),
     path("periods/<int:pk>/activate/", v.ActivatePeriodView.as_view()),
+    path("periods/<int:pk>/assigned-templates/", v.PeriodAssignedTemplatesView.as_view()),
+    path("periods/<int:pk>/assigned-providers/", v.PeriodAssignedProvidersView.as_view()),
     path("expected-submissions/", v.ExpectedSubmissionListView.as_view()),
     path("expected-submissions/<int:pk>/", v.ExpectedSubmissionDetailView.as_view()),
     path("expected-submissions/<int:pk>/start/", v.StartSubmissionView.as_view()),

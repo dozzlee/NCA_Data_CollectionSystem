@@ -1,17 +1,51 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { FileText, LayoutDashboard, LogOut } from "lucide-react";
+import { LayoutDashboard, Clock, CheckCircle, HelpCircle, LogOut } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import Cookies from "js-cookie";
+import { api } from "@/lib/api";
+import type { User } from "@/lib/types";
 
-const NAV = [
-  { href: "/provider/dashboard", label: "My Submissions", icon: LayoutDashboard },
-  { href: "/provider/submissions", label: "Forms", icon: FileText },
+const ROLE_LABELS: Record<string, string> = {
+  PROVIDER_DATA_ENTRY: "Data Entry",
+  PROVIDER_APPROVER:   "Approver",
+  PROVIDER_ADMIN:      "Admin",
+};
+
+const DATA_ENTRY_NAV = [
+  { href: "/provider/dashboard",  label: "My Forms",   icon: LayoutDashboard },
+  { href: "/provider/history",    label: "History",    icon: Clock },
+  { href: "/provider/inquiries",  label: "Inquiries",  icon: HelpCircle },
+];
+
+const APPROVER_NAV = [
+  { href: "/provider/dashboard",         label: "My Forms",        icon: LayoutDashboard },
+  { href: "/provider/pending-approval",  label: "Pending Approval", icon: CheckCircle },
+  { href: "/provider/history",           label: "History",          icon: Clock },
+  { href: "/provider/inquiries",         label: "Inquiries",        icon: HelpCircle },
 ];
 
 export function ProviderTopBar() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  const { data: user } = useQuery<User>({
+    queryKey: ["me"],
+    queryFn: () => api("/auth/me/"),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  function handleSignOut() {
+    Cookies.remove("access_token");
+    Cookies.remove("refresh_token");
+    router.push("/login");
+  }
+
+  const isApprover = user?.role === "PROVIDER_APPROVER";
+  const nav = isApprover ? APPROVER_NAV : DATA_ENTRY_NAV;
 
   return (
     <header className="sticky top-0 z-40 border-b border-[#e6e8ea] bg-white">
@@ -25,19 +59,16 @@ export function ProviderTopBar() {
         </div>
 
         <nav className="flex items-center gap-1">
-          {NAV.map(({ href, label, icon: Icon }) => {
-            const active = pathname.startsWith(href);
+          {nav.map(({ href, label, icon: Icon }) => {
+            const active = pathname === href || pathname.startsWith(href + "/");
             return (
-              <Link
-                key={href}
-                href={href}
+              <Link key={href} href={href}
                 className={cn(
                   "flex items-center gap-2 rounded-[8px] px-3 py-1.5 text-[13px] font-medium transition-colors",
                   active
                     ? "bg-[#eceef0] text-[#191c1e]"
                     : "text-[#43474f] hover:bg-[#f2f4f6] hover:text-[#191c1e]"
-                )}
-              >
+                )}>
                 <Icon size={14} />
                 {label}
               </Link>
@@ -46,13 +77,17 @@ export function ProviderTopBar() {
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
-          <div className="text-right">
-            <p className="text-[12px] font-medium text-[#191c1e]">Provider User</p>
-            <p className="text-[11px] text-[#737780]">data@provider.example</p>
-          </div>
-          <button className="flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[12px] text-[#737780] hover:bg-[#eceef0] hover:text-[#191c1e] transition-colors">
-            <LogOut size={13} />
-            Sign out
+          {user && (
+            <div className="text-right">
+              <p className="text-[12px] font-medium text-[#191c1e]">{user.name}</p>
+              <p className="text-[11px] text-[#737780]">
+                {user.organization?.name} · {ROLE_LABELS[user.role] ?? user.role}
+              </p>
+            </div>
+          )}
+          <button onClick={handleSignOut}
+            className="flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[12px] text-[#737780] hover:bg-[#eceef0] hover:text-[#191c1e] transition-colors">
+            <LogOut size={13} /> Sign out
           </button>
         </div>
       </div>

@@ -3,6 +3,7 @@ import io
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
+from apps.users.permissions import IsNCAUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -12,7 +13,7 @@ from .models import ExportLog
 
 
 class CSVExportView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def post(self, request):
         filters = request.data.get("filters", {})
@@ -93,7 +94,7 @@ class CSVExportView(APIView):
 
 
 class ExportLogListView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def get(self, request):
         logs = ExportLog.objects.select_related("generated_by").order_by("-generated_at")[:50]

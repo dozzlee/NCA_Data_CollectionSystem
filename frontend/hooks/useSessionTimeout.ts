@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Cookies from "js-cookie";
 
 const WARNING_BEFORE_MS = 2 * 60 * 1000; // warn 2 min before expiry
 
 function getTokenExpiry(): number | null {
   if (typeof window === "undefined") return null;
-  const token = localStorage.getItem("access_token");
+  const token = Cookies.get("access_token");
   if (!token) return null;
   try {
     const payload = JSON.parse(atob(token.split(".")[1]));
@@ -49,8 +50,8 @@ export function useSessionTimeout(onRefresh: () => Promise<boolean>) {
 
   function logout() {
     clearTimers();
-    localStorage.removeItem("access_token");
-    localStorage.removeItem("refresh_token");
+    Cookies.remove("access_token");
+    Cookies.remove("refresh_token");
     router.push("/login");
   }
 

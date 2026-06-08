@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
+from apps.users.permissions import IsNCAUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -10,7 +11,7 @@ from .serializers import EmailTemplateSerializer, EmailLogSerializer
 
 
 class ComplianceDashboardView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def get(self, request):
         overdue = ExpectedSubmission.objects.filter(due_state="OVERDUE").count()
@@ -34,7 +35,7 @@ class EmailTemplateListView(generics.ListAPIView):
 
 
 class GenerateEmailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def post(self, request):
         template_type = request.data.get("template_type")
@@ -89,7 +90,7 @@ class EmailLogListView(generics.ListAPIView):
 
 
 class MarkEmailSentView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def patch(self, request, pk):
         try:

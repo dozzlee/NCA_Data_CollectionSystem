@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.audit.models import AuditEvent
+from apps.users.permissions import IsNCAUser, IsSystemAdmin, IsProviderDataEntry, IsProviderApprover, IsProviderUser
 from .models import (
     ReportingPeriod, ExpectedSubmission, Submission,
     SubmissionValue, ReviewAction
@@ -30,7 +31,7 @@ def write_audit(request, action, entity_type, entity_id, before=None, after=None
 # ── Dashboard ────────────────────────────────────────────────────────────────
 
 class DashboardSummaryView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def get(self, request):
         qs = ExpectedSubmission.objects.all()
@@ -56,7 +57,7 @@ class DashboardSummaryView(APIView):
 
 
 class StatusDonutView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def get(self, request):
         qs = ExpectedSubmission.objects.all()
@@ -66,7 +67,7 @@ class StatusDonutView(APIView):
 
 
 class CategoryCompletionView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def get(self, request):
         qs = ExpectedSubmission.objects.all()
@@ -84,7 +85,7 @@ class CategoryCompletionView(APIView):
 
 
 class SubmissionTrendView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def get(self, request):
         cutoff = timezone.now() - timedelta(days=365)
@@ -97,7 +98,7 @@ class SubmissionTrendView(APIView):
 
 
 class OverdueByFormView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def get(self, request):
         return Response(list(
@@ -110,18 +111,20 @@ class OverdueByFormView(APIView):
 # ── Periods ──────────────────────────────────────────────────────────────────
 
 class ReportingPeriodListView(generics.ListCreateAPIView):
+    permission_classes = [IsAuthenticated]
     queryset = ReportingPeriod.objects.all()
     serializer_class = ReportingPeriodSerializer
     filterset_fields = ["frequency", "status", "year"]
 
 
 class ReportingPeriodDetailView(generics.RetrieveUpdateAPIView):
+    permission_classes = [IsSystemAdmin]
     queryset = ReportingPeriod.objects.all()
     serializer_class = ReportingPeriodSerializer
 
 
 class ActivatePeriodView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsSystemAdmin]
 
     def post(self, request, pk):
         try:
@@ -152,6 +155,7 @@ class ExpectedSubmissionListView(generics.ListAPIView):
 
 
 class ExpectedSubmissionDetailView(generics.RetrieveUpdateAPIView):
+    permission_classes = [IsAuthenticated]
     queryset = ExpectedSubmission.objects.all()
     serializer_class = ExpectedSubmissionSerializer
 
@@ -159,7 +163,7 @@ class ExpectedSubmissionDetailView(generics.RetrieveUpdateAPIView):
 # ── Submissions ───────────────────────────────────────────────────────────────
 
 class StartSubmissionView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsProviderDataEntry]
 
     def post(self, request, pk):
         try:
@@ -178,11 +182,13 @@ class StartSubmissionView(APIView):
 
 
 class SubmissionDetailView(generics.RetrieveAPIView):
+    permission_classes = [IsAuthenticated]
     queryset = Submission.objects.select_related("expected__provider", "expected__form_template", "expected__period")
     serializer_class = SubmissionSerializer
 
 
 class SectionValuesView(APIView):
+    permission_classes = [IsAuthenticated]
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk, section_code):
@@ -235,6 +241,7 @@ class SectionValuesView(APIView):
 
 class SubmissionCompletionView(APIView):
     permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, pk):
         try:
@@ -256,7 +263,7 @@ class SubmissionCompletionView(APIView):
 
 
 class SubmitForApprovalView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsProviderDataEntry]
 
     def post(self, request, pk):
         try:
@@ -272,7 +279,7 @@ class SubmitForApprovalView(APIView):
 
 
 class OfficialSubmitView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsProviderApprover]
 
     def post(self, request, pk):
         try:
@@ -300,7 +307,7 @@ class ReviewHistoryView(generics.ListAPIView):
 
 
 class ReviewApproveView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def post(self, request, pk):
         try:
@@ -322,7 +329,7 @@ class ReviewApproveView(APIView):
 
 
 class ReviewRejectView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def post(self, request, pk):
         try:
@@ -343,7 +350,7 @@ class ReviewRejectView(APIView):
 
 
 class ReviewRequestCorrectionView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def post(self, request, pk):
         try:
@@ -382,7 +389,7 @@ class ReviewRequestCorrectionView(APIView):
 
 
 class ReviewAddNoteView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def post(self, request, pk):
         try:
@@ -402,7 +409,7 @@ class ReviewAddNoteView(APIView):
 # ── Expected Submission Management ───────────────────────────────────────────
 
 class AssignOfficerView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsSystemAdmin]
 
     def patch(self, request, pk):
         try:
@@ -431,7 +438,7 @@ class AssignOfficerView(APIView):
 
 
 class OverrideDueDateView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsSystemAdmin]
 
     def patch(self, request, pk):
         try:
@@ -450,8 +457,26 @@ class OverrideDueDateView(APIView):
         return Response(ExpectedSubmissionSerializer(expected).data)
 
 
+class PeriodAssignedTemplatesView(APIView):
+    permission_classes = [IsSystemAdmin]
+
+    def get(self, request, pk):
+        period = generics.get_object_or_404(ReportingPeriod, pk=pk)
+        from apps.forms_engine.serializers import FormTemplateListSerializer
+        return Response(FormTemplateListSerializer(period.applicable_form_templates.all(), many=True).data)
+
+
+class PeriodAssignedProvidersView(APIView):
+    permission_classes = [IsSystemAdmin]
+
+    def get(self, request, pk):
+        period = generics.get_object_or_404(ReportingPeriod, pk=pk)
+        from apps.providers.serializers import ProviderProfileListSerializer
+        return Response(ProviderProfileListSerializer(period.assigned_providers.all(), many=True).data)
+
+
 class ReturnToDraftView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsProviderApprover]
 
     def post(self, request, pk):
         try:

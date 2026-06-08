@@ -36,11 +36,10 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser, PermissionsMixin):
     ROLE_CHOICES = [
-        ("NCA_ADMIN", "NCA Admin"),
-        ("NCA_OFFICER", "NCA Officer"),
-        ("PROVIDER_ADMIN", "Provider Admin"),
-        ("PROVIDER_DATA_ENTRY", "Provider Data Entry"),
-        ("PROVIDER_APPROVER", "Provider Approver"),
+        ("NCA_ADMIN",           "System Administrator"),
+        ("NCA_OFFICER",         "NCA Officer"),
+        ("PROVIDER_DATA_ENTRY", "Provider Data Entry User"),
+        ("PROVIDER_APPROVER",   "Provider Approver"),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -70,7 +69,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     @property
     def is_provider(self):
-        return self.role in ("PROVIDER_ADMIN", "PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER")
+        return self.role in ("PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER")
 
     class Meta:
         ordering = ["name"]

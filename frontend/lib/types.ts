@@ -1,11 +1,10 @@
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
 export type UserRole =
-  | "NCA_ADMIN"
-  | "NCA_OFFICER"
-  | "PROVIDER_ADMIN"
-  | "PROVIDER_DATA_ENTRY"
-  | "PROVIDER_APPROVER";
+  | "NCA_ADMIN"           // System Administrator
+  | "NCA_OFFICER"         // NCA Officer
+  | "PROVIDER_DATA_ENTRY" // Provider Data Entry User
+  | "PROVIDER_APPROVER";  // Provider Approver
 
 export interface Organization {
   id: number;
@@ -190,6 +189,7 @@ export interface ExpectedSubmission {
   due_state: DueState;
   assigned_officer: number | null;
   assigned_officer_name: string | null;
+  latest_submission_id: number | null;
   created_at: string;
 }
 

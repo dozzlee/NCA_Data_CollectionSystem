@@ -21,6 +21,11 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
     period_name = serializers.CharField(source="period.name", read_only=True)
     due_at = serializers.DateTimeField(source="period.due_at", read_only=True)
     assigned_officer_name = serializers.CharField(source="assigned_officer.name", read_only=True, default=None)
+    latest_submission_id = serializers.SerializerMethodField()
+
+    def get_latest_submission_id(self, obj):
+        latest = obj.versions.order_by("-version").first()
+        return latest.id if latest else None
 
     class Meta:
         model = ExpectedSubmission
@@ -30,6 +35,7 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
             "period", "period_name", "due_at", "due_at_override",
             "workflow_status", "due_state",
             "assigned_officer", "assigned_officer_name",
+            "latest_submission_id",
             "created_at",
         ]
         read_only_fields = ["due_state", "created_at"]
