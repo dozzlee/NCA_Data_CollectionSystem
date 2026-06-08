@@ -50,6 +50,9 @@ Thumbs.db
 # Docker
 *.pid
 
+# Backups (generated locally, never committed)
+backups/
+
 # Secrets
 .env.local
 .env.production
