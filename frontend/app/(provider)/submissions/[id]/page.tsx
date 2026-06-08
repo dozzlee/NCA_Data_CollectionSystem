@@ -181,6 +181,9 @@ function SectionContent({
                   explanation={fv.explanation}
                   onChange={(v, s, e) => handleFieldChange(field.id, v, s, e)}
                   disabled={!isEditable}
+                  allFieldValues={Object.fromEntries(
+                    Object.entries(fieldValues).map(([k, v]) => [k, { value: v.value }])
+                  )}
                 />
               </div>
             );

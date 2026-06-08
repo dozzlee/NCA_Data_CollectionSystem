@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     "apps.compliance",
     "apps.exports",
     "apps.audit",
+    "apps.feedback",
 ]
 
 MIDDLEWARE = [

@@ -397,3 +397,70 @@ class ReviewAddNoteView(APIView):
             is_provider_visible=is_provider, created_by=request.user,
         )
         return Response({"detail": "Note added."})
+
+
+# ── Expected Submission Management ───────────────────────────────────────────
+
+class AssignOfficerView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        try:
+            expected = ExpectedSubmission.objects.get(pk=pk)
+        except ExpectedSubmission.DoesNotExist:
+            return Response({"detail": "Not found."}, status=404)
+
+        officer_id = request.data.get("assigned_officer")
+        before = expected.assigned_officer_id
+
+        if officer_id is None:
+            expected.assigned_officer = None
+        else:
+            from apps.users.models import User
+            try:
+                officer = User.objects.get(pk=officer_id, role__in=["NCA_ADMIN", "NCA_OFFICER"])
+            except User.DoesNotExist:
+                return Response({"detail": "Officer not found or not an NCA user."}, status=400)
+            expected.assigned_officer = officer
+
+        expected.save(update_fields=["assigned_officer"])
+        write_audit(request, "OFFICER_ASSIGNED", "ExpectedSubmission", pk,
+                    before={"assigned_officer": before},
+                    after={"assigned_officer": officer_id})
+        return Response(ExpectedSubmissionSerializer(expected).data)
+
+
+class OverrideDueDateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        try:
+            expected = ExpectedSubmission.objects.get(pk=pk)
+        except ExpectedSubmission.DoesNotExist:
+            return Response({"detail": "Not found."}, status=404)
+
+        new_due = request.data.get("due_at_override")
+        before = str(expected.due_at_override) if expected.due_at_override else None
+        expected.due_at_override = new_due  # None clears the override
+        expected.refresh_due_state()
+        expected.save(update_fields=["due_at_override", "due_state"])
+        write_audit(request, "DUE_DATE_OVERRIDDEN", "ExpectedSubmission", pk,
+                    before={"due_at_override": before},
+                    after={"due_at_override": new_due})
+        return Response(ExpectedSubmissionSerializer(expected).data)
+
+
+class ReturnToDraftView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            submission = Submission.objects.get(pk=pk)
+        except Submission.DoesNotExist:
+            return Response({"detail": "Not found."}, status=404)
+        if submission.expected.workflow_status != "PENDING_APPROVAL":
+            return Response({"detail": "Only PENDING_APPROVAL can be returned to draft."}, status=400)
+        submission.expected.workflow_status = "DRAFT"
+        submission.expected.save(update_fields=["workflow_status"])
+        write_audit(request, "RETURNED_TO_DRAFT", "Submission", submission.id)
+        return Response({"detail": "Returned to draft."})
