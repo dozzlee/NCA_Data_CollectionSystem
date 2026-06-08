@@ -109,6 +109,70 @@ class KMZUploadView(APIView):
         return Response({"id": upload.id, "file_name": upload.file_name, "review_status": upload.review_status}, status=201)
 
 
+class KMZDownloadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, uid):
+        try:
+            submission = Submission.objects.get(pk=pk)
+            upload = SubmissionKMZUpload.objects.get(pk=uid, submission=submission)
+        except (Submission.DoesNotExist, SubmissionKMZUpload.DoesNotExist):
+            return Response({"detail": "Not found."}, status=404)
+
+        from django.http import FileResponse
+        import os
+        full_path = os.path.join(settings.MEDIA_ROOT, upload.storage_path)
+        if not os.path.exists(full_path):
+            return Response({"detail": "File not found on disk."}, status=404)
+        return FileResponse(open(full_path, "rb"), as_attachment=True, filename=upload.file_name)
+
+
+class KMZReviewView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk, uid):
+        try:
+            submission = Submission.objects.get(pk=pk)
+            upload = SubmissionKMZUpload.objects.get(pk=uid, submission=submission)
+        except (Submission.DoesNotExist, SubmissionKMZUpload.DoesNotExist):
+            return Response({"detail": "Not found."}, status=404)
+
+        new_status = request.data.get("review_status")
+        if new_status not in ("ACCEPTED", "REJECTED"):
+            return Response({"detail": "review_status must be ACCEPTED or REJECTED."}, status=400)
+
+        upload.review_status = new_status
+        upload.review_note = request.data.get("review_note", "")
+        upload.save(update_fields=["review_status", "review_note"])
+
+        AuditEvent.objects.create(
+            user=request.user, user_email=request.user.email, role=request.user.role,
+            organization=request.user.organization.name if request.user.organization else "",
+            action=f"KMZ_{new_status}", entity_type="SubmissionKMZUpload", entity_id=str(upload.id),
+            after_value={"review_status": new_status, "review_note": upload.review_note},
+            ip_address=request.META.get("REMOTE_ADDR"),
+        )
+        return Response({"id": upload.id, "review_status": upload.review_status, "review_note": upload.review_note})
+
+
+class ExcelBackupListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        try:
+            submission = Submission.objects.get(pk=pk)
+        except Submission.DoesNotExist:
+            return Response({"detail": "Not found."}, status=404)
+        backups = SubmissionExcelBackup.objects.filter(submission=submission).order_by("-uploaded_at")
+        return Response([
+            {
+                "id": b.id, "file_name": b.file_name, "file_size": b.file_size,
+                "uploaded_at": b.uploaded_at, "source_control_status": b.source_control_status,
+            }
+            for b in backups
+        ])
+
+
 class ExcelBackupUploadView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser]

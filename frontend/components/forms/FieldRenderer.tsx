@@ -17,12 +17,24 @@ interface FieldRendererProps {
   explanation: string;
   onChange: (value: string, status: FieldStatus | "", explanation: string) => void;
   disabled?: boolean;
+  /** Current values for all fields in the section — used to resolve conditional visibility */
+  allFieldValues?: Record<number, { value: string }>;
 }
 
 const inputBase =
   "w-full rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] placeholder:text-[#737780] transition-colors focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20 disabled:bg-[#f2f4f6] disabled:text-[#737780]";
 
-export function FieldRenderer({ field, value, valueStatus, explanation, onChange, disabled }: FieldRendererProps) {
+export function FieldRenderer({ field, value, valueStatus, explanation, onChange, disabled, allFieldValues }: FieldRendererProps) {
+  // Conditional visibility — hide if parent field's value doesn't match the required value
+  if (
+    field.conditional_on_field !== null &&
+    field.conditional_on_value &&
+    allFieldValues
+  ) {
+    const parentValue = allFieldValues[field.conditional_on_field]?.value ?? "";
+    if (parentValue !== field.conditional_on_value) return null;
+  }
+
   const isNonFilled = !!valueStatus && valueStatus !== "PROVIDED" && valueStatus !== "MISSING";
 
   function handleValueChange(newVal: string) {
