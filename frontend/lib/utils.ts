@@ -58,30 +58,41 @@ export function formatDateTime(iso: string): string {
 
 export function getWorkflowStatusColor(status: WorkflowStatus): string {
   const map: Partial<Record<WorkflowStatus, string>> = {
-    NOT_STARTED: "bg-surface-container text-on-surface-variant",
-    DRAFT: "bg-blue-50 text-blue-700",
-    PENDING_APPROVAL: "bg-yellow-50 text-yellow-700",
-    SUBMITTED: "bg-indigo-50 text-indigo-700",
-    UNDER_REVIEW: "bg-purple-50 text-purple-700",
-    CORRECTION_REQUESTED: "bg-orange-50 text-orange-700",
-    RESUBMITTED: "bg-teal-50 text-teal-700",
-    APPROVED: "bg-success-soft text-success",
-    REJECTED: "bg-critical-soft text-nca-red",
-    ARCHIVED: "bg-gray-100 text-gray-500",
+    NOT_STARTED:          "bg-[#f2f4f6] text-[#737780]",
+    DRAFT:                "bg-[#e8f1fb] text-[#004999]",
+    PENDING_APPROVAL:     "bg-[#fff3bf] text-[#7a5c00]",
+    SUBMITTED:            "bg-[#e8f1fb] text-[#0066cc]",
+    UNDER_REVIEW:         "bg-[#ede9ff] text-[#5b21b6]",
+    CORRECTION_REQUESTED: "bg-[#ffe8e8] text-[#c0112a]",
+    RESUBMITTED:          "bg-[#e0f5f1] text-[#0d6657]",
+    APPROVED:             "bg-[#e5f4eb] text-[#1f7a4d]",
+    REJECTED:             "bg-[#ffe8e8] text-[#c0112a]",
+    ARCHIVED:             "bg-[#f2f4f6] text-[#737780]",
   };
-  return map[status] ?? "bg-gray-100 text-gray-500";
+  return map[status] ?? "bg-[#f2f4f6] text-[#737780]";
 }
 
 export function getDueStateColor(state: DueState): string {
   const map: Partial<Record<DueState, string>> = {
-    NOT_OPEN: "bg-gray-100 text-gray-500",
-    OPEN: "bg-blue-50 text-blue-700",
-    DUE_SOON: "bg-warning-soft text-yellow-800",
-    DUE_TODAY: "bg-orange-50 text-orange-700",
-    OVERDUE: "bg-critical-soft text-nca-red",
-    CLOSED: "bg-success-soft text-success",
+    NOT_OPEN:  "bg-[#f2f4f6] text-[#737780]",
+    OPEN:      "bg-[#e8f1fb] text-[#004999]",
+    DUE_SOON:  "bg-[#fff3bf] text-[#7a5c00]",
+    DUE_TODAY: "bg-[#fde8c8] text-[#92400e]",
+    OVERDUE:   "bg-[#ffe8e8] text-[#c0112a]",
+    CLOSED:    "bg-[#e5f4eb] text-[#1f7a4d]",
   };
-  return map[state] ?? "bg-gray-100 text-gray-500";
+  return map[state] ?? "bg-[#f2f4f6] text-[#737780]";
+}
+
+/** Row background color driven by due urgency — use on <tr> or <div> */
+export function getDueStateRowBg(state: DueState, workflowStatus?: WorkflowStatus): string {
+  if (workflowStatus === "APPROVED") return "";
+  switch (state) {
+    case "OVERDUE":   return "bg-[#fff8f8] border-l-2 border-l-[#e31937]";
+    case "DUE_TODAY": return "bg-[#fffcf5] border-l-2 border-l-[#f97316]";
+    case "DUE_SOON":  return "bg-[#fffef0] border-l-2 border-l-[#ffd100]";
+    default:          return "";
+  }
 }
 
 // Chart colors aligned with design system

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useExpectedSubmissions } from "@/hooks/useDashboard";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { formatDate, WORKFLOW_LABELS, PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
+import { formatDate, WORKFLOW_LABELS, PROVIDER_CATEGORY_LABELS, getDueStateRowBg } from "@/lib/utils";
 import { Search, ChevronRight } from "lucide-react";
 import type { WorkflowStatus } from "@/lib/types";
 
@@ -83,7 +83,9 @@ export default function SubmissionsPage() {
               : !data?.results.length
               ? <tr><td colSpan={7} className="px-5 py-14 text-center text-[13px] text-[#737780]">No submissions match the current filters.</td></tr>
               : data.results.map((sub) => (
-                  <tr key={sub.id} className="border-b border-[#eceef0] last:border-0 hover:bg-[#f7f9fb] transition-colors">
+                  <tr key={sub.id}
+                    onClick={() => window.location.href = `/submissions/${sub.id}/review`}
+                    className={`border-b border-[#eceef0] last:border-0 hover:brightness-[0.97] transition-colors cursor-pointer group ${getDueStateRowBg(sub.due_state, sub.workflow_status)}`}>
                     <td className="px-5 py-3">
                       <p className="text-[13px] font-medium text-[#191c1e] max-w-[160px] truncate">{sub.provider_name}</p>
                       <p className="text-[11px] text-[#737780]">{PROVIDER_CATEGORY_LABELS[sub.provider_category] ?? sub.provider_category}</p>

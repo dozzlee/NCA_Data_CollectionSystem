@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import type { ExpectedSubmission, User } from "@/lib/types";
+import { getDueStateRowBg } from "@/lib/utils";
 
 function formatDue(iso: string): string {
   return new Date(iso).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" });
@@ -124,13 +125,27 @@ export default function ProviderDashboardPage() {
             ))}
           </div>
         ) : activeSubmissions.length === 0 ? (
-          <div className="px-6 py-12 text-center text-[14px] text-[#737780]">
-            No active submissions. All caught up!
+          <div className="px-8 py-14 text-center space-y-3">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#f2f4f6] text-[22px]">
+              📋
+            </div>
+            <p className="text-[15px] font-semibold text-[#191c1e]">No forms assigned yet</p>
+            <p className="text-[13px] text-[#43474f] max-w-sm mx-auto leading-relaxed">
+              Submissions are opened by the NCA when a reporting period is activated for your
+              organisation. You will see your forms here as soon as a period is live.
+            </p>
+            <p className="text-[12px] text-[#737780]">
+              If you believe forms should be visible, contact your NCA officer or use the{" "}
+              <a href="/provider/inquiries" className="text-[#0066cc] hover:underline font-medium">
+                Inquiries
+              </a>{" "}
+              page to raise a query.
+            </p>
           </div>
         ) : (
           <div className="divide-y divide-[#eceef0]">
             {activeSubmissions.map(s => (
-              <div key={s.id} className="flex items-center justify-between gap-4 px-6 py-4 hover:bg-[#f7f9fb] transition-colors">
+              <div key={s.id} className={`flex items-center justify-between gap-4 px-6 py-4 hover:brightness-[0.97] transition-colors ${getDueStateRowBg(s.due_state, s.workflow_status)}`}>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[14px] font-medium text-[#191c1e]">{s.form_name}</p>
                   <p className="mt-0.5 text-[12px] text-[#737780]">

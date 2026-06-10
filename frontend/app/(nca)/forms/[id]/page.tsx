@@ -299,6 +299,12 @@ export default function FormBuilderPage() {
 
   return (
     <div className="space-y-6 max-w-4xl">
+      {/* Back nav */}
+      <a href="/forms"
+        className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#737780] hover:text-[#0066cc] transition-colors">
+        ← Back to Form Templates
+      </a>
+
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>

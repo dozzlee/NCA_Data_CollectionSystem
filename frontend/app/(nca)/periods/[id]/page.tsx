@@ -167,60 +167,126 @@ export default function PeriodDetailPage() {
 
       {/* ── DRAFT: Assignment panels ─────────────────────────────────────── */}
       {period.status === "DRAFT" && (
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-          {/* Form Templates */}
-          <div className="rounded-[16px] border border-[#eceef0] bg-white p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-semibold text-[#191c1e]">Form Templates</h2>
-              <span className="text-[12px] text-[#737780]">{assignedTemplateIds.size} selected</span>
-            </div>
-            <p className="text-[12px] text-[#43474f] mb-3">
-              Select which forms are required this period. Providers will only see forms matching their type.
-            </p>
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {(allTemplates?.results ?? []).map(t => (
-                <label key={t.id} className="flex items-start gap-3 cursor-pointer rounded-[8px] px-3 py-2 hover:bg-[#f7f9fb]">
-                  <input type="checkbox" checked={assignedTemplateIds.has(t.id)}
-                    onChange={() => toggleTemplate(t.id)}
-                    className="mt-0.5 h-4 w-4 accent-[#0066cc]" />
-                  <div>
-                    <p className="text-[13px] font-medium text-[#191c1e]">{t.name}</p>
-                    <p className="text-[11px] text-[#737780]">
-                      {t.form_code} · {PROVIDER_CATEGORY_LABELS[t.provider_category]} · {t.frequency}
-                    </p>
-                  </div>
-                </label>
-              ))}
-              {(allTemplates?.results ?? []).length === 0 && (
-                <p className="text-[13px] text-[#737780] py-4 text-center">No active form templates found.</p>
-              )}
-            </div>
-          </div>
+        <div className="space-y-4">
+          {/* Coverage preview — shows which categories will get forms */}
+          {assignedTemplateIds.size > 0 && assignedProviderIds.size > 0 && (() => {
+            const templates = allTemplates?.results ?? [];
+            const providers = allProviders?.results ?? [];
+            const selectedTemplates = templates.filter(t => assignedTemplateIds.has(t.id));
+            const selectedProviders = providers.filter(p => assignedProviderIds.has(p.id));
+            const coveredCategories = new Set(selectedTemplates.map(t => t.provider_category));
+            const matchedPairs = selectedProviders.filter(p => coveredCategories.has(p.category));
+            const unmatchedProviders = selectedProviders.filter(p => !coveredCategories.has(p.category));
 
-          {/* Providers */}
-          <div className="rounded-[16px] border border-[#eceef0] bg-white p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-[15px] font-semibold text-[#191c1e]">Providers</h2>
-              <span className="text-[12px] text-[#737780]">{assignedProviderIds.size} selected</span>
-            </div>
-            <p className="text-[12px] text-[#43474f] mb-3">
-              Select which licensed providers must submit this period. Each provider will only receive forms matching their category.
-            </p>
-            <div className="space-y-1 max-h-64 overflow-y-auto">
-              {(allProviders?.results ?? []).map(p => (
-                <label key={p.id} className="flex items-start gap-3 cursor-pointer rounded-[8px] px-3 py-2 hover:bg-[#f7f9fb]">
-                  <input type="checkbox" checked={assignedProviderIds.has(p.id)}
-                    onChange={() => toggleProvider(p.id)}
-                    className="mt-0.5 h-4 w-4 accent-[#0066cc]" />
-                  <div>
-                    <p className="text-[13px] font-medium text-[#191c1e]">{p.registered_name}</p>
-                    <p className="text-[11px] text-[#737780]">{PROVIDER_CATEGORY_LABELS[p.category]}</p>
+            return (
+              <div className="rounded-[12px] border border-[#0066cc]/30 bg-[#e8f1fb] px-5 py-4 space-y-2">
+                <p className="text-[13px] font-semibold text-[#004999]">
+                  Coverage preview — {matchedPairs.length} provider{matchedPairs.length !== 1 ? "s" : ""} will receive submissions on activation
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {[...coveredCategories].map(cat => {
+                    const provCount = matchedPairs.filter(p => p.category === cat).length;
+                    if (!provCount) return null;
+                    return (
+                      <span key={cat} className="rounded-full bg-white/70 px-3 py-0.5 text-[11px] font-semibold text-[#004999]">
+                        {PROVIDER_CATEGORY_LABELS[cat]}: {provCount} provider{provCount !== 1 ? "s" : ""}
+                      </span>
+                    );
+                  })}
+                </div>
+                {unmatchedProviders.length > 0 && (
+                  <p className="text-[12px] text-[#7a5c00]">
+                    ⚠ {unmatchedProviders.length} selected provider{unmatchedProviders.length !== 1 ? "s" : ""} ({unmatchedProviders.map(p => p.registered_name).join(", ")}) have no matching form template and will be skipped.
+                  </p>
+                )}
+              </div>
+            );
+          })()}
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* Form Templates — grouped by category */}
+            <div className="rounded-[16px] border border-[#eceef0] bg-white p-5">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-[15px] font-semibold text-[#191c1e]">Form Templates</h2>
+                <span className="text-[12px] text-[#737780]">{assignedTemplateIds.size} selected</span>
+              </div>
+              <p className="text-[12px] text-[#43474f] mb-4">
+                Each form is tied to a provider category. Providers only receive forms that match their type.
+              </p>
+              <div className="space-y-3 max-h-72 overflow-y-auto">
+                {Object.entries(
+                  (allTemplates?.results ?? []).reduce<Record<string, typeof allTemplates.results>>((acc, t) => {
+                    const cat = PROVIDER_CATEGORY_LABELS[t.provider_category] ?? t.provider_category;
+                    if (!acc[cat]) acc[cat] = [];
+                    acc[cat].push(t);
+                    return acc;
+                  }, {})
+                ).map(([category, templates]) => (
+                  <div key={category}>
+                    <p className="text-[10px] font-semibold uppercase tracking-wide text-[#737780] px-2 mb-1">{category}</p>
+                    {templates.map(t => (
+                      <label key={t.id} className="flex items-start gap-3 cursor-pointer rounded-[8px] px-2 py-2 hover:bg-[#f7f9fb]">
+                        <input type="checkbox" checked={assignedTemplateIds.has(t.id)}
+                          onChange={() => toggleTemplate(t.id)}
+                          className="mt-0.5 h-4 w-4 accent-[#0066cc]" />
+                        <div>
+                          <p className="text-[13px] font-medium text-[#191c1e]">{t.name}</p>
+                          <p className="text-[11px] text-[#737780]">{t.form_code} · {t.frequency}</p>
+                        </div>
+                      </label>
+                    ))}
                   </div>
-                </label>
-              ))}
-              {(allProviders?.results ?? []).length === 0 && (
-                <p className="text-[13px] text-[#737780] py-4 text-center">No active providers found.</p>
-              )}
+                ))}
+                {(allTemplates?.results ?? []).length === 0 && (
+                  <p className="text-[13px] text-[#737780] py-4 text-center">No active form templates found.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Providers — grouped by category */}
+            <div className="rounded-[16px] border border-[#eceef0] bg-white p-5">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-[15px] font-semibold text-[#191c1e]">Providers</h2>
+                <span className="text-[12px] text-[#737780]">{assignedProviderIds.size} selected</span>
+              </div>
+              <p className="text-[12px] text-[#43474f] mb-4">
+                Select which licensed providers are in scope. They will only receive forms matching their service category.
+              </p>
+              <div className="space-y-3 max-h-72 overflow-y-auto">
+                {Object.entries(
+                  (allProviders?.results ?? []).reduce<Record<string, typeof allProviders.results>>((acc, p) => {
+                    const cat = PROVIDER_CATEGORY_LABELS[p.category] ?? p.category;
+                    if (!acc[cat]) acc[cat] = [];
+                    acc[cat].push(p);
+                    return acc;
+                  }, {})
+                ).map(([category, provs]) => (
+                  <div key={category}>
+                    <div className="flex items-center gap-2 px-2 mb-1">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-[#737780]">{category}</p>
+                      <button onClick={() => {
+                        const allSelected = provs.every(p => assignedProviderIds.has(p.id));
+                        const next = new Set(assignedProviderIds);
+                        provs.forEach(p => allSelected ? next.delete(p.id) : next.add(p.id));
+                        assignProvidersMut.mutate(Array.from(next));
+                      }} className="text-[10px] text-[#0066cc] hover:underline">
+                        {provs.every(p => assignedProviderIds.has(p.id)) ? "Deselect all" : "Select all"}
+                      </button>
+                    </div>
+                    {provs.map(p => (
+                      <label key={p.id} className="flex items-center gap-3 cursor-pointer rounded-[8px] px-2 py-2 hover:bg-[#f7f9fb]">
+                        <input type="checkbox" checked={assignedProviderIds.has(p.id)}
+                          onChange={() => toggleProvider(p.id)}
+                          className="h-4 w-4 accent-[#0066cc]" />
+                        <p className="text-[13px] font-medium text-[#191c1e]">{p.registered_name}</p>
+                      </label>
+                    ))}
+                  </div>
+                ))}
+                {(allProviders?.results ?? []).length === 0 && (
+                  <p className="text-[13px] text-[#737780] py-4 text-center">No active providers found.</p>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -1,36 +1,44 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import type { ProviderProfile, ProviderCategory, ProviderStatus } from "@/lib/types";
 import { PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
 
 const STATUS_COLORS: Record<ProviderStatus, string> = {
-  ACTIVE: "bg-[#e5f4eb] text-[#1f7a4d]",
+  ACTIVE:   "bg-[#e5f4eb] text-[#1f7a4d]",
   INACTIVE: "bg-[#f2f4f6] text-[#43474f]",
-  SUSPENDED: "bg-[#fff3bf] text-[#7a5c00]",
+  SUSPENDED:"bg-[#fff3bf] text-[#7a5c00]",
   ARCHIVED: "bg-[#f2f4f6] text-[#737780]",
 };
 
-const CATEGORIES: ProviderCategory[] = ["MNO", "ISP", "PAY_TV", "TOWER_OPERATOR", "TOWER_MAIN", "DOMESTIC_FIBRE", "SUBMARINE_FIBRE"];
-const STATUSES: ProviderStatus[] = ["ACTIVE", "INACTIVE", "SUSPENDED", "ARCHIVED"];
+const CATEGORIES: ProviderCategory[] = [
+  "MNO","ISP","PAY_TV","TOWER_OPERATOR","TOWER_MAIN","DOMESTIC_FIBRE","SUBMARINE_FIBRE"
+];
+const STATUSES: ProviderStatus[] = ["ACTIVE","INACTIVE","SUSPENDED","ARCHIVED"];
 
 export default function ProvidersPage() {
-  const [search, setSearch] = useState("");
+  const router = useRouter();
+  const [search,   setSearch]   = useState("");
   const [category, setCategory] = useState("");
-  const [status, setStatus] = useState("");
+  const [status,   setStatus]   = useState("");
 
-  const params = new URLSearchParams();
-  if (search) params.set("search", search);
-  if (category) params.set("category", category);
-  if (status) params.set("status", status);
+  // Build the query string — re-computed whenever filters change
+  const queryString = useMemo(() => {
+    const p = new URLSearchParams();
+    if (search)   p.set("search",   search);
+    if (category) p.set("category", category);
+    if (status)   p.set("status",   status);
+    return p.toString();
+  }, [search, category, status]);
 
-  const { data, isLoading } = useQuery<{ results: ProviderProfile[] }>({
-    queryKey: ["providers", search, category, status],
-    queryFn: () => api(`/providers/?${params}`),
+  const { data, isLoading, isFetching } = useQuery<{ results: ProviderProfile[] }>({
+    queryKey:  ["providers", queryString],
+    queryFn:   () => api(`/providers/?${queryString}`),
+    staleTime: 0,           // always fetch fresh when filters change
   });
 
   const providers = data?.results ?? [];
@@ -46,87 +54,106 @@ export default function ProvidersPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-3">
-        <input
-          type="search"
-          placeholder="Search by name, licence number…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] placeholder:text-[#737780] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20 w-64"
-        />
-        <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-          className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none"
-        >
+      <div className="flex flex-wrap gap-3 items-center">
+        <div className="relative">
+          <input
+            type="search"
+            placeholder="Search by name, licence number…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="rounded-[8px] border border-[#c3c6d0] bg-white pl-3 pr-8 py-2 text-[13px] text-[#191c1e] placeholder:text-[#737780] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20 w-64"
+          />
+          {isFetching && (
+            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full border-2 border-[#0066cc] border-t-transparent animate-spin" />
+          )}
+        </div>
+
+        <select value={category} onChange={e => setCategory(e.target.value)}
+          className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none">
           <option value="">All categories</option>
-          {CATEGORIES.map((c) => (
-            <option key={c} value={c}>{PROVIDER_CATEGORY_LABELS[c]}</option>
-          ))}
+          {CATEGORIES.map(c => <option key={c} value={c}>{PROVIDER_CATEGORY_LABELS[c]}</option>)}
         </select>
-        <select
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-          className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none"
-        >
+
+        <select value={status} onChange={e => setStatus(e.target.value)}
+          className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none">
           <option value="">All statuses</option>
-          {STATUSES.map((s) => (
+          {STATUSES.map(s => (
             <option key={s} value={s}>{s.charAt(0) + s.slice(1).toLowerCase()}</option>
           ))}
         </select>
+
+        {(search || category || status) && (
+          <button onClick={() => { setSearch(""); setCategory(""); setStatus(""); }}
+            className="text-[13px] font-medium text-[#737780] hover:text-[#0066cc]">
+            Clear filters
+          </button>
+        )}
+
+        {!isLoading && (
+          <span className="ml-auto text-[13px] text-[#737780]">
+            {providers.length} provider{providers.length !== 1 ? "s" : ""}
+          </span>
+        )}
       </div>
 
-      {/* Table */}
+      {/* Table — full row is clickable */}
       <div className="rounded-[16px] border border-[#eceef0] bg-white overflow-hidden">
         <table className="w-full text-left">
           <thead className="border-b border-[#eceef0] bg-[#f7f9fb]">
             <tr>
-              {["Provider", "Category", "Licence No.", "Email", "Phone", "Status", ""].map((h) => (
+              {["Provider","Category","Licence No.","Email","Phone","Status"].map(h => (
                 <th key={h} className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-[#43474f]">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody className="divide-y divide-[#eceef0]">
             {isLoading
-              ? Array.from({ length: 6 }).map((_, i) => (
+              ? Array.from({length:6}).map((_,i) => (
                   <tr key={i}>
-                    {Array.from({ length: 7 }).map((_, j) => (
-                      <td key={j} className="px-5 py-3.5">
-                        <Skeleton className="h-3.5 w-full" />
-                      </td>
+                    {Array.from({length:6}).map((_,j) => (
+                      <td key={j} className="px-5 py-3.5"><Skeleton className="h-3.5 w-full"/></td>
                     ))}
                   </tr>
                 ))
               : providers.length === 0
               ? (
                 <tr>
-                  <td colSpan={7} className="px-5 py-10 text-center text-[14px] text-[#737780]">
-                    No providers found.
+                  <td colSpan={6} className="px-5 py-12 text-center">
+                    <p className="text-[14px] font-medium text-[#191c1e]">No providers found</p>
+                    {(search || category || status) && (
+                      <p className="text-[13px] text-[#737780] mt-1">Try adjusting or clearing your filters.</p>
+                    )}
                   </td>
                 </tr>
               )
-              : providers.map((p) => (
-                <tr key={p.id} className="hover:bg-[#f7f9fb] transition-colors">
+              : providers.map(p => (
+                <tr
+                  key={p.id}
+                  onClick={() => router.push(`/providers/${p.id}`)}
+                  className="hover:bg-[#f7f9fb] cursor-pointer transition-colors group"
+                >
                   <td className="px-5 py-3.5">
-                    <p className="text-[13px] font-medium text-[#191c1e]">{p.registered_name}</p>
+                    <p className="text-[13px] font-semibold text-[#191c1e] group-hover:text-[#0066cc] transition-colors">
+                      {p.registered_name}
+                    </p>
                     {p.trade_name && <p className="text-[11px] text-[#737780]">{p.trade_name}</p>}
                   </td>
-                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{PROVIDER_CATEGORY_LABELS[p.category]}</td>
-                  <td className="px-5 py-3.5 text-[13px] font-mono text-[#43474f]">{p.licence_number}</td>
-                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{p.primary_email}</td>
-                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{p.primary_phone}</td>
+                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">
+                    {PROVIDER_CATEGORY_LABELS[p.category]}
+                  </td>
+                  <td className="px-5 py-3.5 text-[13px] font-mono text-[#43474f]">
+                    {p.licence_number}
+                  </td>
+                  <td className="px-5 py-3.5 text-[13px] text-[#43474f] max-w-[180px] truncate">
+                    {p.primary_email}
+                  </td>
+                  <td className="px-5 py-3.5 text-[13px] text-[#43474f] whitespace-nowrap">
+                    {p.primary_phone}
+                  </td>
                   <td className="px-5 py-3.5">
                     <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${STATUS_COLORS[p.status]}`}>
                       {p.status.charAt(0) + p.status.slice(1).toLowerCase()}
                     </span>
-                  </td>
-                  <td className="px-5 py-3.5">
-                    <Link
-                      href={`/providers/${p.id}`}
-                      className="text-[13px] font-medium text-[#0066cc] hover:underline"
-                    >
-                      View →
-                    </Link>
                   </td>
                 </tr>
               ))}

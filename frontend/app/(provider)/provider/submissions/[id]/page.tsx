@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { SectionStepper } from "@/components/forms/SectionStepper";
 import { FieldRenderer } from "@/components/forms/FieldRenderer";
 import { GridRenderer } from "@/components/forms/GridRenderer";
@@ -294,7 +295,12 @@ export default function FormEntryPage() {
   // Not yet started
   if (expected.workflow_status === "NOT_STARTED") {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] text-center space-y-4">
+      <div className="space-y-4">
+        <Link href="/provider/dashboard"
+          className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#737780] hover:text-[#0066cc] transition-colors">
+          <ChevronLeft size={14} /> Back to My Forms
+        </Link>
+        <div className="flex flex-col items-center justify-center min-h-[360px] text-center">
         <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-8 max-w-md space-y-4"
           style={{ boxShadow: "0 2px 8px rgba(0,45,91,0.06)" }}>
           <div>
@@ -313,12 +319,19 @@ export default function FormEntryPage() {
             {startMutation.isPending ? "Starting…" : "Start form"}
           </button>
         </div>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
+      {/* Back navigation */}
+      <Link href="/provider/dashboard"
+        className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#737780] hover:text-[#0066cc] transition-colors">
+        <ChevronLeft size={14} /> Back to My Forms
+      </Link>
+
       {/* Page header */}
       <div className="flex items-start justify-between gap-4">
         <div>
