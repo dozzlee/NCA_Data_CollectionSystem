@@ -29,7 +29,7 @@ class ComplianceDashboardView(APIView):
 
 
 class EmailTemplateListView(generics.ListAPIView):
-    queryset = EmailTemplate.objects.all()
+    queryset = EmailTemplate.objects.order_by("template_type")
     serializer_class = EmailTemplateSerializer
 
 

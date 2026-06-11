@@ -25,10 +25,11 @@ import type { FormSection, FieldStatus } from "@/lib/types";
 // ─── Local value state for one section ───────────────────────────────────────
 
 type FieldValues = Record<string, { value: string; status: FieldStatus | ""; explanation: string }>;
+type GridCellValue = { grid_row_id: string; grid_column_id: number; value: string; value_status: FieldStatus | "" };
 
 function useSectionFieldState(
   sectionFields: FormSection["fields"],
-  serverValues: { field?: number | null; value: string; value_status: string; explanation: string }[] | undefined
+  serverValues: { field?: number | null; value: string; value_status: string; explanation?: string }[] | undefined
 ) {
   const [fieldValues, setFieldValues] = useState<FieldValues>({});
 
@@ -69,7 +70,7 @@ function SectionContent({
   const [saveMsg, setSaveMsg] = useState<"saved" | "error" | null>(null);
 
   const [fieldValues, setFieldValues] = useSectionFieldState(section.fields, serverValues.data ?? []);
-  const [gridValues, setGridValues] = useState<Record<number, { grid_row_id: string; grid_column_id: number; value: string; value_status: string }[]>>({});
+  const [gridValues, setGridValues] = useState<Record<number, GridCellValue[]>>({});
 
   function handleFieldChange(fieldId: number, value: string, status: FieldStatus | "", explanation: string) {
     setFieldValues((prev) => ({ ...prev, [fieldId]: { value, status, explanation } }));

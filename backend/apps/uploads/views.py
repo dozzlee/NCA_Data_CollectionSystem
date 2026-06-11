@@ -1,5 +1,6 @@
 import os
-import magic
+import mimetypes
+
 from django.conf import settings
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -18,6 +19,24 @@ ALLOWED_EXCEL_TYPES = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.ms-excel",
 }
+
+try:
+    import magic
+except ImportError:
+    magic = None
+
+
+def sniff_mime(file):
+    if magic:
+        try:
+            mime = magic.from_buffer(file.read(2048), mime=True)
+            file.seek(0)
+            return mime
+        except ImportError:
+            file.seek(0)
+
+    mime, _ = mimetypes.guess_type(file.name)
+    return mime or ""
 
 
 def save_upload(file, subfolder, filename):
@@ -82,8 +101,7 @@ class KMZUploadView(APIView):
         if file.size > max_bytes:
             return Response({"detail": f"File exceeds {requirement.max_file_size_mb}MB limit."}, status=400)
 
-        mime = magic.from_buffer(file.read(2048), mime=True)
-        file.seek(0)
+        mime = sniff_mime(file)
         if mime not in ALLOWED_KMZ_TYPES and not file.name.lower().endswith(".kmz"):
             return Response({"detail": "Only .kmz files are accepted."}, status=400)
 
@@ -123,8 +141,7 @@ class ExcelBackupUploadView(APIView):
         if not file:
             return Response({"detail": "file is required."}, status=400)
 
-        mime = magic.from_buffer(file.read(2048), mime=True)
-        file.seek(0)
+        mime = sniff_mime(file)
         if mime not in ALLOWED_EXCEL_TYPES and not file.name.lower().endswith((".xlsx", ".xls")):
             return Response({"detail": "Only .xlsx or .xls files are accepted for Excel backup."}, status=400)
 

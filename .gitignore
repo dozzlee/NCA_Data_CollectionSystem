@@ -11,6 +11,7 @@ build/
 .eggs/
 *.so
 .venv/
+.venv*/
 venv/
 env/
 .env
@@ -28,6 +29,7 @@ media/
 node_modules/
 .next/
 out/
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

@@ -64,12 +64,12 @@ export default function CompliancePage() {
 
   const emailsQ = useQuery({
     queryKey: ["email-logs"],
-    queryFn: () => api.get<EmailLog[]>("/compliance/emails/"),
+    queryFn: () => api.get<PaginatedResponse<EmailLog>>("/compliance/emails/"),
   });
 
   const templatesQ = useQuery({
     queryKey: ["email-templates"],
-    queryFn: () => api.get<EmailTemplate[]>("/compliance/email-templates/"),
+    queryFn: () => api.get<PaginatedResponse<EmailTemplate>>("/compliance/email-templates/"),
   });
 
   async function handleGenerateEmails() {
@@ -99,6 +99,8 @@ export default function CompliancePage() {
   }
 
   const s = summaryQ.data;
+  const emailLogs = emailsQ.data?.results ?? [];
+  const emailTemplates = templatesQ.data?.results ?? [];
 
   return (
     <div className="space-y-6">
@@ -177,7 +179,7 @@ export default function CompliancePage() {
                 className="flex-1 rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[12px] text-[#191c1e] focus:outline-none focus:border-[#0066cc]"
               >
                 <option value="">Select email template…</option>
-                {(templatesQ.data ?? []).map((t) => (
+                {emailTemplates.map((t) => (
                   <option key={t.id} value={t.template_type}>
                     {TEMPLATE_LABELS[t.template_type] ?? t.template_type}
                   </option>
@@ -206,9 +208,9 @@ export default function CompliancePage() {
           <div className="divide-y divide-[#f2f4f6] max-h-[420px] overflow-y-auto">
             {emailsQ.isLoading
               ? Array.from({ length: 4 }).map((_, i) => <div key={i} className="px-5 py-3"><Skeleton className="h-12 w-full" /></div>)
-              : !emailsQ.data?.length
+              : !emailLogs.length
               ? <p className="px-5 py-8 text-center text-[13px] text-[#737780]">No emails generated yet.</p>
-              : emailsQ.data.map((email) => (
+              : emailLogs.map((email) => (
                   <div key={email.id} className="flex items-start gap-3 px-5 py-3">
                     <div className={`mt-0.5 h-2 w-2 rounded-full shrink-0 ${email.status === "SENT" ? "bg-[#1f7a4d]" : email.status === "DRAFT" ? "bg-[#ffd100]" : "bg-[#E31937]"}`} />
                     <div className="flex-1 min-w-0">

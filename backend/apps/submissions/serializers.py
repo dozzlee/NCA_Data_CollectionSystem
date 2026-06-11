@@ -3,9 +3,31 @@ from .models import ReportingPeriod, ExpectedSubmission, Submission, SubmissionV
 
 
 class ReportingPeriodSerializer(serializers.ModelSerializer):
+    expected_count = serializers.IntegerField(read_only=True)
+    assigned_provider_count = serializers.IntegerField(read_only=True)
+    form_template_count = serializers.IntegerField(read_only=True)
+    created_by_name = serializers.CharField(source="created_by.name", read_only=True, default=None)
+
     class Meta:
         model = ReportingPeriod
-        fields = "__all__"
+        fields = [
+            "id",
+            "name",
+            "frequency",
+            "year",
+            "month",
+            "opens_at",
+            "due_at",
+            "status",
+            "applicable_form_templates",
+            "assigned_providers",
+            "created_at",
+            "created_by",
+            "created_by_name",
+            "expected_count",
+            "assigned_provider_count",
+            "form_template_count",
+        ]
         read_only_fields = ["created_at", "created_by"]
 
     def create(self, validated_data):

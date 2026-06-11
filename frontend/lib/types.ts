@@ -46,6 +46,7 @@ export type ProviderStatus = "ACTIVE" | "INACTIVE" | "SUSPENDED" | "ARCHIVED";
 export interface ProviderProfile {
   id: number;
   provider_id: string;
+  organization: number | null;
   registered_name: string;
   trade_name: string;
   category: ProviderCategory;
@@ -60,6 +61,12 @@ export interface ProviderProfile {
   primary_email: string;
   primary_phone: string;
   status: ProviderStatus;
+  contact_count?: number;
+  expected_count?: number;
+  overdue_count?: number;
+  open_count?: number;
+  created_at?: string;
+  updated_at?: string;
 }
 
 // ─── Forms Engine ────────────────────────────────────────────────────────────
@@ -90,6 +97,8 @@ export interface FormTemplate {
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   kmz_required: boolean;
   excel_backup_enabled: boolean;
+  instructions?: string;
+  sections?: FormSection[];
 }
 
 export interface FormSection {
@@ -129,6 +138,7 @@ export interface FormGrid {
   title: string;
   row_mode: "FIXED" | "REPEATABLE";
   sort_order: number;
+  instructions?: string;
   columns: GridColumn[];
   fixed_rows?: GridRow[];
 }
@@ -172,6 +182,14 @@ export interface ReportingPeriod {
   opens_at: string;
   due_at: string;
   status: "DRAFT" | "ACTIVE" | "CLOSED";
+  applicable_form_templates?: number[];
+  assigned_providers?: number[];
+  created_at?: string;
+  created_by?: string;
+  created_by_name?: string | null;
+  expected_count?: number;
+  assigned_provider_count?: number;
+  form_template_count?: number;
 }
 
 export interface ExpectedSubmission {

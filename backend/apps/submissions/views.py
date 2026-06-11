@@ -1,4 +1,5 @@
 from django.db.models import Count, Q
+from django.db.models.functions import TruncMonth
 from django.utils import timezone
 from datetime import timedelta
 from rest_framework import generics, status
@@ -90,8 +91,10 @@ class SubmissionTrendView(APIView):
         cutoff = timezone.now() - timedelta(days=365)
         data = (
             Submission.objects.filter(submitted_at__gte=cutoff, submitted_at__isnull=False)
-            .extra(select={"month": "DATE_TRUNC('month', submitted_at)"})
-            .values("month").annotate(count=Count("id")).order_by("month")
+            .annotate(month=TruncMonth("submitted_at"))
+            .values("month")
+            .annotate(count=Count("id"))
+            .order_by("month")
         )
         return Response(list(data))
 
@@ -110,14 +113,26 @@ class OverdueByFormView(APIView):
 # ── Periods ──────────────────────────────────────────────────────────────────
 
 class ReportingPeriodListView(generics.ListCreateAPIView):
-    queryset = ReportingPeriod.objects.all()
     serializer_class = ReportingPeriodSerializer
     filterset_fields = ["frequency", "status", "year"]
 
+    def get_queryset(self):
+        return ReportingPeriod.objects.annotate(
+            expected_count=Count("expected_submissions", distinct=True),
+            assigned_provider_count=Count("assigned_providers", distinct=True),
+            form_template_count=Count("applicable_form_templates", distinct=True),
+        ).order_by("-year", "-month", "name")
+
 
 class ReportingPeriodDetailView(generics.RetrieveUpdateAPIView):
-    queryset = ReportingPeriod.objects.all()
     serializer_class = ReportingPeriodSerializer
+
+    def get_queryset(self):
+        return ReportingPeriod.objects.annotate(
+            expected_count=Count("expected_submissions", distinct=True),
+            assigned_provider_count=Count("assigned_providers", distinct=True),
+            form_template_count=Count("applicable_form_templates", distinct=True),
+        ).order_by("-year", "-month", "name")
 
 
 class ActivatePeriodView(APIView):
@@ -140,7 +155,7 @@ class ActivatePeriodView(APIView):
 class ExpectedSubmissionListView(generics.ListAPIView):
     queryset = ExpectedSubmission.objects.select_related("provider", "form_template", "period", "assigned_officer")
     serializer_class = ExpectedSubmissionSerializer
-    filterset_fields = ["workflow_status", "due_state", "form_template", "period", "provider", "assigned_officer"]
+    filterset_fields = ["workflow_status", "due_state", "form_template", "period", "provider", "assigned_officer", "provider__category"]
     search_fields = ["provider__registered_name", "form_template__form_code"]
     ordering_fields = ["period__due_at", "workflow_status", "due_state"]
 
