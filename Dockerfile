@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y \
     postgresql-client \
     nodejs \
     npm \
+    libmagic1 \
+    libmagic-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Backend setup
