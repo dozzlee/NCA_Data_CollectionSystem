@@ -25,4 +25,4 @@ COPY frontend ./frontend
 EXPOSE 8000 3000
 
 # Start both servers
-CMD bash -c "cd backend && python manage.py migrate && python manage.py runserver 0.0.0.0:8000 & cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev"
+CMD bash -c "cd backend && python manage.py migrate && python manage.py seed_data && python manage.py runserver 0.0.0.0:8000 & cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev"
