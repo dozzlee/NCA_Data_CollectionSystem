@@ -1,48 +1,36 @@
-version: "3.9"
+version: '3.8'
 
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:15
     environment:
       POSTGRES_DB: nca_dc
       POSTGRES_USER: nca
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      POSTGRES_PASSWORD: nca_dev_pass
     ports:
       - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nca -d nca_dc"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
   backend:
-    build: ./backend
-    command: python manage.py runserver 0.0.0.0:8000
-    volumes:
-      - ./backend:/app
-      - media_files:/app/media
-    env_file:
-      - .env
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sh -c "cd backend && python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
     environment:
-      - DATABASE_URL=postgresql://nca:${DB_PASSWORD}@db:5432/nca_dc
-      - DEBUG=True
+      DATABASE_URL: postgresql://nca:nca_dev_pass@db:5432/nca_dc
+      DEBUG: "True"
+      SECRET_KEY: dev-secret-key
     ports:
       - "8000:8000"
     depends_on:
-      db:
-        condition: service_healthy
+      - db
 
   frontend:
-    build: ./frontend
-    command: npm run dev
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
-    environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sh -c "cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev"
     ports:
       - "3000:3000"
     depends_on:
@@ -50,4 +38,3 @@ services:
 
 volumes:
   postgres_data:
-  media_files:
