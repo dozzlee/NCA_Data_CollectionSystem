@@ -3,13 +3,18 @@ from django.utils import timezone
 from datetime import timedelta
 from apps.providers.models import ProviderProfile
 from apps.submissions.models import ReportingPeriod, FormTemplate, ExpectedSubmission, Submission, SubmissionValue
-from apps.forms_engine.models import FormField, FieldType
+from apps.forms_engine.models import FormField
 import random
 
 class Command(BaseCommand):
     help = 'Seed the database with realistic test data'
 
     def handle(self, *args, **options):
+        # Skip if data already seeded (idempotent)
+        if ReportingPeriod.objects.filter(name__contains="2024").exists():
+            self.stdout.write(self.style.SUCCESS("✓ Database already seeded, skipping."))
+            return
+
         self.stdout.write("🌱 Seeding database with test data...")
 
         # Create periods
