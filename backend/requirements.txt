@@ -4,6 +4,7 @@ djangorestframework-simplejwt==5.3.1
 django-two-factor-auth==1.16.0
 django-cors-headers==4.4.0
 django-filter==24.2
+django-extensions==3.2.3
 psycopg2-binary==2.9.9
 gunicorn==22.0.0
 Pillow==10.4.0
