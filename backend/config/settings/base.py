@@ -66,7 +66,7 @@ AUTH_USER_MODEL = "users.User"
 
 DATABASES = {
     "default": dj_database_url.config(
-        default=os.environ.get("DATABASE_URL", "postgresql://nca:changeme@db:5432/nca_dc"),
+        default=os.environ.get("DATABASE_URL", "postgresql://nca:nca_dev_pass@localhost:5432/nca_dc"),
         conn_max_age=600,
     )
 }
