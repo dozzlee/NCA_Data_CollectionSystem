@@ -2,8 +2,8 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
 from apps.providers.models import ProviderProfile
-from apps.submissions.models import ReportingPeriod, FormTemplate, ExpectedSubmission, Submission, SubmissionValue
-from apps.forms_engine.models import FormField
+from apps.submissions.models import ReportingPeriod, ExpectedSubmission, Submission, SubmissionValue
+from apps.forms_engine.models import FormTemplate, FormField
 import random
 
 class Command(BaseCommand):
