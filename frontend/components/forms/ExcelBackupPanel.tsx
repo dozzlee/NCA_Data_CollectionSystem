@@ -1,139 +1,135 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { api } from "@/lib/api";
-import { useToast } from "@/components/ui/Toast";
+import { useState } from "react";
+import { Upload, AlertCircle, Check } from "lucide-react";
 
-interface ExcelBackup {
+interface ExcelBackupFile {
   id: number;
   file_name: string;
   file_size: number;
   uploaded_at: string;
-  source_control_status: "STORED" | "SUPERSEDED";
+  source_control_status: string;
 }
 
 interface ExcelBackupPanelProps {
   submissionId: number;
-  backups: ExcelBackup[];
-  onUploaded: () => void;
+  uploads: ExcelBackupFile[];
+  onUpload: (file: File) => Promise<void>;
+  disabled?: boolean;
+  description?: string;
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-export function ExcelBackupPanel({ submissionId, backups, onUploaded }: ExcelBackupPanelProps) {
-  const [dragging, setDragging] = useState(false);
+export function ExcelBackupPanel({
+  submissionId,
+  uploads,
+  onUpload,
+  disabled = false,
+  description = "Upload an Excel file as a backup. This is stored for source control only and not analyzed.",
+}: ExcelBackupPanelProps) {
   const [uploading, setUploading] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const { toast } = useToast();
+  const [uploadMsg, setUploadMsg] = useState<"uploading" | "success" | "error" | null>(null);
+  const [dragOver, setDragOver] = useState(false);
 
-  async function uploadFile(file: File) {
-    const ext = file.name.split(".").pop()?.toLowerCase();
-    if (!ext || !["xlsx", "xls"].includes(ext)) {
-      toast("Only .xlsx or .xls files are accepted.", "error");
+  async function handleFileSelect(file: File) {
+    if (!file.name.match(/\.(xlsx?|xls)$/i)) {
+      setUploadMsg("error");
+      setTimeout(() => setUploadMsg(null), 3000);
       return;
     }
+
     setUploading(true);
-    const form = new FormData();
-    form.append("file", file);
+    setUploadMsg("uploading");
     try {
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/submissions/${submissionId}/excel-backups/upload/`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
-        body: form,
-      }).then(async (r) => {
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}));
-          throw new Error(err.detail || "Upload failed.");
-        }
-      });
-      toast("Excel backup uploaded.", "success");
-      onUploaded();
-    } catch (err: unknown) {
-      toast(err instanceof Error ? err.message : "Upload failed.", "error");
+      await onUpload(file);
+      setUploadMsg("success");
+      setTimeout(() => setUploadMsg(null), 2000);
+    } catch {
+      setUploadMsg("error");
+      setTimeout(() => setUploadMsg(null), 3000);
     } finally {
       setUploading(false);
     }
   }
 
-  function handleDrop(e: React.DragEvent) {
+  function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault();
-    setDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) uploadFile(file);
-  }
-
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) uploadFile(file);
-    e.target.value = "";
+    setDragOver(false);
+    const files = e.dataTransfer.files;
+    if (files?.length) handleFileSelect(files[0]);
   }
 
   return (
-    <div className="rounded-[12px] border border-[#c3c6d0] bg-[#f7f9fb] p-5 space-y-4">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-[14px] font-semibold text-[#191c1e]">Excel Source Backup</h3>
-          <p className="mt-0.5 text-[12px] text-[#43474f]">
-            Stored for source control only — not used for analysis or calculations.
-          </p>
-        </div>
-        <span className="shrink-0 rounded-full bg-[#e5f4eb] px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-[#1f7a4d]">
-          Source only
-        </span>
+    <div className="rounded-[12px] border border-[#e6e8ea] bg-[#f7f9fb] p-5 space-y-3">
+      <div>
+        <h3 className="text-[13px] font-semibold text-[#191c1e]">Excel Backup</h3>
+        <p className="text-[12px] text-[#43474f] mt-0.5">{description}</p>
       </div>
 
-      {/* Drop zone */}
+      {/* Upload area */}
       <div
-        className={`flex flex-col items-center justify-center rounded-[8px] border-2 border-dashed px-6 py-8 text-center transition-colors cursor-pointer ${
-          dragging ? "border-[#0066cc] bg-[#e8f1fb]" : "border-[#c3c6d0] hover:border-[#0066cc]/50"
-        }`}
-        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
         onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
-        aria-label="Upload Excel backup file"
+        className={`rounded-[8px] border-2 border-dashed p-4 text-center transition-colors ${
+          dragOver ? "border-[#0066cc] bg-[#e8f1fb]" : "border-[#c3c6d0]"
+        } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
       >
-        <span className="text-[28px] mb-2" aria-hidden>📊</span>
-        <p className="text-[13px] font-medium text-[#191c1e]">
-          {uploading ? "Uploading…" : "Drop .xlsx / .xls here or click to browse"}
-        </p>
-        <p className="mt-1 text-[11px] text-[#737780]">Max 50 MB</p>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".xlsx,.xls"
-          className="sr-only"
-          onChange={handleChange}
-        />
+        <label className="flex flex-col items-center gap-2 cursor-pointer">
+          <Upload size={18} className="text-[#737780]" />
+          <div className="text-[12px]">
+            <p className="font-medium text-[#191c1e]">Drop Excel file here or click to browse</p>
+            <p className="text-[11px] text-[#737780]">.xlsx or .xls (max 50MB)</p>
+          </div>
+          <input
+            type="file"
+            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+            onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+            disabled={disabled || uploading}
+            className="hidden"
+          />
+        </label>
       </div>
 
-      {/* Existing backups */}
-      {backups.length > 0 && (
-        <ul className="divide-y divide-[#eceef0]">
-          {backups.map((b) => (
-            <li key={b.id} className="flex items-center justify-between py-2.5 gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-[13px] font-medium text-[#191c1e]">{b.file_name}</p>
-                <p className="text-[11px] text-[#737780]">
-                  {formatBytes(b.file_size)} · {new Date(b.uploaded_at).toLocaleDateString("en-GB")}
-                </p>
-              </div>
-              {b.source_control_status === "SUPERSEDED" && (
-                <span className="shrink-0 rounded-full bg-[#f2f4f6] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#737780]">
-                  Superseded
+      {/* Status messages */}
+      {uploadMsg === "uploading" && (
+        <div className="flex items-center gap-2 text-[12px] text-[#004999]">
+          <div className="h-3 w-3 rounded-full border-2 border-[#0066cc] border-t-transparent animate-spin" />
+          Uploading…
+        </div>
+      )}
+      {uploadMsg === "success" && (
+        <div className="flex items-center gap-2 text-[12px] text-[#1f7a4d] bg-[#e5f4eb] rounded-[6px] px-3 py-2">
+          <Check size={14} />
+          File uploaded successfully
+        </div>
+      )}
+      {uploadMsg === "error" && (
+        <div className="flex items-center gap-2 text-[12px] text-[#c0112a] bg-[#ffe8e8] rounded-[6px] px-3 py-2">
+          <AlertCircle size={14} />
+          Upload failed. Please try again.
+        </div>
+      )}
+
+      {/* Previous uploads */}
+      {uploads.length > 0 && (
+        <div className="space-y-2 border-t border-[#eceef0] pt-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Previous Uploads</p>
+          <div className="space-y-1.5">
+            {uploads.map((u) => (
+              <div key={u.id} className="flex items-center justify-between bg-white rounded-[6px] px-3 py-2 text-[12px]">
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-[#191c1e] truncate">{u.file_name}</p>
+                  <p className="text-[11px] text-[#737780]">
+                    {(u.file_size / 1024 / 1024).toFixed(2)}MB • {new Date(u.uploaded_at).toLocaleDateString()}
+                  </p>
+                </div>
+                <span className="ml-2 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-[#e5f4eb] text-[#1f7a4d]">
+                  Stored
                 </span>
-              )}
-            </li>
-          ))}
-        </ul>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

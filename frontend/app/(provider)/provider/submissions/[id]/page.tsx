@@ -8,6 +8,7 @@ import { SectionStepper } from "@/components/forms/SectionStepper";
 import { FieldRenderer } from "@/components/forms/FieldRenderer";
 import { GridRenderer } from "@/components/forms/GridRenderer";
 import { KMZUploadPanel } from "@/components/forms/KMZUploadPanel";
+import { ExcelBackupPanel } from "@/components/forms/ExcelBackupPanel";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { WorkflowBadge } from "@/components/ui/Badge";
 import {
@@ -72,6 +73,22 @@ function SectionContent({
 
   const [fieldValues, setFieldValues] = useSectionFieldState(section.fields, serverValues.data ?? []);
   const [gridValues, setGridValues] = useState<Record<number, { grid_row_id: string; grid_column_id: number; value: string; value_status: string }[]>>({});
+  const [excelUploads, setExcelUploads] = useState<any[]>([]);
+
+  useEffect(() => {
+    const fetchExcelUploads = async () => {
+      try {
+        const res = await fetch(`/api/v1/submissions/${submissionId}/excel-backups/`);
+        if (res.ok) {
+          const data = await res.json();
+          setExcelUploads(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch Excel uploads:", err);
+      }
+    };
+    if (submissionId) fetchExcelUploads();
+  }, [submissionId]);
 
   function handleFieldChange(fieldId: number, value: string, status: FieldStatus | "", explanation: string) {
     setFieldValues((prev) => ({ ...prev, [fieldId]: { value, status, explanation } }));
@@ -110,6 +127,16 @@ function SectionContent({
       method: "POST",
       body: form,
     });
+  }
+
+  async function handleExcelUpload(file: File) {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`/api/v1/submissions/${submissionId}/excel-backups/upload/`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) throw new Error("Upload failed");
   }
 
   if (serverValues.isLoading) {
@@ -207,6 +234,17 @@ function SectionContent({
           />
         </div>
       ))}
+
+      {/* Excel backup panel — available for all forms */}
+      {isEditable && (
+        <ExcelBackupPanel
+          submissionId={submissionId}
+          uploads={excelUploads}
+          onUpload={handleExcelUpload}
+          disabled={!isEditable}
+          description="Upload an Excel file as a backup. This is stored for source control only and not analyzed."
+        />
+      )}
 
       {/* Auto-save prompt when dirty */}
       {dirty && isEditable && (
