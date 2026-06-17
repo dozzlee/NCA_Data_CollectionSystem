@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "standalone",
+  skipTrailingSlashRedirect: true,
   async rewrites() {
     // Proxy /api/* to Django server-side so the browser never needs
     // direct access to port 8000. Works for local dev and single-port
