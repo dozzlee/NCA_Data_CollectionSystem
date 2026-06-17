@@ -10,7 +10,7 @@ const nextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination: `${djangoUrl}/api/:path*/`,
+        destination: `${djangoUrl}/api/:path*`,
       },
     ];
   },

@@ -102,6 +102,9 @@ export default function ProviderDetailPage() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
+          <Link href="/providers" className="text-[13px] font-medium text-[#0066cc] hover:underline mb-2 inline-block">
+            ← Back to Providers
+          </Link>
           <p className="text-[13px] font-medium text-[#737780] mb-1">
             <Link href="/providers" className="hover:text-[#0066cc]">Providers</Link> /
           </p>
@@ -262,7 +265,7 @@ export default function ProviderDetailPage() {
                       <td className="px-5 py-3.5"><DueStateBadge state={s.due_state}/></td>
                       <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{s.assigned_officer_name??"—"}</td>
                       <td className="px-5 py-3.5">
-                        <Link href={`/submissions?expected=${s.id}`}
+                        <Link href={`/submissions/${s.id}/review`}
                           className="text-[13px] font-medium text-[#0066cc] hover:underline">Review →</Link>
                       </td>
                     </tr>
