@@ -79,7 +79,7 @@ export default function FormsPage() {
               <div key={key}>
                 <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">{label}</label>
                 <input type="text" placeholder={placeholder} required
-                  value={(form as Record<string, string>)[key]}
+                  value={(form as any)[key]}
                   onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                   className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none" />
               </div>
