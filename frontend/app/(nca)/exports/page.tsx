@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatDateTime } from "@/lib/utils";
 import { Download, FileText, Clock } from "lucide-react";
+import { getAccessToken } from "@/lib/auth";
 
 interface ExportLog {
   id: number;
@@ -30,7 +31,7 @@ export default function ExportsPage() {
     setExporting(true);
     setExported(null);
     try {
-      const token = document.cookie.match(/access_token=([^;]+)/)?.[1];
+      const token = getAccessToken();
       const res = await fetch("/api/v1/exports/csv/", {
         method: "POST",
         headers: {

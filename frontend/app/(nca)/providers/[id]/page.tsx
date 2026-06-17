@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -50,8 +50,11 @@ export default function ProviderDetailPage() {
   const { data: provider, isLoading } = useQuery<ProviderDetail>({
     queryKey: ["provider", id],
     queryFn: () => api(`/providers/${id}/`),
-    onSuccess: (d: ProviderDetail) => setForm(d),
   });
+
+  useEffect(() => {
+    if (provider) setForm(provider);
+  }, [provider]);
 
   const { data: subsData, isLoading: subsLoading } = useQuery<{ results: ExpectedSubmission[] }>({
     queryKey: ["provider-submissions", id],

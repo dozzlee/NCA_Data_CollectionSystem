@@ -3,13 +3,13 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import Cookies from "js-cookie";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FileText, Building2, Calendar,
   ShieldAlert, Download, LogOut, FormInput, Users,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { clearAuthTokens } from "@/lib/auth";
 import type { User } from "@/lib/types";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -47,8 +47,7 @@ export function Sidebar() {
   const navItems = isAdmin ? [...BASE_NAV, ...ADMIN_NAV] : BASE_NAV;
 
   function handleSignOut() {
-    Cookies.remove("access_token");
-    Cookies.remove("refresh_token");
+    clearAuthTokens();
     router.push("/login");
   }
 

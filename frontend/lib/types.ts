@@ -126,6 +126,7 @@ export interface FormGrid {
   id: number;
   grid_code: string;
   title: string;
+  instructions?: string;
   row_mode: "FIXED" | "REPEATABLE";
   sort_order: number;
   columns: GridColumn[];

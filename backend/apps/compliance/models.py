@@ -104,3 +104,33 @@ class ComplianceFlag(models.Model):
     class Meta:
         ordering = ["-created_at"]
         unique_together = [["expected_submission", "flag_type"]]
+
+
+class FlagCorrespondence(models.Model):
+    TYPE_CHOICES = [
+        ("NOTE", "Internal Note"),
+        ("EMAIL_SENT", "Email Sent to Provider"),
+        ("EMAIL_RECEIVED", "Email from Provider"),
+    ]
+
+    flag = models.ForeignKey(
+        ComplianceFlag,
+        on_delete=models.CASCADE,
+        related_name="correspondence",
+    )
+    message_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default="NOTE")
+    subject = models.CharField(max_length=500, blank=True, help_text="For emails")
+    message = models.TextField()
+    created_by = models.ForeignKey(
+        "users.User", null=True, blank=True, on_delete=models.SET_NULL
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    email_log = models.ForeignKey(
+        EmailLog, null=True, blank=True, on_delete=models.SET_NULL, related_name="correspondence"
+    )
+
+    def __str__(self):
+        return f"{self.get_message_type_display()} on {self.created_at}"
+
+    class Meta:
+        ordering = ["created_at"]

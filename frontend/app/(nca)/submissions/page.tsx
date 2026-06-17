@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useExpectedSubmissions } from "@/hooks/useDashboard";
@@ -16,7 +16,7 @@ const STATUS_FILTERS: WorkflowStatus[] = [
 ];
 const DUE_STATE_FILTERS: DueState[] = ["OPEN", "DUE_SOON", "DUE_TODAY", "OVERDUE", "CLOSED"];
 
-export default function SubmissionsPage() {
+function SubmissionsPageContent() {
   const searchParams = useSearchParams();
   const [statusFilter, setStatusFilter] = useState<WorkflowStatus | "">((searchParams.get("workflow_status") as WorkflowStatus) ?? "");
   const [dueStateFilter, setDueStateFilter] = useState<DueState | "">((searchParams.get("due_state") as DueState) ?? "");
@@ -114,5 +114,13 @@ export default function SubmissionsPage() {
         </table>
       </div>
     </div>
+  );
+}
+
+export default function SubmissionsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SubmissionsPageContent />
+    </Suspense>
   );
 }

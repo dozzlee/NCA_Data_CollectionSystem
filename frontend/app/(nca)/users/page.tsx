@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -35,12 +35,17 @@ interface NewUserForm {
   role: UserRole; organization: string;
 }
 
+interface ToggleActiveResponse {
+  is_active: boolean;
+  email: string;
+}
+
 const EMPTY: NewUserForm = { name:"", email:"", password:"", role:"NCA_OFFICER", organization:"" };
 
 const inp = "w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20";
 const lbl = "block text-[11px] font-semibold uppercase tracking-wide text-[#737780] mb-1";
 
-export default function UsersPage() {
+function UsersPageContent() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const searchParams = useSearchParams();
@@ -82,8 +87,8 @@ export default function UsersPage() {
 
   const toggleActiveMut = useMutation({
     mutationFn: (userId: string) =>
-      api(`/auth/users/${userId}/toggle-active/`, { method: "POST" }),
-    onSuccess: (data: { is_active: boolean; email: string }) => {
+      api<ToggleActiveResponse>(`/auth/users/${userId}/toggle-active/`, { method: "POST" }),
+    onSuccess: (data) => {
       toast(`${data.email} ${data.is_active ? "activated" : "deactivated"}.`, data.is_active ? "success" : "warning");
       qc.invalidateQueries({ queryKey: ["users"] });
     },
@@ -240,5 +245,13 @@ export default function UsersPage() {
         </table>
       </div>
     </div>
+  );
+}
+
+export default function UsersPage() {
+  return (
+    <Suspense fallback={null}>
+      <UsersPageContent />
+    </Suspense>
   );
 }

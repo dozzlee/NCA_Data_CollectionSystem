@@ -1,6 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { FormTemplate, ExpectedSubmission } from "@/lib/types";
+import type { FormTemplate, FormSection, ExpectedSubmission } from "@/lib/types";
+
+type FormTemplateDetail = FormTemplate & { sections: FormSection[] };
 
 interface Submission {
   id: number;
@@ -42,7 +44,7 @@ interface SubmissionValue {
 export function useFormTemplate(id: number) {
   return useQuery({
     queryKey: ["form-template", id],
-    queryFn: () => api.get<FormTemplate>(`/form-templates/${id}/`),
+    queryFn: () => api.get<FormTemplateDetail>(`/form-templates/${id}/`),
     enabled: !!id,
   });
 }

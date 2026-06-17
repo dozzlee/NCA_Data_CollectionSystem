@@ -1,4 +1,4 @@
-import Cookies from "js-cookie";
+import { clearAuthTokens, getAccessToken, getRefreshToken, setAccessToken } from "@/lib/auth";
 
 // Empty string = relative URL so browser calls /api/v1/... on the same host.
 // Next.js rewrites proxy /api/* → Django internally (see next.config.js).
@@ -12,7 +12,7 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = Cookies.get("access_token");
+  const token = getAccessToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(init.headers as Record<string, string>),
@@ -25,14 +25,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     // Attempt token refresh
     const refreshed = await refreshTokens();
     if (refreshed) {
-      headers["Authorization"] = `Bearer ${Cookies.get("access_token")}`;
+      const refreshedToken = getAccessToken();
+      if (refreshedToken) headers["Authorization"] = `Bearer ${refreshedToken}`;
       const retry = await fetch(`${BASE}/api/v1${path}`, { ...init, headers });
       if (!retry.ok) throw new ApiError(retry.status, "Unauthorized");
       return retry.json();
     }
-    Cookies.remove("access_token");
-    Cookies.remove("refresh_token");
-    window.location.href = "/login";
+    clearAuthTokens();
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
     throw new ApiError(401, "Session expired");
   }
 
@@ -46,7 +48,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 async function refreshTokens(): Promise<boolean> {
-  const refresh = Cookies.get("refresh_token");
+  const refresh = getRefreshToken();
   if (!refresh) return false;
   try {
     const res = await fetch(`${BASE}/api/v1/auth/refresh/`, {
@@ -56,12 +58,14 @@ async function refreshTokens(): Promise<boolean> {
     });
     if (!res.ok) return false;
     const data = await res.json();
-    Cookies.set("access_token", data.access, { expires: 1 / 96 }); // 15 min
+    setAccessToken(data.access);
     return true;
   } catch {
     return false;
   }
 }
+
+export const refreshAccessToken = refreshTokens;
 
 // api can be called directly as api(path, init?) for GET, or via api.get/post/patch/put/delete
 function apiFn<T>(path: string, init?: RequestInit): Promise<T> {

@@ -30,6 +30,20 @@ interface CreatePeriodForm {
   due_at: string;
 }
 
+type CreatePeriodTextKey = "name" | "year" | "opens_at" | "due_at";
+
+const CREATE_PERIOD_FIELDS: Array<{
+  key: CreatePeriodTextKey;
+  label: string;
+  type: string;
+  placeholder: string;
+}> = [
+  { key: "name", label: "Period Name", type: "text", placeholder: "e.g. Q1 2026 Annual" },
+  { key: "year", label: "Year", type: "number", placeholder: "2026" },
+  { key: "opens_at", label: "Opens At", type: "datetime-local", placeholder: "" },
+  { key: "due_at", label: "Due At", type: "datetime-local", placeholder: "" },
+];
+
 const EMPTY_FORM: CreatePeriodForm = {
   name: "", frequency: "ANNUAL", year: String(new Date().getFullYear()),
   month: "", opens_at: "", due_at: "",
@@ -97,20 +111,15 @@ export default function PeriodsPage() {
         >
           <h2 className="text-[16px] font-semibold text-[#191c1e]">New Reporting Period</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              { key: "name", label: "Period Name", type: "text", placeholder: "e.g. Q1 2026 Annual" },
-              { key: "year", label: "Year", type: "number", placeholder: "2026" },
-              { key: "opens_at", label: "Opens At", type: "datetime-local", placeholder: "" },
-              { key: "due_at", label: "Due At", type: "datetime-local", placeholder: "" },
-            ].map(({ key, label, type, placeholder }) => (
+            {CREATE_PERIOD_FIELDS.map(({ key, label, type, placeholder }) => (
               <div key={key}>
                 <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">{label}</label>
                 <input
                   type={type}
-                  value={(form as Record<string, string>)[key]}
+                  value={form[key]}
                   onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
                   placeholder={placeholder}
-                  required={key !== "month"}
+                  required
                   className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20"
                 />
               </div>

@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Cookies from "js-cookie";
 import { Eye, EyeOff, AlertCircle } from "lucide-react";
+import { setAuthTokens } from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -33,15 +33,14 @@ export default function LoginPage() {
       }
 
       const data = await res.json();
-      Cookies.set("access_token", data.access, { expires: 1 / 96 }); // 15 min
-      Cookies.set("refresh_token", data.refresh, { expires: 7 });
+      setAuthTokens({ access: data.access, refresh: data.refresh });
 
       // Route by role
       const role: string = data.user?.role ?? "";
       if (role.startsWith("NCA")) {
-        router.push("/dashboard");
+        router.replace("/dashboard");
       } else {
-        router.push("/provider/dashboard");
+        router.replace("/provider/dashboard");
       }
     } catch {
       setError("Connection failed. Please check your network and try again.");

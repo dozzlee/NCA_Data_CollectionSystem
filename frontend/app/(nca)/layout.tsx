@@ -1,29 +1,13 @@
 "use client";
 
-import Cookies from "js-cookie";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { SessionTimeoutModal } from "@/components/ui/SessionTimeoutModal";
 import { useSessionTimeout } from "@/hooks/useSessionTimeout";
-import { api } from "@/lib/api";
-
-async function refreshToken(): Promise<boolean> {
-  const refresh = Cookies.get("refresh_token");
-  if (!refresh) return false;
-  try {
-    const data = await api<{ access: string }>("/auth/refresh/", {
-      method: "POST",
-      body: JSON.stringify({ refresh }),
-    });
-    Cookies.set("access_token", data.access, { expires: 1 / 96 });
-    return true;
-  } catch {
-    return false;
-  }
-}
+import { refreshAccessToken } from "@/lib/api";
 
 export default function NCALayout({ children }: { children: React.ReactNode }) {
-  const { showWarning, handleStaySignedIn, handleSignOut } = useSessionTimeout(refreshToken);
+  const { showWarning, handleStaySignedIn, handleSignOut } = useSessionTimeout(refreshAccessToken);
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#f7f9fb]">

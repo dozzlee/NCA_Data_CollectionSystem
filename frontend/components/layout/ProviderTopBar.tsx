@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Clock, CheckCircle, HelpCircle, LogOut } from "lucide-react";
+import { LayoutDashboard, Clock, CheckCircle, HelpCircle, LogOut, ShieldAlert } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import Cookies from "js-cookie";
 import { api } from "@/lib/api";
+import { clearAuthTokens } from "@/lib/auth";
 import type { User } from "@/lib/types";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -16,15 +16,17 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 const DATA_ENTRY_NAV = [
-  { href: "/provider/dashboard",  label: "My Forms",   icon: LayoutDashboard },
-  { href: "/provider/history",    label: "History",    icon: Clock },
-  { href: "/provider/inquiries",  label: "Inquiries",  icon: HelpCircle },
+  { href: "/provider/dashboard",    label: "My Forms",    icon: LayoutDashboard },
+  { href: "/provider/history",      label: "History",     icon: Clock },
+  { href: "/provider/compliance",   label: "Compliance",  icon: ShieldAlert },
+  { href: "/provider/inquiries",    label: "Inquiries",   icon: HelpCircle },
 ];
 
 const APPROVER_NAV = [
-  { href: "/provider/dashboard",         label: "My Forms",        icon: LayoutDashboard },
+  { href: "/provider/dashboard",         label: "My Forms",         icon: LayoutDashboard },
   { href: "/provider/pending-approval",  label: "Pending Approval", icon: CheckCircle },
   { href: "/provider/history",           label: "History",          icon: Clock },
+  { href: "/provider/compliance",        label: "Compliance",       icon: ShieldAlert },
   { href: "/provider/inquiries",         label: "Inquiries",        icon: HelpCircle },
 ];
 
@@ -39,8 +41,7 @@ export function ProviderTopBar() {
   });
 
   function handleSignOut() {
-    Cookies.remove("access_token");
-    Cookies.remove("refresh_token");
+    clearAuthTokens();
     router.push("/login");
   }
 

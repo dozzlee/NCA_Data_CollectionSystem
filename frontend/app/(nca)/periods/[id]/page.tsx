@@ -215,7 +215,7 @@ export default function PeriodDetailPage() {
               </p>
               <div className="space-y-3 max-h-72 overflow-y-auto">
                 {Object.entries(
-                  (allTemplates?.results ?? []).reduce<Record<string, typeof allTemplates.results>>((acc, t) => {
+                  (allTemplates?.results ?? []).reduce<Record<string, FormTemplate[]>>((acc, t) => {
                     const cat = PROVIDER_CATEGORY_LABELS[t.provider_category] ?? t.provider_category;
                     if (!acc[cat]) acc[cat] = [];
                     acc[cat].push(t);
@@ -254,7 +254,7 @@ export default function PeriodDetailPage() {
               </p>
               <div className="space-y-3 max-h-72 overflow-y-auto">
                 {Object.entries(
-                  (allProviders?.results ?? []).reduce<Record<string, typeof allProviders.results>>((acc, p) => {
+                  (allProviders?.results ?? []).reduce<Record<string, ProviderProfile[]>>((acc, p) => {
                     const cat = PROVIDER_CATEGORY_LABELS[p.category] ?? p.category;
                     if (!acc[cat]) acc[cat] = [];
                     acc[cat].push(p);
