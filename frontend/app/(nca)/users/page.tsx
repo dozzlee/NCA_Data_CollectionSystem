@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -42,18 +43,22 @@ const lbl = "block text-[11px] font-semibold uppercase tracking-wide text-[#7377
 export default function UsersPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const searchParams = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<NewUserForm>(EMPTY);
-  const [filterRole, setFilterRole] = useState("");
-  const [search, setSearch] = useState("");
+  const [filterRole, setFilterRole] = useState(searchParams.get("role") ?? "");
+  const [search, setSearch] = useState(searchParams.get("search") ?? "");
 
-  const params = new URLSearchParams();
-  if (filterRole) params.set("role", filterRole);
-  if (search) params.set("search", search);
+  const queryString = useMemo(() => {
+    const p = new URLSearchParams();
+    if (filterRole) p.set("role", filterRole);
+    if (search) p.set("search", search);
+    return p.toString();
+  }, [filterRole, search]);
 
   const { data, isLoading } = useQuery<{ results: User[] }>({
-    queryKey: ["users", filterRole, search],
-    queryFn: () => api(`/auth/users/?${params}`),
+    queryKey: ["users", queryString],
+    queryFn: () => api(`/auth/users/${queryString ? `?${queryString}` : ""}`),
   });
 
   const { data: providersData } = useQuery<{ results: ProviderProfile[] }>({

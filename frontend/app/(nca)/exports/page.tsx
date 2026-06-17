@@ -31,7 +31,7 @@ export default function ExportsPage() {
     setExported(null);
     try {
       const token = document.cookie.match(/access_token=([^;]+)/)?.[1];
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/v1/exports/csv/`, {
+      const res = await fetch("/api/v1/exports/csv/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

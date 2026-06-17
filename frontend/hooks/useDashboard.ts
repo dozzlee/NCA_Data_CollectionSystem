@@ -50,7 +50,7 @@ export function useOverdueByForm() {
 export function useExpectedSubmissions(params: Record<string, string> = {}) {
   const qs = new URLSearchParams(params).toString();
   return useQuery({
-    queryKey: ["expected-submissions", params],
+    queryKey: ["expected-submissions", qs],
     queryFn: () =>
       api.get<PaginatedResponse<ExpectedSubmission>>(
         `/expected-submissions/${qs ? `?${qs}` : ""}`

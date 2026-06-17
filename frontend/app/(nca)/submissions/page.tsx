@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useExpectedSubmissions } from "@/hooks/useDashboard";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
@@ -15,14 +16,18 @@ const STATUS_FILTERS: WorkflowStatus[] = [
 ];
 
 export default function SubmissionsPage() {
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<WorkflowStatus | "">("");
-  const [categoryFilter, setCategoryFilter] = useState("");
+  const searchParams = useSearchParams();
+  const [search, setSearch] = useState(searchParams.get("search") ?? "");
+  const [statusFilter, setStatusFilter] = useState<WorkflowStatus | "">((searchParams.get("workflow_status") as WorkflowStatus) ?? "");
+  const [categoryFilter, setCategoryFilter] = useState(searchParams.get("provider__category") ?? "");
 
-  const params: Record<string, string> = {};
-  if (statusFilter) params.workflow_status = statusFilter;
-  if (categoryFilter) params.provider__category = categoryFilter;
-  if (search) params.search = search;
+  const params = useMemo(() => {
+    const p: Record<string, string> = {};
+    if (statusFilter) p.workflow_status = statusFilter;
+    if (categoryFilter) p.provider__category = categoryFilter;
+    if (search) p.search = search;
+    return p;
+  }, [statusFilter, categoryFilter, search]);
 
   const { data, isLoading } = useExpectedSubmissions(params);
 
