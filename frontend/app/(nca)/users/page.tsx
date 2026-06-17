@@ -47,14 +47,12 @@ export default function UsersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<NewUserForm>(EMPTY);
   const [filterRole, setFilterRole] = useState(searchParams.get("role") ?? "");
-  const [search, setSearch] = useState(searchParams.get("search") ?? "");
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
     if (filterRole) p.set("role", filterRole);
-    if (search) p.set("search", search);
     return p.toString();
-  }, [filterRole, search]);
+  }, [filterRole]);
 
   const { data, isLoading } = useQuery<{ results: User[] }>({
     queryKey: ["users", queryString],
@@ -185,9 +183,6 @@ export default function UsersPage() {
 
       {/* Filters */}
       <div className="flex gap-3">
-        <input type="search" placeholder="Search by name or email…" value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none w-56" />
         <select value={filterRole} onChange={e => setFilterRole(e.target.value)}
           className="rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none">
           <option value="">All roles</option>

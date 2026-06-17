@@ -22,22 +22,20 @@ const STATUSES: ProviderStatus[] = ["ACTIVE","INACTIVE","SUSPENDED","ARCHIVED"];
 
 export default function ProvidersPage() {
   const router = useRouter();
-  const [search,   setSearch]   = useState("");
   const [category, setCategory] = useState("");
   const [status,   setStatus]   = useState("");
 
   // Build the query string — re-computed whenever filters change
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
-    if (search)   p.set("search",   search);
     if (category) p.set("category", category);
     if (status)   p.set("status",   status);
     return p.toString();
-  }, [search, category, status]);
+  }, [category, status]);
 
-  const { data, isLoading, isFetching } = useQuery<{ results: ProviderProfile[] }>({
+  const { data, isLoading } = useQuery<{ results: ProviderProfile[] }>({
     queryKey:  ["providers", queryString],
-    queryFn:   () => api(`/providers/?${queryString}`),
+    queryFn:   () => api(`/providers/${queryString ? `?${queryString}` : ""}`),
     staleTime: 0,           // always fetch fresh when filters change
   });
 
@@ -55,19 +53,6 @@ export default function ProvidersPage() {
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-center">
-        <div className="relative">
-          <input
-            type="search"
-            placeholder="Search by name, licence number…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="rounded-[8px] border border-[#c3c6d0] bg-white pl-3 pr-8 py-2 text-[13px] text-[#191c1e] placeholder:text-[#737780] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20 w-64"
-          />
-          {isFetching && (
-            <span className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full border-2 border-[#0066cc] border-t-transparent animate-spin" />
-          )}
-        </div>
-
         <select value={category} onChange={e => setCategory(e.target.value)}
           className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none">
           <option value="">All categories</option>
@@ -82,8 +67,8 @@ export default function ProvidersPage() {
           ))}
         </select>
 
-        {(search || category || status) && (
-          <button onClick={() => { setSearch(""); setCategory(""); setStatus(""); }}
+        {(category || status) && (
+          <button onClick={() => { setCategory(""); setStatus(""); }}
             className="text-[13px] font-medium text-[#737780] hover:text-[#0066cc]">
             Clear filters
           </button>
@@ -120,7 +105,7 @@ export default function ProvidersPage() {
                 <tr>
                   <td colSpan={6} className="px-5 py-12 text-center">
                     <p className="text-[14px] font-medium text-[#191c1e]">No providers found</p>
-                    {(search || category || status) && (
+                    {(category || status) && (
                       <p className="text-[13px] text-[#737780] mt-1">Try adjusting or clearing your filters.</p>
                     )}
                   </td>

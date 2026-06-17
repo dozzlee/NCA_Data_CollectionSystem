@@ -23,7 +23,7 @@ import {
 } from "@/hooks/useFormEntry";
 import { api } from "@/lib/api";
 import { Save, Send, ChevronRight, ChevronLeft, AlertTriangle } from "lucide-react";
-import type { FormSection, FieldStatus } from "@/lib/types";
+import type { ExpectedSubmission, FormSection, FieldStatus } from "@/lib/types";
 
 // ─── Local value state for one section ───────────────────────────────────────
 
@@ -275,6 +275,12 @@ export default function FormEntryPage() {
   const expectedQ = useExpectedSubmission(expectedId);
   const expected = expectedQ.data;
 
+  const periodFormsQ = useQuery<{ results: ExpectedSubmission[] }>({
+    queryKey: ["provider-period-forms", expected?.period],
+    queryFn: () => api(`/expected-submissions/?period=${expected?.period}&ordering=form_template`),
+    enabled: !!expected?.period,
+  });
+
   // Get or create submission
   const latestSubmissionId = expected ? (expected as { latest_submission_id?: number }).latest_submission_id ?? null : null;
   const submissionQ = useSubmission(latestSubmissionId);
@@ -300,6 +306,7 @@ export default function FormEntryPage() {
 
   const currentSectionIndex = sections.findIndex((s) => s.section_code === activeSection);
   const currentSection = sections[currentSectionIndex];
+  const periodForms = periodFormsQ.data?.results ?? [];
 
   const isEditable = expected?.workflow_status === "DRAFT" || expected?.workflow_status === "CORRECTION_REQUESTED";
 
@@ -421,6 +428,40 @@ export default function FormEntryPage() {
           )}
         </div>
       </div>
+
+      {periodForms.length > 1 && (
+        <div className="rounded-[12px] border border-[#e6e8ea] bg-white px-4 py-3"
+          style={{ boxShadow: "0 1px 4px rgba(0,45,91,0.04)" }}>
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#737780]">Period forms</p>
+              <p className="text-[12px] text-[#43474f]">{expected.period_name}</p>
+            </div>
+            <p className="text-[11px] text-[#737780]">
+              {periodForms.findIndex((item) => item.id === expected.id) + 1} of {periodForms.length}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {periodForms.map((item) => {
+              const active = item.id === expected.id;
+              return (
+                <Link
+                  key={item.id}
+                  href={`/provider/submissions/${item.id}`}
+                  className={`rounded-[8px] border px-3 py-2 text-[12px] transition-colors ${
+                    active
+                      ? "border-[#0066cc] bg-[#e8f1fb] text-[#004999]"
+                      : "border-[#e6e8ea] bg-[#f7f9fb] text-[#43474f] hover:border-[#c3c6d0] hover:bg-white"
+                  }`}
+                >
+                  <span className="font-semibold">{item.form_code}</span>
+                  <span className="ml-2 text-[11px] opacity-75">{item.workflow_status.split("_").join(" ")}</span>
+                </Link>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Main layout: stepper + content */}
       <div className="flex gap-5 items-start">

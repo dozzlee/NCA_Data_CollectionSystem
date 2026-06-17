@@ -1,6 +1,8 @@
 from django.core.management.base import BaseCommand
+from django.core.management import call_command
 from django.utils import timezone
 from datetime import date
+from apps.compliance.models import EmailTemplate
 from apps.providers.models import ProviderProfile
 from apps.submissions.models import ReportingPeriod, ExpectedSubmission, Submission, SubmissionValue
 from apps.forms_engine.models import FormTemplate, FormSection, FormField
@@ -12,12 +14,17 @@ class Command(BaseCommand):
     help = 'Seed the database with realistic test data'
 
     def handle(self, *args, **options):
-        # Skip if already seeded
+        # If periods already exist, still backfill support data introduced later.
         if ReportingPeriod.objects.exists():
-            self.stdout.write(self.style.SUCCESS("✓ Database already seeded, skipping."))
+            if not FormTemplate.objects.exists():
+                self.seed_form_templates()
+            self.seed_email_templates()
+            call_command("flag_missing_data")
+            self.stdout.write(self.style.SUCCESS("✓ Database already seeded; support data refreshed."))
             return
 
         self.stdout.write("🌱 Seeding database with test data...")
+        self.seed_email_templates()
 
         # Get or create an admin user to satisfy created_by FK
         admin, _ = User.objects.get_or_create(
@@ -233,6 +240,7 @@ class Command(BaseCommand):
                                 )
 
         self.stdout.write(f"  ✓ Created {created_count} expected submissions with varied data")
+        call_command("flag_missing_data")
         self.stdout.write(self.style.SUCCESS("✅ Data seeding complete with realistic test data!"))
 
     def create_provider_users(self, provider, org_name, email_prefix):
@@ -366,3 +374,59 @@ class Command(BaseCommand):
 
             if created:
                 self.stdout.write(f"  ✓ Created form template: {form_code}")
+
+    def seed_email_templates(self):
+        templates = [
+            (
+                'PERIOD_OPEN',
+                'Regulatory Data Collection Period Open - {{period_name}}',
+                'Dear {{provider_name}},\n\nThe {{period_name}} regulatory data collection period is now open. Please log in to the NCA Data Collection System to complete and submit your {{form_name}} return.\n\nDue date: {{due_date}}\n\nRegards,\nNational Communications Authority',
+                ['{{provider_name}}', '{{period_name}}', '{{form_name}}', '{{due_date}}'],
+            ),
+            (
+                'REMINDER',
+                'Reminder: {{form_name}} Return Due {{due_date}}',
+                'Dear {{provider_name}},\n\nThis is a reminder that your {{form_name}} submission for {{period_name}} is due on {{due_date}}.\n\nCurrent status: {{workflow_status}}\n\nPlease complete your submission in the NCA Data Collection System.\n\nRegards,\nNational Communications Authority',
+                ['{{provider_name}}', '{{form_name}}', '{{period_name}}', '{{due_date}}', '{{workflow_status}}'],
+            ),
+            (
+                'OVERDUE',
+                'OVERDUE: {{form_name}} Return for {{period_name}}',
+                'Dear {{provider_name}},\n\nYour {{form_name}} submission for {{period_name}} was due on {{due_date}} and has not yet been received.\n\nPlease submit your return immediately. Continued non-compliance may result in regulatory action.\n\nRegards,\nNational Communications Authority',
+                ['{{provider_name}}', '{{form_name}}', '{{period_name}}', '{{due_date}}'],
+            ),
+            (
+                'CORRECTION_REQUEST',
+                'Correction Required: {{form_name}} Submission for {{period_name}}',
+                'Dear {{provider_name}},\n\nYour {{form_name}} submission for {{period_name}} has been reviewed by NCA. Corrections are required before approval.\n\nPlease log in to view the required corrections and resubmit.\n\nRegards,\nNational Communications Authority',
+                ['{{provider_name}}', '{{form_name}}', '{{period_name}}'],
+            ),
+            (
+                'DRAFT_INCOMPLETE',
+                'Incomplete Draft: {{form_name}} for {{period_name}}',
+                'Dear {{provider_name}},\n\nYour {{form_name}} draft for {{period_name}} is incomplete. Please complete all required fields and submit before the due date.\n\nRegards,\nNational Communications Authority',
+                ['{{provider_name}}', '{{form_name}}', '{{period_name}}'],
+            ),
+            (
+                'ESCALATION',
+                'Escalation Notice: {{form_name}} for {{period_name}}',
+                'Dear {{provider_name}},\n\nThis submission requires urgent attention from your compliance team: {{form_name}} for {{period_name}}.\n\nRegards,\nNational Communications Authority',
+                ['{{provider_name}}', '{{form_name}}', '{{period_name}}'],
+            ),
+        ]
+
+        created_count = 0
+        for template_type, subject, body, placeholders in templates:
+            _, created = EmailTemplate.objects.update_or_create(
+                template_type=template_type,
+                defaults={
+                    'subject': subject,
+                    'body': body,
+                    'placeholders': placeholders,
+                },
+            )
+            if created:
+                created_count += 1
+
+        if created_count:
+            self.stdout.write(f"  ✓ Created {created_count} email templates")

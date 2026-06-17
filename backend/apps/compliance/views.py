@@ -6,8 +6,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.submissions.models import ExpectedSubmission
-from .models import EmailTemplate, EmailLog
-from .serializers import EmailTemplateSerializer, EmailLogSerializer
+from .models import ComplianceFlag, EmailTemplate, EmailLog
+from .serializers import ComplianceFlagSerializer, EmailTemplateSerializer, EmailLogSerializer
 
 
 class ComplianceDashboardView(APIView):
@@ -32,6 +32,19 @@ class ComplianceDashboardView(APIView):
 class EmailTemplateListView(generics.ListAPIView):
     queryset = EmailTemplate.objects.all()
     serializer_class = EmailTemplateSerializer
+
+
+class ComplianceFlagListView(generics.ListAPIView):
+    permission_classes = [IsNCAUser]
+    serializer_class = ComplianceFlagSerializer
+    filterset_fields = ["status", "flag_type", "provider"]
+
+    def get_queryset(self):
+        return ComplianceFlag.objects.select_related(
+            "provider",
+            "expected_submission__form_template",
+            "expected_submission__period",
+        )
 
 
 class GenerateEmailView(APIView):

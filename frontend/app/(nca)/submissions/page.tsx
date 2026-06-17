@@ -6,28 +6,29 @@ import Link from "next/link";
 import { useExpectedSubmissions } from "@/hooks/useDashboard";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { formatDate, WORKFLOW_LABELS, PROVIDER_CATEGORY_LABELS, getDueStateRowBg } from "@/lib/utils";
-import { Search, ChevronRight } from "lucide-react";
-import type { WorkflowStatus } from "@/lib/types";
+import { formatDate, WORKFLOW_LABELS, DUE_STATE_LABELS, PROVIDER_CATEGORY_LABELS, getDueStateRowBg } from "@/lib/utils";
+import { ChevronRight } from "lucide-react";
+import type { DueState, WorkflowStatus } from "@/lib/types";
 
 const STATUS_FILTERS: WorkflowStatus[] = [
   "NOT_STARTED", "DRAFT", "PENDING_APPROVAL", "SUBMITTED",
   "UNDER_REVIEW", "CORRECTION_REQUESTED", "APPROVED", "REJECTED",
 ];
+const DUE_STATE_FILTERS: DueState[] = ["OPEN", "DUE_SOON", "DUE_TODAY", "OVERDUE", "CLOSED"];
 
 export default function SubmissionsPage() {
   const searchParams = useSearchParams();
-  const [search, setSearch] = useState(searchParams.get("search") ?? "");
   const [statusFilter, setStatusFilter] = useState<WorkflowStatus | "">((searchParams.get("workflow_status") as WorkflowStatus) ?? "");
+  const [dueStateFilter, setDueStateFilter] = useState<DueState | "">((searchParams.get("due_state") as DueState) ?? "");
   const [categoryFilter, setCategoryFilter] = useState(searchParams.get("provider__category") ?? "");
 
   const params = useMemo(() => {
     const p: Record<string, string> = {};
     if (statusFilter) p.workflow_status = statusFilter;
+    if (dueStateFilter) p.due_state = dueStateFilter;
     if (categoryFilter) p.provider__category = categoryFilter;
-    if (search) p.search = search;
     return p;
-  }, [statusFilter, categoryFilter, search]);
+  }, [statusFilter, dueStateFilter, categoryFilter]);
 
   const { data, isLoading } = useExpectedSubmissions(params);
 
@@ -40,20 +41,16 @@ export default function SubmissionsPage() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] min-w-[220px]">
-          <Search size={13} className="text-[#737780] shrink-0" />
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search provider or form…"
-            className="flex-1 bg-transparent outline-none text-[13px] text-[#191c1e] placeholder:text-[#737780]"
-          />
-        </div>
-
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as WorkflowStatus | "")}
           className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:outline-none focus:border-[#0066cc]">
           <option value="">All statuses</option>
           {STATUS_FILTERS.map((s) => <option key={s} value={s}>{WORKFLOW_LABELS[s]}</option>)}
+        </select>
+
+        <select value={dueStateFilter} onChange={(e) => setDueStateFilter(e.target.value as DueState | "")}
+          className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:outline-none focus:border-[#0066cc]">
+          <option value="">All due states</option>
+          {DUE_STATE_FILTERS.map((s) => <option key={s} value={s}>{DUE_STATE_LABELS[s]}</option>)}
         </select>
 
         <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}

@@ -24,6 +24,9 @@ class EmailTemplate(models.Model):
     def __str__(self):
         return self.get_template_type_display()
 
+    class Meta:
+        ordering = ["template_type"]
+
 
 class EmailLog(models.Model):
     STATUS_CHOICES = [
@@ -60,3 +63,44 @@ class EmailLog(models.Model):
 
     class Meta:
         ordering = ["-generated_at"]
+
+
+class ComplianceFlag(models.Model):
+    FLAG_TYPE_CHOICES = [
+        ("MISSING_DATA", "Missing Required Data"),
+        ("OVERDUE", "Overdue Submission"),
+        ("INCOMPLETE", "Incomplete Form"),
+        ("CORRECTION", "Correction Requested"),
+    ]
+    STATUS_CHOICES = [
+        ("OPEN", "Open"),
+        ("ACKNOWLEDGED", "Acknowledged by Provider"),
+        ("IN_PROGRESS", "In Progress"),
+        ("RESOLVED", "Resolved"),
+    ]
+
+    expected_submission = models.ForeignKey(
+        "submissions.ExpectedSubmission",
+        on_delete=models.CASCADE,
+        related_name="compliance_flags",
+    )
+    provider = models.ForeignKey(
+        "providers.ProviderProfile",
+        on_delete=models.CASCADE,
+        related_name="compliance_flags",
+    )
+    flag_type = models.CharField(max_length=20, choices=FLAG_TYPE_CHOICES)
+    description = models.TextField(help_text="What is missing or needs attention")
+    missing_field_count = models.PositiveIntegerField(default=0)
+    completion_percentage = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="OPEN")
+    created_at = models.DateTimeField(auto_now_add=True)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.get_flag_type_display()} - {self.provider}"
+
+    class Meta:
+        ordering = ["-created_at"]
+        unique_together = [["expected_submission", "flag_type"]]

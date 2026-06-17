@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import EmailTemplate, EmailLog
+from .models import ComplianceFlag, EmailTemplate, EmailLog
 
 
 class EmailTemplateSerializer(serializers.ModelSerializer):
@@ -19,4 +19,19 @@ class EmailLogSerializer(serializers.ModelSerializer):
             "provider", "provider_name", "expected_submission", "period",
             "generated_by", "generated_by_name", "generated_at",
             "sent_by", "sent_at", "compliance_stage", "status",
+        ]
+
+
+class ComplianceFlagSerializer(serializers.ModelSerializer):
+    provider_name = serializers.CharField(source="provider.registered_name", read_only=True)
+    form_code = serializers.CharField(source="expected_submission.form_template.form_code", read_only=True)
+    period_name = serializers.CharField(source="expected_submission.period.name", read_only=True)
+
+    class Meta:
+        model = ComplianceFlag
+        fields = [
+            "id", "expected_submission", "provider", "provider_name",
+            "form_code", "period_name", "flag_type", "description",
+            "missing_field_count", "completion_percentage", "status",
+            "created_at", "acknowledged_at", "resolved_at",
         ]

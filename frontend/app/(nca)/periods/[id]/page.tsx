@@ -331,7 +331,7 @@ export default function PeriodDetailPage() {
                   <td className="px-5 py-3.5"><DueStateBadge state={s.due_state} /></td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{s.assigned_officer_name ?? "—"}</td>
                   <td className="px-5 py-3.5">
-                    <Link href={`/submissions?expected=${s.id}`}
+                    <Link href={`/submissions/${s.id}/review`}
                       className="text-[13px] font-medium text-[#0066cc] hover:underline">View →</Link>
                   </td>
                 </tr>

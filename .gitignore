@@ -55,6 +55,9 @@ Thumbs.db
 # Backups (generated locally, never committed)
 backups/
 
+# Browser automation artifacts
+.playwright-cli/
+
 # Secrets
 .env.local
 .env.production
