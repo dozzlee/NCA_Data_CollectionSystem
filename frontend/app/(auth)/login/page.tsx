@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Eye, EyeOff, AlertCircle } from "lucide-react";
 import { setAuthTokens } from "@/lib/auth";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -37,11 +35,7 @@ export default function LoginPage() {
 
       // Route by role
       const role: string = data.user?.role ?? "";
-      if (role.startsWith("NCA")) {
-        router.replace("/dashboard");
-      } else {
-        router.replace("/provider/dashboard");
-      }
+      window.location.assign(role.startsWith("NCA") ? "/dashboard" : "/provider/dashboard");
     } catch {
       setError("Connection failed. Please check your network and try again.");
     } finally {
