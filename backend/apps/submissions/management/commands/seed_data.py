@@ -181,47 +181,130 @@ class Command(BaseCommand):
         if not periods:
             self.stdout.write("  ⚠ No periods created (may already exist)")
 
-        # Create expected submissions for Vodafone across active periods
-        active_periods = ReportingPeriod.objects.filter(status__in=['ACTIVE', 'CLOSED'])
+        # Create users and organizations for multiple providers
+        self.create_provider_users(providers[1], 'MTN Ghana Limited', 'mtn')
+        self.create_provider_users(providers[2], 'AirtelTigo Ghana', 'airteltigo')
+        self.create_provider_users(providers[3], 'Surfline Communications', 'surfline')
+
+        # Create expected submissions for all providers across periods
+        active_periods = list(ReportingPeriod.objects.filter(status__in=['ACTIVE', 'CLOSED']))
         created_count = 0
 
-        statuses = ['NOT_STARTED', 'DRAFT', 'SUBMITTED', 'APPROVED', 'UNDER_REVIEW']
+        # Varied statuses for realistic data
+        all_statuses = ['NOT_STARTED', 'DRAFT', 'PENDING_APPROVAL', 'SUBMITTED',
+                        'UNDER_REVIEW', 'CORRECTION_REQUESTED', 'APPROVED', 'REJECTED']
 
-        for i, period in enumerate(active_periods[:4]):
-            form = existing_forms[i % len(existing_forms)]
-            status = statuses[i % len(statuses)]
+        # Create submissions for each provider across periods with varied states
+        for provider_idx, provider in enumerate(providers[:5]):  # Create for first 5 providers
+            for period_idx, period in enumerate(active_periods):
+                for form_idx, form in enumerate(existing_forms[:2]):
+                    # Vary status based on provider and period
+                    status_idx = (provider_idx + period_idx + form_idx) % len(all_statuses)
+                    status = all_statuses[status_idx]
 
-            es, created = ExpectedSubmission.objects.get_or_create(
-                provider=vodafone,
-                period=period,
-                form_template=form,
-                defaults={
-                    'workflow_status': status,
-                    'due_state': 'CLOSED' if period.status == 'CLOSED' else ('OVERDUE' if period.due_at < now else 'OPEN'),
-                }
-            )
-
-            if created:
-                created_count += 1
-                # Create actual submission for non-NOT_STARTED statuses
-                if status not in ['NOT_STARTED']:
-                    sub = Submission.objects.create(
-                        expected=es,
-                        version=1,
-                        completion_pct=random.randint(40, 100),
+                    es, created = ExpectedSubmission.objects.get_or_create(
+                        provider=provider,
+                        period=period,
+                        form_template=form,
+                        defaults={
+                            'workflow_status': status,
+                            'due_state': self.get_due_state(period, now, provider_idx % 3),
+                        }
                     )
-                    # Add sample values for fields in this form
-                    fields = FormField.objects.filter(section__form_template=form)[:5]
-                    for field in fields:
-                        SubmissionValue.objects.create(
-                            submission=sub,
-                            field=field,
-                            value=str(random.randint(10000, 999999)),
-                            value_status='PROVIDED',
-                        )
 
-        self.stdout.write(f"  ✓ Created {created_count} expected submissions")
-        self.stdout.write(self.style.SUCCESS("✅ Data seeding complete!"))
+                    if created:
+                        created_count += 1
+                        # Create actual submission for most statuses
+                        if status not in ['NOT_STARTED']:
+                            completion = self.get_varied_completion(status, provider_idx)
+                            sub = Submission.objects.create(
+                                expected=es,
+                                version=1,
+                                completion_pct=completion,
+                            )
+                            # Add realistic field values
+                            fields = list(FormField.objects.filter(section__form_template=form))
+                            for field in fields[:8]:
+                                SubmissionValue.objects.create(
+                                    submission=sub,
+                                    field=field,
+                                    value=self.get_field_value(field, provider_idx),
+                                    value_status=random.choice(['PROVIDED', 'NOT_APPLICABLE', 'NOT_AVAILABLE']) if field.field_code != 'reporting_contact' else 'PROVIDED',
+                                )
+
+        self.stdout.write(f"  ✓ Created {created_count} expected submissions with varied data")
+        self.stdout.write(self.style.SUCCESS("✅ Data seeding complete with realistic test data!"))
+
+    def create_provider_users(self, provider, org_name, email_prefix):
+        org, _ = Organization.objects.get_or_create(name=org_name, defaults={'org_type': 'PROVIDER'})
+        if provider.organization is None:
+            provider.organization = org
+            provider.save(update_fields=['organization'])
+
+        data_entry, created = User.objects.get_or_create(
+            email=f'dataentry@{email_prefix}.com.gh',
+            defaults={
+                'name': f'{org_name} Data Entry',
+                'role': 'PROVIDER_DATA_ENTRY',
+                'organization': org,
+                'is_active': True,
+            }
+        )
+        if created:
+            data_entry.set_password('testpass123')
+            data_entry.save()
+
+        approver, created = User.objects.get_or_create(
+            email=f'approver@{email_prefix}.com.gh',
+            defaults={
+                'name': f'{org_name} Approver',
+                'role': 'PROVIDER_APPROVER',
+                'organization': org,
+                'is_active': True,
+            }
+        )
+        if created:
+            approver.set_password('testpass123')
+            approver.save()
+
+    def get_due_state(self, period, now, provider_idx):
+        if period.status == 'CLOSED':
+            return 'CLOSED'
+        if provider_idx == 0:
+            return 'OVERDUE' if period.due_at < now else 'OPEN'
+        elif provider_idx == 1:
+            return 'OVERDUE'
+        else:
+            return 'OPEN'
+
+    def get_varied_completion(self, status, provider_idx):
+        # Vary completion % by status
+        completion_map = {
+            'NOT_STARTED': 0,
+            'DRAFT': random.randint(15, 60),
+            'PENDING_APPROVAL': random.randint(80, 95),
+            'SUBMITTED': random.randint(70, 95),
+            'UNDER_REVIEW': random.randint(85, 100),
+            'CORRECTION_REQUESTED': random.randint(50, 75),
+            'APPROVED': 100,
+            'REJECTED': random.randint(20, 60),
+        }
+        return completion_map.get(status, random.randint(40, 100))
+
+    def get_field_value(self, field, provider_idx):
+        # Generate realistic values based on field type and provider
+        field_code = field.field_code
+        if field_code == 'reporting_contact':
+            return f'Contact {provider_idx + 1} <contact{provider_idx}@provider.com>'
+        elif field_code == 'subscriber_or_site_count':
+            return str(random.randint(100000, 5000000) if provider_idx % 2 == 0 else random.randint(50000, 500000))
+        elif field_code == 'gross_revenue':
+            return str(random.randint(1000000, 500000000))
+        elif field_code == 'comments':
+            return f'Submission prepared by provider team {provider_idx + 1}'
+        else:
+            # Generic numeric value for other fields
+            return str(random.randint(10000, 999999))
 
     def seed_form_templates(self):
         template_data = [
@@ -262,6 +345,10 @@ class Command(BaseCommand):
                 ('reporting_contact', 'Reporting contact', 'text', ''),
                 ('subscriber_or_site_count', 'Subscriber or site count', 'number', ''),
                 ('gross_revenue', 'Gross revenue', 'currency', 'GHS'),
+                ('active_sites', 'Number of active sites', 'number', ''),
+                ('employees', 'Total employees', 'number', ''),
+                ('capex', 'Capital expenditure', 'currency', 'GHS'),
+                ('opex', 'Operating expenditure', 'currency', 'GHS'),
                 ('comments', 'Submission comments', 'textarea', ''),
             ]
             for sort_order, (field_code, label, field_type, unit) in enumerate(fields, start=1):
