@@ -1,4 +1,4 @@
-Django==5.0.6
+Django==4.2.13
 djangorestframework==3.15.2
 djangorestframework-simplejwt==5.3.1
 django-two-factor-auth==1.16.0
