@@ -39,5 +39,5 @@ CMD bash -c "\
     python manage.py seed_data && \
     python manage.py runserver 0.0.0.0:8000 & \
     cd /app/frontend && \
-    NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev -- -p 7860\
+    DJANGO_INTERNAL_URL=http://localhost:8000 npm run dev -- -p 7860\
 "

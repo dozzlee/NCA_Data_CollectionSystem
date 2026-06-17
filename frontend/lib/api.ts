@@ -1,6 +1,8 @@
 import Cookies from "js-cookie";
 
-const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+// Empty string = relative URL so browser calls /api/v1/... on the same host.
+// Next.js rewrites proxy /api/* → Django internally (see next.config.js).
+const BASE = "";
 
 class ApiError extends Error {
   constructor(public status: number, message: string, public data?: unknown) {
