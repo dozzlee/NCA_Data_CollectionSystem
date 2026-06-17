@@ -9,8 +9,12 @@ const nextConfig = {
     const djangoUrl = process.env.DJANGO_INTERNAL_URL ?? "http://localhost:8000";
     return [
       {
+        source: "/api/:path*/",
+        destination: `${djangoUrl}/api/:path*/`,
+      },
+      {
         source: "/api/:path*",
-        destination: `${djangoUrl}/api/:path*`,
+        destination: `${djangoUrl}/api/:path*/`,
       },
     ];
   },
