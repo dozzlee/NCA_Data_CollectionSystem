@@ -117,8 +117,13 @@ class Command(BaseCommand):
             approver.save()
             self.stdout.write("  ✓ Created Provider Approver user")
 
-        # Use existing form templates (created by migrations/fixtures)
-        # Only use form codes that exist in the FORM_CODES choices
+        # Ensure there are active form templates. Migrations create the schema
+        # only, so a fresh container needs seed templates before submissions.
+        if not FormTemplate.objects.exists():
+            self.seed_form_templates()
+
+        # Use existing form templates (created by seed data or admin users).
+        # Only use form codes that exist in the FORM_CODES choices.
         existing_forms = list(FormTemplate.objects.filter(status='ACTIVE'))
 
         if not existing_forms:
@@ -192,7 +197,7 @@ class Command(BaseCommand):
                 form_template=form,
                 defaults={
                     'workflow_status': status,
-                    'due_state': 'OVERDUE' if period.due_at < now else 'ON_TIME',
+                    'due_state': 'CLOSED' if period.status == 'CLOSED' else ('OVERDUE' if period.due_at < now else 'OPEN'),
                 }
             )
 
@@ -217,3 +222,60 @@ class Command(BaseCommand):
 
         self.stdout.write(f"  ✓ Created {created_count} expected submissions")
         self.stdout.write(self.style.SUCCESS("✅ Data seeding complete!"))
+
+    def seed_form_templates(self):
+        template_data = [
+            ('MNO-MONTHLY', 'MNO Monthly Return', 'MNO', 'MONTHLY'),
+            ('DC-ISP06', 'Internet Service Provider Annual Return', 'ISP', 'ANNUAL'),
+            ('DC-TB02', 'Pay TV Broadcasting Annual Return', 'PAY_TV', 'ANNUAL'),
+            ('DC-ITC04', 'Tower Operator Annual Return', 'TOWER_OPERATOR', 'ANNUAL'),
+        ]
+
+        for form_code, name, category, frequency in template_data:
+            template, created = FormTemplate.objects.get_or_create(
+                form_code=form_code,
+                defaults={
+                    'name': name,
+                    'provider_category': category,
+                    'frequency': frequency,
+                    'version': '1.0',
+                    'effective_from': date(2024, 1, 1),
+                    'status': 'ACTIVE',
+                    'instructions': 'Seeded demo form template for Hugging Face testing.',
+                }
+            )
+            if not created and template.status != 'ACTIVE':
+                template.status = 'ACTIVE'
+                template.save(update_fields=['status'])
+
+            section, _ = FormSection.objects.get_or_create(
+                form_template=template,
+                section_code='general',
+                defaults={
+                    'title': 'General Information',
+                    'instructions': 'Basic reporting information for this return.',
+                    'sort_order': 1,
+                }
+            )
+
+            fields = [
+                ('reporting_contact', 'Reporting contact', 'text', ''),
+                ('subscriber_or_site_count', 'Subscriber or site count', 'number', ''),
+                ('gross_revenue', 'Gross revenue', 'currency', 'GHS'),
+                ('comments', 'Submission comments', 'textarea', ''),
+            ]
+            for sort_order, (field_code, label, field_type, unit) in enumerate(fields, start=1):
+                FormField.objects.get_or_create(
+                    section=section,
+                    field_code=field_code,
+                    defaults={
+                        'label': label,
+                        'field_type': field_type,
+                        'unit': unit,
+                        'is_required': field_code != 'comments',
+                        'sort_order': sort_order,
+                    }
+                )
+
+            if created:
+                self.stdout.write(f"  ✓ Created form template: {form_code}")
