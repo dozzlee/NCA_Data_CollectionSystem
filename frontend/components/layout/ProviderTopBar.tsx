@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { LayoutDashboard, Clock, CheckCircle, HelpCircle, LogOut, ShieldAlert } from "lucide-react";
+import { BarChart3, LayoutDashboard, Clock, CheckCircle, HelpCircle, LogOut, ShieldAlert } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { clearAuthTokens } from "@/lib/auth";
@@ -17,6 +17,7 @@ const ROLE_LABELS: Record<string, string> = {
 
 const DATA_ENTRY_NAV = [
   { href: "/provider/dashboard",    label: "My Forms",    icon: LayoutDashboard },
+  { href: "/industry-dashboard",    label: "Industry",    icon: BarChart3 },
   { href: "/provider/history",      label: "History",     icon: Clock },
   { href: "/provider/compliance",   label: "Compliance",  icon: ShieldAlert },
   { href: "/provider/inquiries",    label: "Inquiries",   icon: HelpCircle },
@@ -24,6 +25,7 @@ const DATA_ENTRY_NAV = [
 
 const APPROVER_NAV = [
   { href: "/provider/dashboard",         label: "My Forms",         icon: LayoutDashboard },
+  { href: "/industry-dashboard",         label: "Industry",         icon: BarChart3 },
   { href: "/provider/pending-approval",  label: "Pending Approval", icon: CheckCircle },
   { href: "/provider/history",           label: "History",          icon: Clock },
   { href: "/provider/compliance",        label: "Compliance",       icon: ShieldAlert },

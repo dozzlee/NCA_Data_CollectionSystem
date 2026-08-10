@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, FileText, Building2, Calendar,
+  LayoutDashboard, BarChart3, FileText, Building2, Calendar,
   ShieldAlert, Download, LogOut, FormInput, Users,
   Library, ClipboardList, Bell,
   ShieldCheck, LifeBuoy,
@@ -23,6 +23,7 @@ const ROLE_LABELS: Record<string, string> = {
 // Base nav — shown to all NCA roles
 const BASE_NAV = [
   { href: "/dashboard",   label: "Dashboard",   icon: LayoutDashboard },
+  { href: "/industry-dashboard", label: "Industry Dashboard", icon: BarChart3 },
   { href: "/submissions", label: "Submissions",  icon: FileText },
   { href: "/providers",   label: "Providers",    icon: Building2 },
   { href: "/periods",     label: "Periods",      icon: Calendar },
@@ -40,6 +41,7 @@ const ADMIN_NAV = [
 ];
 
 const REQUESTER_NAV = [
+  { href: "/industry-dashboard", label: "Industry Dashboard", icon: BarChart3 },
   { href: "/data-catalog", label: "Data Catalog", icon: Library },
   { href: "/data-requests", label: "My Requests", icon: ClipboardList },
   { href: "/notifications", label: "Notifications", icon: Bell },
