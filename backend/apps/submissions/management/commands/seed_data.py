@@ -8,22 +8,14 @@ from apps.submissions.models import ReportingPeriod, ExpectedSubmission, Submiss
 from apps.forms_engine.models import FormTemplate, FormSection, FormField
 from apps.users.models import User, Organization
 import random
+import hashlib
 
 
 class Command(BaseCommand):
     help = 'Seed the database with realistic test data'
 
     def handle(self, *args, **options):
-        # If periods already exist, still backfill support data introduced later.
-        if ReportingPeriod.objects.exists():
-            if not FormTemplate.objects.exists():
-                self.seed_form_templates()
-            self.seed_email_templates()
-            call_command("flag_missing_data")
-            self.stdout.write(self.style.SUCCESS("✓ Database already seeded; support data refreshed."))
-            return
-
-        self.stdout.write("🌱 Seeding database with test data...")
+        self.stdout.write("Seeding database with test data...")
         self.seed_email_templates()
 
         # Get or create an admin user to satisfy created_by FK
@@ -40,7 +32,7 @@ class Command(BaseCommand):
         if _:
             admin.set_password('testpass123')
             admin.save()
-            self.stdout.write("  ✓ Created NCA Admin user")
+            self.stdout.write("  Created NCA Admin user")
 
         # Create NCA Officer
         officer, _ = User.objects.get_or_create(
@@ -54,7 +46,7 @@ class Command(BaseCommand):
         if _:
             officer.set_password('testpass123')
             officer.save()
-            self.stdout.write("  ✓ Created NCA Officer user")
+            self.stdout.write("  Created NCA Officer user")
 
         # Create providers
         provider_data = [
@@ -73,6 +65,7 @@ class Command(BaseCommand):
                 licence_number=lic_num,
                 defaults={
                     'registered_name': reg_name,
+                    'sector': 'BROADCASTING' if category == 'PAY_TV' else 'TELECOM',
                     'category': category,
                     'status': 'ACTIVE',
                     'primary_email': email,
@@ -80,8 +73,12 @@ class Command(BaseCommand):
                 }
             )
             providers.append(p)
+            expected_sector = 'BROADCASTING' if category == 'PAY_TV' else 'TELECOM'
+            if p.sector != expected_sector:
+                p.sector = expected_sector
+                p.save(update_fields=['sector'])
             if created:
-                self.stdout.write(f"  ✓ Created provider: {reg_name}")
+                self.stdout.write(f"  Created provider: {reg_name}")
 
         # Create provider users for Vodafone
         vodafone = providers[0]
@@ -108,7 +105,7 @@ class Command(BaseCommand):
         if _:
             data_entry.set_password('testpass123')
             data_entry.save()
-            self.stdout.write("  ✓ Created Provider Data Entry user")
+            self.stdout.write("  Created Provider Data Entry user")
 
         approver, _ = User.objects.get_or_create(
             email='admin@vodafone.com.gh',
@@ -122,7 +119,7 @@ class Command(BaseCommand):
         if _:
             approver.set_password('testpass123')
             approver.save()
-            self.stdout.write("  ✓ Created Provider Approver user")
+            self.stdout.write("  Created Provider Approver user")
 
         # Ensure there are active form templates. Migrations create the schema
         # only, so a fresh container needs seed templates before submissions.
@@ -138,11 +135,11 @@ class Command(BaseCommand):
             existing_forms = list(FormTemplate.objects.all())
 
         if not existing_forms:
-            self.stdout.write("  ⚠ No form templates found. Skipping submissions seeding.")
-            self.stdout.write(self.style.SUCCESS("✅ Partial seeding complete (users + providers only)!"))
+            self.stdout.write("  No form templates found. Skipping submissions seeding.")
+            self.stdout.write(self.style.SUCCESS("Partial seeding complete (users + providers only)."))
             return
 
-        self.stdout.write(f"  ✓ Found {len(existing_forms)} form template(s)")
+        self.stdout.write(f"  Found {len(existing_forms)} form template(s)")
 
         # Create reporting periods (using actual model fields)
         now = timezone.now()
@@ -164,6 +161,9 @@ class Command(BaseCommand):
             ('Q1 2025', 2025, 'ANNUAL', date(2025, 1, 1),
              timezone.make_aware(timezone.datetime(2025, 1, 1)),
              timezone.make_aware(timezone.datetime(2025, 3, 31)), 'ACTIVE'),
+            ('July 2026', 2026, 'MONTHLY', date(2026, 7, 1),
+             timezone.make_aware(timezone.datetime(2026, 7, 1)),
+             timezone.make_aware(timezone.datetime(2026, 7, 31, 23, 59, 59)), 'ACTIVE'),
         ]
 
         for p_name, p_year, p_freq, p_eff, p_opens, p_due, p_status in period_configs:
@@ -172,21 +172,21 @@ class Command(BaseCommand):
                 defaults={
                     'year': p_year,
                     'frequency': p_freq,
+                    'month': p_eff.month if p_freq == 'MONTHLY' else None,
                     'opens_at': p_opens,
                     'due_at': p_due,
                     'status': p_status,
                     'created_by': admin,
                 }
             )
+            p.assigned_providers.set(providers)
+            p.applicable_form_templates.set(existing_forms)
             if created:
-                # Link all providers and a form template
-                p.assigned_providers.set(providers)
-                p.applicable_form_templates.set(existing_forms[:2])
                 periods.append(p)
-                self.stdout.write(f"  ✓ Created period: {p_name}")
+                self.stdout.write(f"  Created period: {p_name}")
 
         if not periods:
-            self.stdout.write("  ⚠ No periods created (may already exist)")
+            self.stdout.write("  No periods created (they may already exist)")
 
         # Create users and organizations for multiple providers
         self.create_provider_users(providers[1], 'MTN Ghana Limited', 'mtn')
@@ -202,9 +202,15 @@ class Command(BaseCommand):
                         'UNDER_REVIEW', 'CORRECTION_REQUESTED', 'APPROVED', 'REJECTED']
 
         # Create submissions for each provider across periods with varied states
-        for provider_idx, provider in enumerate(providers[:5]):  # Create for first 5 providers
+        for provider_idx, provider in enumerate(providers):
             for period_idx, period in enumerate(active_periods):
-                for form_idx, form in enumerate(existing_forms[:2]):
+                for form_idx, form in enumerate(existing_forms):
+                    if (
+                        form.provider_category != provider.category
+                        or form.sector != provider.sector
+                        or form.frequency != period.frequency
+                    ):
+                        continue
                     # Vary status based on provider and period
                     status_idx = (provider_idx + period_idx + form_idx) % len(all_statuses)
                     status = all_statuses[status_idx]
@@ -239,9 +245,10 @@ class Command(BaseCommand):
                                     value_status=random.choice(['PROVIDED', 'NOT_APPLICABLE', 'NOT_AVAILABLE']) if field.field_code != 'reporting_contact' else 'PROVIDED',
                                 )
 
-        self.stdout.write(f"  ✓ Created {created_count} expected submissions with varied data")
+        self.stdout.write(f"  Created {created_count} expected submissions with varied data")
         call_command("flag_missing_data")
-        self.stdout.write(self.style.SUCCESS("✅ Data seeding complete with realistic test data!"))
+        call_command("seed_data_requests")
+        self.stdout.write(self.style.SUCCESS("Data seeding complete with realistic test data."))
 
     def create_provider_users(self, provider, org_name, email_prefix):
         org, _ = Organization.objects.get_or_create(name=org_name, defaults={'org_type': 'PROVIDER'})
@@ -325,19 +332,38 @@ class Command(BaseCommand):
         for form_code, name, category, frequency in template_data:
             template, created = FormTemplate.objects.get_or_create(
                 form_code=form_code,
+                version='1.0',
                 defaults={
                     'name': name,
+                    'sector': 'BROADCASTING' if form_code == 'DC-TB02' else 'TELECOM',
                     'provider_category': category,
                     'frequency': frequency,
                     'version': '1.0',
                     'effective_from': date(2024, 1, 1),
                     'status': 'ACTIVE',
                     'instructions': 'Seeded demo form template for Hugging Face testing.',
+                    'mapping_complete': True,
+                    'approval_status': 'APPROVED',
+                    'source_reference': 'LEGACY-DEMO-NOT-FOR-PRODUCTION',
+                    'source_sha256': hashlib.sha256(f'{form_code}:1.0:demo'.encode()).hexdigest(),
                 }
             )
-            if not created and template.status != 'ACTIVE':
+            desired_sector = 'BROADCASTING' if form_code == 'DC-TB02' else 'TELECOM'
+            update_fields = []
+            if template.status != 'ACTIVE':
                 template.status = 'ACTIVE'
-                template.save(update_fields=['status'])
+                update_fields.append('status')
+            if template.sector != desired_sector:
+                template.sector = desired_sector
+                update_fields.append('sector')
+            if not template.mapping_complete:
+                template.mapping_complete = True
+                template.approval_status = 'APPROVED'
+                template.source_reference = 'LEGACY-DEMO-NOT-FOR-PRODUCTION'
+                template.source_sha256 = hashlib.sha256(f'{form_code}:1.0:demo'.encode()).hexdigest()
+                update_fields.extend(['mapping_complete','approval_status','source_reference','source_sha256'])
+            if update_fields:
+                template.save(update_fields=update_fields)
 
             section, _ = FormSection.objects.get_or_create(
                 form_template=template,
@@ -373,7 +399,7 @@ class Command(BaseCommand):
                 )
 
             if created:
-                self.stdout.write(f"  ✓ Created form template: {form_code}")
+                self.stdout.write(f"  Created form template: {form_code}")
 
     def seed_email_templates(self):
         templates = [
@@ -419,14 +445,16 @@ class Command(BaseCommand):
         for template_type, subject, body, placeholders in templates:
             _, created = EmailTemplate.objects.update_or_create(
                 template_type=template_type,
+                version=1,
                 defaults={
                     'subject': subject,
                     'body': body,
-                    'placeholders': placeholders,
+                    'placeholders': [value.strip("{}") for value in placeholders],
+                    'status': 'APPROVED',
                 },
             )
             if created:
                 created_count += 1
 
         if created_count:
-            self.stdout.write(f"  ✓ Created {created_count} email templates")
+            self.stdout.write(f"  Created {created_count} email templates")

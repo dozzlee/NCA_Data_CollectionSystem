@@ -1,0 +1,10 @@
+"use client";
+
+import Link from "next/link";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bell } from "lucide-react";
+import { api } from "@/lib/api";
+
+interface Notice{id:number;request:string;request_title:string;title:string;message:string;created_at:string;read_at:string|null}
+interface Notices{unread_count:number;results:Notice[]}
+export default function NotificationsPage(){const qc=useQueryClient();const {data,isLoading}=useQuery<Notices>({queryKey:["data-request-notifications"],queryFn:()=>api("/data-request-notifications/")});async function markAll(){await api.post("/data-request-notifications/mark-all-read/");await qc.invalidateQueries({queryKey:["data-request-notifications"]})}return <div className="mx-auto max-w-4xl space-y-6"><div className="flex items-start justify-between"><div><p className="text-sm font-semibold text-[#0066cc]">NOTIFICATIONS</p><h1 className="mt-1 text-3xl font-semibold">Request updates</h1><p className="mt-1 text-sm text-[#737780]">Approval and delivery updates from RIPS.</p></div>{!!data?.unread_count&&<button onClick={markAll} className="text-sm font-semibold text-[#0066cc]">Mark all read</button>}</div>{isLoading&&<div className="rounded-2xl bg-white p-8 text-sm text-[#737780]">Loading updates…</div>}{data?.results.length===0&&<div className="rounded-2xl bg-white p-12 text-center"><Bell className="mx-auto text-[#737780]"/><p className="mt-3 font-semibold">No updates yet</p></div>}<div className="space-y-3">{data?.results.map(n=><Link href={`/data-requests?id=${n.request}`} key={n.id} className={`block rounded-2xl border p-5 ${n.read_at?"bg-white":"border-[#0066cc] bg-[#f4f8fd]"}`}><div className="flex justify-between gap-4"><div><p className="font-semibold">{n.title}</p><p className="mt-1 text-sm text-[#43474f]">{n.message}</p><p className="mt-2 text-xs text-[#737780]">{n.request_title}</p></div><p className="shrink-0 text-xs text-[#737780]">{new Date(n.created_at).toLocaleDateString()}</p></div></Link>)}</div></div>}

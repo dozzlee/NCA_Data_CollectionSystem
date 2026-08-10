@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from apps.audit.models import AuditEvent
+from apps.audit.services import record_audit
 from apps.users.permissions import IsSystemAdmin
 from .models import User, Organization
 from .serializers import LoginSerializer, UserSerializer
@@ -22,7 +22,12 @@ class LoginView(APIView):
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            response_status = (
+                status.HTTP_401_UNAUTHORIZED
+                if "non_field_errors" in serializer.errors
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response(serializer.errors, status=response_status)
 
         user = serializer.validated_data["user"]
         user.failed_login_attempts = 0
@@ -30,12 +35,7 @@ class LoginView(APIView):
         user.save(update_fields=["failed_login_attempts", "last_login_at"])
 
         refresh = RefreshToken.for_user(user)
-        AuditEvent.objects.create(
-            user=user, user_email=user.email, role=user.role,
-            organization=user.organization.name if user.organization else "",
-            action="USER_LOGIN", entity_type="User", entity_id=str(user.id),
-            ip_address=get_client_ip(request),
-        )
+        record_audit(user=user, action="USER_LOGIN", entity_type="User", entity_id=user.id, ip_address=get_client_ip(request))
         return Response({
             "access": str(refresh.access_token),
             "refresh": str(refresh),
@@ -64,43 +64,21 @@ class MeView(APIView):
 
 class UserListView(generics.ListCreateAPIView):
     """
-    GET  — System Admin sees all users; others see only themselves.
+    GET  — System Admin only.
     POST — System Admin only. Creates a new user (any role).
     """
+    permission_classes = [IsSystemAdmin]
     serializer_class = UserSerializer
+    queryset = User.objects.select_related("organization").all()
     filterset_fields = ["role", "is_active"]
     search_fields = ["email", "name"]
     ordering_fields = ["name", "email", "role", "created_at"]
     ordering = ["name"]
 
-    def get_permissions(self):
-        if self.request.method == "POST":
-            return [IsSystemAdmin()]
-        return [IsAuthenticated()]
-
-    def get_queryset(self):
-        user = self.request.user
-        if user.role == "NCA_ADMIN":
-            return User.objects.select_related("organization").all()
-        # Non-admins cannot list all users
-        return User.objects.filter(id=user.id)
-
     def perform_create(self, serializer):
-        password = self.request.data.get("password")
         user = serializer.save()
-        if password:
-            user.set_password(password)
-            user.save(update_fields=["password"])
-        AuditEvent.objects.create(
-            user=self.request.user,
-            user_email=self.request.user.email,
-            role=self.request.user.role,
-            organization=self.request.user.organization.name if self.request.user.organization else "",
-            action="USER_CREATED",
-            entity_type="User",
-            entity_id=str(user.id),
-            after_value={"email": user.email, "role": user.role},
-        )
+        record_audit(user=self.request.user, action="USER_CREATED", entity_type="User", entity_id=user.id,
+            after={"email": user.email, "role": user.role})
 
 
 class UserDetailView(generics.RetrieveUpdateAPIView):
@@ -111,21 +89,9 @@ class UserDetailView(generics.RetrieveUpdateAPIView):
     http_method_names = ["get", "patch", "head", "options"]
 
     def perform_update(self, serializer):
-        password = self.request.data.get("password")
         user = serializer.save()
-        if password:
-            user.set_password(password)
-            user.save(update_fields=["password"])
-        AuditEvent.objects.create(
-            user=self.request.user,
-            user_email=self.request.user.email,
-            role=self.request.user.role,
-            organization=self.request.user.organization.name if self.request.user.organization else "",
-            action="USER_UPDATED",
-            entity_type="User",
-            entity_id=str(user.id),
-            after_value={"email": user.email, "role": user.role, "is_active": user.is_active},
-        )
+        record_audit(user=self.request.user, action="USER_UPDATED", entity_type="User", entity_id=user.id,
+            after={"email": user.email, "role": user.role, "is_active": user.is_active})
 
 
 class DeactivateUserView(APIView):
@@ -141,10 +107,6 @@ class DeactivateUserView(APIView):
             return Response({"detail": "You cannot deactivate your own account."}, status=400)
         user.is_active = not user.is_active
         user.save(update_fields=["is_active"])
-        AuditEvent.objects.create(
-            user=request.user, user_email=request.user.email, role=request.user.role,
-            organization=request.user.organization.name if request.user.organization else "",
-            action="USER_DEACTIVATED" if not user.is_active else "USER_REACTIVATED",
-            entity_type="User", entity_id=str(user.id),
-        )
+        record_audit(user=request.user, action="USER_DEACTIVATED" if not user.is_active else "USER_REACTIVATED",
+            entity_type="User", entity_id=user.id)
         return Response({"id": str(user.id), "is_active": user.is_active, "email": user.email})

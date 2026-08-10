@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -21,7 +21,7 @@ import {
   useSubmitForApproval,
   useFormTemplate,
 } from "@/hooks/useFormEntry";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Save, Send, ChevronRight, ChevronLeft, AlertTriangle } from "lucide-react";
 import type { ExpectedSubmission, FormSection, FieldStatus } from "@/lib/types";
 
@@ -75,21 +75,40 @@ function SectionContent({
   const [fieldValues, setFieldValues] = useSectionFieldState(section.fields, serverValues.data ?? []);
   const [gridValues, setGridValues] = useState<Record<number, GridCellValue[]>>({});
   const [excelUploads, setExcelUploads] = useState<any[]>([]);
+  const [kmzUploads, setKmzUploads] = useState<any[]>([]);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     const fetchExcelUploads = async () => {
       try {
-        const res = await fetch(`/api/v1/submissions/${submissionId}/excel-backups/`);
-        if (res.ok) {
-          const data = await res.json();
-          setExcelUploads(data);
-        }
+        setExcelUploads(await api.get<any[]>(`/submissions/${submissionId}/excel-backups/`));
       } catch (err) {
         console.error("Failed to fetch Excel uploads:", err);
       }
     };
     if (submissionId) fetchExcelUploads();
   }, [submissionId]);
+
+  useEffect(() => {
+    const grouped: Record<number, GridCellValue[]> = {};
+    for (const value of serverValues.data ?? []) {
+      if (!value.grid || !value.grid_column) continue;
+      (grouped[value.grid] ??= []).push({
+        grid_row_id: value.grid_row_id ?? "",
+        grid_column_id: value.grid_column,
+        value: value.value,
+        value_status: value.value_status as FieldStatus,
+      });
+    }
+    setGridValues(grouped);
+  }, [serverValues.data]);
+
+  useEffect(() => {
+    if (!kmzRequired) return;
+    api.get<any[]>(`/submissions/${submissionId}/kmz-uploads/`)
+      .then(setKmzUploads)
+      .catch((err) => console.error("Failed to fetch KMZ uploads:", err));
+  }, [kmzRequired, submissionId]);
 
   function handleFieldChange(fieldId: number, value: string, status: FieldStatus | "", explanation: string) {
     setFieldValues((prev) => ({ ...prev, [fieldId]: { value, status, explanation } }));
@@ -124,20 +143,16 @@ function SectionContent({
     const form = new FormData();
     form.append("file", file);
     form.append("requirement_id", String(requirementId));
-    await fetch(`/api/v1/submissions/${submissionId}/kmz-uploads/`, {
-      method: "POST",
-      body: form,
-    });
+    await api.upload(`/submissions/${submissionId}/kmz-uploads/`, form);
+    setKmzUploads(await api.get<any[]>(`/submissions/${submissionId}/kmz-uploads/`));
+    queryClient.invalidateQueries({ queryKey: ["submission-completion", submissionId] });
   }
 
   async function handleExcelUpload(file: File) {
     const form = new FormData();
     form.append("file", file);
-    const res = await fetch(`/api/v1/submissions/${submissionId}/excel-backups/upload/`, {
-      method: "POST",
-      body: form,
-    });
-    if (!res.ok) throw new Error("Upload failed");
+    await api.upload(`/submissions/${submissionId}/excel-backups/upload/`, form);
+    setExcelUploads(await api.get<any[]>(`/submissions/${submissionId}/excel-backups/`));
   }
 
   if (serverValues.isLoading) {
@@ -184,18 +199,19 @@ function SectionContent({
       </div>
 
       {/* KMZ upload panel — only for fibre forms AND sections that require it */}
-      {kmzRequired && section.kmz_upload_required && (
+      {kmzRequired && section.kmz_upload_required && section.kmz_requirements.map((requirement) => (
         <KMZUploadPanel
+          key={requirement.id}
           submissionId={submissionId}
-          requirementId={1}
-          category="Route / Topology"
-          description="Upload a KMZ file showing your fibre route or network topology for this section."
-          isRequired
-          uploads={[]}
+          requirementId={requirement.id}
+          category={requirement.category.split("_").join(" ")}
+          description={requirement.description}
+          isRequired={requirement.is_required}
+          uploads={kmzUploads.filter((upload) => upload.requirement_id === requirement.id)}
           onUpload={handleKMZUpload}
           disabled={!isEditable}
         />
-      )}
+      ))}
 
       {/* Scalar fields */}
       {section.fields.length > 0 && (
@@ -251,7 +267,7 @@ function SectionContent({
       {dirty && isEditable && (
         <div className="flex items-center gap-2 rounded-[8px] border border-[#ffd100] bg-[#fff3bf]/60 px-3 py-2 text-[12px] text-[#7a5c00]">
           <AlertTriangle size={12} />
-          You have unsaved changes. Click "Save progress" to avoid losing data.
+          You have unsaved changes. Click &quot;Save progress&quot; to avoid losing data.
         </div>
       )}
     </div>
@@ -295,8 +311,9 @@ export default function FormEntryPage() {
 
   const startMutation = useStartSubmission();
   const submitMutation = useSubmitForApproval(submission?.id ?? 0);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const sections = form?.sections ?? [];
+  const sections = useMemo(() => form?.sections ?? [], [form?.sections]);
   const [activeSection, setActiveSection] = useState<string>("");
 
   useEffect(() => {
@@ -309,7 +326,10 @@ export default function FormEntryPage() {
   const currentSection = sections[currentSectionIndex];
   const periodForms = periodFormsQ.data?.results ?? [];
 
-  const isEditable = expected?.workflow_status === "DRAFT" || expected?.workflow_status === "CORRECTION_REQUESTED";
+  const isEditable = Boolean(
+    isDataEntry
+    && (expected?.workflow_status === "DRAFT" || expected?.workflow_status === "CORRECTION_REQUESTED")
+  );
 
   async function handleStart() {
     if (!expectedId) return;
@@ -318,8 +338,14 @@ export default function FormEntryPage() {
   }
 
   async function handleSubmitForApproval() {
-    await submitMutation.mutateAsync();
-    expectedQ.refetch();
+    setSubmitError(null);
+    try {
+      await submitMutation.mutateAsync();
+      expectedQ.refetch();
+    } catch (error) {
+      setSubmitError(error instanceof ApiError ? error.message : "Submission failed. Please try again.");
+      completionQ.refetch();
+    }
   }
 
   if (expectedQ.isLoading || formQ.isLoading) {
@@ -357,13 +383,19 @@ export default function FormEntryPage() {
           <p className="text-[13px] text-[#43474f]">
             This form has {sections.length} sections. You can save your progress at any time and return later.
           </p>
-          <button
-            onClick={handleStart}
-            disabled={startMutation.isPending}
-            className="w-full rounded-[8px] bg-[#002d5b] px-4 py-2.5 text-[14px] font-semibold text-white hover:bg-[#001836] disabled:opacity-60 transition-colors"
-          >
-            {startMutation.isPending ? "Starting…" : "Start form"}
-          </button>
+          {isDataEntry ? (
+            <button
+              onClick={handleStart}
+              disabled={startMutation.isPending}
+              className="w-full rounded-[8px] bg-[#002d5b] px-4 py-2.5 text-[14px] font-semibold text-white hover:bg-[#001836] disabled:opacity-60 transition-colors"
+            >
+              {startMutation.isPending ? "Starting…" : "Start form"}
+            </button>
+          ) : (
+            <p className="rounded-[8px] bg-[#f2f4f6] px-4 py-3 text-[12px] text-[#43474f]">
+              This form must be started by a Provider Data Entry user before it can be reviewed.
+            </p>
+          )}
         </div>
         </div>
       </div>
@@ -393,10 +425,10 @@ export default function FormEntryPage() {
 
         <div className="flex gap-2 shrink-0">
           {/* DATA ENTRY: can submit draft to approver */}
-          {isDataEntry && expected.workflow_status === "DRAFT" && (
+          {isDataEntry && ["DRAFT", "CORRECTION_REQUESTED"].includes(expected.workflow_status) && (
             <button
               onClick={handleSubmitForApproval}
-              disabled={submitMutation.isPending || (completion?.completion_pct ?? 0) < 1}
+              disabled={submitMutation.isPending || !completion?.can_submit}
               className="flex items-center gap-2 rounded-[8px] bg-[#1f7a4d] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#185e3b] disabled:opacity-50 transition-colors"
               title="Complete all required fields before submitting to your approver"
             >
@@ -429,6 +461,21 @@ export default function FormEntryPage() {
           )}
         </div>
       </div>
+
+      {submitError && (
+        <div className="rounded-[8px] border border-[#E31937]/30 bg-[#ffe8e8] px-4 py-3 text-[12px] text-[#9b1c1c]">
+          {submitError}
+        </div>
+      )}
+
+      {isDataEntry && ["DRAFT", "CORRECTION_REQUESTED"].includes(expected.workflow_status) && completion && !completion.can_submit && (
+        <div className="rounded-[8px] border border-[#ffd100] bg-[#fff3bf]/50 px-4 py-3 text-[12px] text-[#7a5c00]">
+          Complete {completion.missing_required_count} required item{completion.missing_required_count === 1 ? "" : "s"} before submitting.
+          {completion.blocking_issues.slice(0, 3).map((issue) => (
+            <span key={`${issue.type}-${issue.id}`} className="ml-2">• {issue.label}</span>
+          ))}
+        </div>
+      )}
 
       {periodForms.length > 1 && (
         <div className="rounded-[12px] border border-[#e6e8ea] bg-white px-4 py-3"

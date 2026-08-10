@@ -1,55 +1,108 @@
 from django.conf import settings
 from django.core.mail import send_mail
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import FeedbackItem, SystemIssueTicket
+from apps.audit.services import record_audit
+from apps.users.models import User
+from apps.users.permissions import IsSystemAdmin
+from .models import FeedbackItem, SystemIssueEvent, SystemIssueTicket
+
+
+def ticket_data(ticket):
+    return {
+        "id": ticket.id, "title": ticket.title, "description": ticket.description,
+        "severity": ticket.severity, "status": ticket.status, "page_url": ticket.page_url,
+        "reported_by": ticket.reported_by_id, "reporter_name": ticket.reported_by.name if ticket.reported_by else "",
+        "reported_at": ticket.reported_at, "assigned_to": ticket.assigned_to_id,
+        "assigned_to_name": ticket.assigned_to.name if ticket.assigned_to else "",
+        "assigned_team": ticket.assigned_team, "acknowledged_at": ticket.acknowledged_at,
+        "sla_due_at": ticket.sla_due_at, "resolved_at": ticket.resolved_at,
+        "resolution_note": ticket.resolution_note, "updated_at": ticket.updated_at,
+        "history": [{"id": event.id, "event_type": event.event_type, "from_status": event.from_status,
+            "to_status": event.to_status, "note": event.note, "actor": event.actor.name if event.actor else "System",
+            "created_at": event.created_at} for event in ticket.events.all()],
+    }
 
 
 class FeedbackView(APIView):
     permission_classes = [IsAuthenticated]
-
     def post(self, request):
         data = request.data
-        item = FeedbackItem.objects.create(
-            submitted_by=request.user,
-            category=data.get("category", "GENERAL"),
-            subject=data.get("subject", ""),
-            message=data.get("message", ""),
-            page_url=data.get("page_url", ""),
-        )
+        item = FeedbackItem.objects.create(submitted_by=request.user, category=data.get("category", "GENERAL"),
+            subject=data.get("subject", ""), message=data.get("message", ""), page_url=data.get("page_url", ""))
         support_email = getattr(settings, "FEEDBACK_EMAIL", None) or getattr(settings, "SUPPORT_EMAIL", None)
         if support_email:
-            send_mail(
-                subject=f"[NCA Feedback] {item.subject}",
-                message=f"From: {request.user.email} ({request.user.role})\nCategory: {item.category}\n\n{item.message}",
-                from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@nca.org.gh"),
-                recipient_list=[support_email],
-                fail_silently=True,
-            )
+            send_mail(subject=f"[NCA Feedback] {item.subject}", message=f"From: {request.user.email} ({request.user.role})\nCategory: {item.category}\n\n{item.message}",
+                from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@nca.org.gh"), recipient_list=[support_email], fail_silently=True)
+        record_audit(user=request.user, action="FEEDBACK_SUBMITTED", entity_type="FeedbackItem", entity_id=item.id)
         return Response({"id": item.id, "detail": "Feedback submitted. Thank you."}, status=201)
 
 
 class SystemIssueView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def get(self, request):
+        qs = SystemIssueTicket.objects.select_related("reported_by", "assigned_to").prefetch_related("events")
+        if request.user.role != "NCA_ADMIN": qs = qs.filter(reported_by=request.user)
+        else:
+            for key in ("status", "severity", "assigned_team", "assigned_to"):
+                if request.query_params.get(key): qs = qs.filter(**{key: request.query_params[key]})
+        return Response([ticket_data(ticket) for ticket in qs])
+
     def post(self, request):
         data = request.data
-        ticket = SystemIssueTicket.objects.create(
-            reported_by=request.user,
-            title=data.get("title", ""),
-            description=data.get("description", ""),
-            severity=data.get("severity", "MEDIUM"),
-            page_url=data.get("page_url", ""),
-        )
-        support_email = getattr(settings, "SUPPORT_EMAIL", None)
-        if support_email:
-            send_mail(
-                subject=f"[NCA Issue/{ticket.severity}] {ticket.title}",
-                message=f"Reported by: {request.user.email}\nSeverity: {ticket.severity}\nPage: {ticket.page_url}\n\n{ticket.description}",
-                from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@nca.org.gh"),
-                recipient_list=[support_email],
-                fail_silently=True,
-            )
-        return Response({"id": ticket.id, "detail": "Issue reported. The team has been notified."}, status=201)
+        if not data.get("title", "").strip() or not data.get("description", "").strip():
+            return Response({"detail": "title and description are required."}, status=400)
+        ticket = SystemIssueTicket.objects.create(reported_by=request.user, title=data["title"].strip(),
+            description=data["description"].strip(), severity=data.get("severity", "MEDIUM"), page_url=data.get("page_url", ""))
+        SystemIssueEvent.objects.create(ticket=ticket, event_type="CREATED", to_status="OPEN", note="Issue reported.", actor=request.user)
+        record_audit(user=request.user, action="SUPPORT_TICKET_CREATED", entity_type="SystemIssueTicket", entity_id=ticket.id)
+        return Response(ticket_data(ticket), status=201)
+
+
+class SystemIssueDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+    def get(self, request, pk):
+        qs = SystemIssueTicket.objects.select_related("reported_by", "assigned_to").prefetch_related("events")
+        if request.user.role != "NCA_ADMIN": qs = qs.filter(reported_by=request.user)
+        return Response(ticket_data(get_object_or_404(qs, pk=pk)))
+
+
+class SystemIssueActionView(APIView):
+    permission_classes = [IsSystemAdmin]
+    def post(self, request, pk):
+        ticket = get_object_or_404(SystemIssueTicket.objects.select_related("reported_by", "assigned_to"), pk=pk)
+        action = request.data.get("action")
+        before = ticket.status
+        note = request.data.get("note", "").strip()
+        if action == "ASSIGN":
+            assignee = get_object_or_404(User, pk=request.data.get("assigned_to"), role__in=["NCA_ADMIN", "NCA_OFFICER"])
+            ticket.assigned_to = assignee; ticket.assigned_team = request.data.get("assigned_team", "")
+            event_type = "ASSIGNED"
+        elif action == "ACKNOWLEDGE":
+            ticket.acknowledged_at = timezone.now(); ticket.status = "IN_PROGRESS"; event_type = "ACKNOWLEDGED"
+        elif action == "SET_SLA":
+            due = parse_datetime(request.data.get("sla_due_at", ""))
+            if not due or due <= timezone.now(): return Response({"detail": "A future sla_due_at is required."}, status=400)
+            ticket.sla_due_at = due; event_type = "SLA_SET"
+        elif action == "UPDATE":
+            if not note: return Response({"detail": "An update note is required."}, status=400)
+            event_type = "REQUESTER_UPDATE"
+        elif action == "RESOLVE":
+            if not note: return Response({"detail": "A resolution note is required."}, status=400)
+            ticket.status = "RESOLVED"; ticket.resolved_at = timezone.now(); ticket.resolution_note = note; event_type = "RESOLVED"
+        elif action == "CLOSE":
+            if ticket.status != "RESOLVED": return Response({"detail": "Resolve the ticket before closing it."}, status=409)
+            ticket.status = "CLOSED"; event_type = "CLOSED"
+        else:
+            return Response({"detail": "Unsupported action."}, status=400)
+        ticket.save()
+        SystemIssueEvent.objects.create(ticket=ticket, event_type=event_type, from_status=before, to_status=ticket.status, note=note, actor=request.user)
+        record_audit(user=request.user, action=f"SUPPORT_TICKET_{event_type}", entity_type="SystemIssueTicket", entity_id=ticket.id,
+            before={"status": before}, after={"status": ticket.status, "note": note})
+        return Response(ticket_data(SystemIssueTicket.objects.prefetch_related("events").get(pk=ticket.pk)))

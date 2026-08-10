@@ -152,7 +152,7 @@ function AddGridForm({ templateId, sectionId, onDone }: { templateId: string; se
   );
 }
 
-function SectionBlock({ section, templateId }: { section: FormSection & { grids?: unknown[] }; templateId: string }) {
+function SectionBlock({ section, templateId, editable }: { section: FormSection & { grids?: unknown[] }; templateId: string; editable: boolean }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -190,10 +190,10 @@ function SectionBlock({ section, templateId }: { section: FormSection & { grids?
           {section.fields.length} field{section.fields.length !== 1 ? "s" : ""}
           {(section as { grids?: unknown[] }).grids?.length ? ` · ${(section as { grids?: unknown[] }).grids!.length} grid${(section as { grids?: unknown[] }).grids!.length !== 1 ? "s" : ""}` : ""}
         </span>
-        <button onClick={e => { e.stopPropagation(); if (confirm(`Delete section "${section.title}"?`)) deleteSectionMut.mutate(); }}
+        {editable && <button onClick={e => { e.stopPropagation(); if (confirm(`Delete section "${section.title}"?`)) deleteSectionMut.mutate(); }}
           className="ml-2 text-[#737780] hover:text-[#e31937] transition-colors">
           <Trash2 size={14} />
-        </button>
+        </button>}
       </div>
 
       {open && (
@@ -237,7 +237,7 @@ function SectionBlock({ section, templateId }: { section: FormSection & { grids?
           ))}
 
           {/* Add field / grid buttons */}
-          {!addingField && !addingGrid && (
+          {editable && !addingField && !addingGrid && (
             <div className="flex gap-2 pt-1">
               <button onClick={() => setAddingField(true)}
                 className="flex items-center gap-1.5 rounded-[8px] border border-[#c3c6d0] px-3 py-1.5 text-[12px] font-medium text-[#43474f] hover:bg-[#f2f4f6] transition-colors">
@@ -282,10 +282,29 @@ export default function FormBuilderPage() {
     onError: () => toast("Failed to add section.", "error"),
   });
 
-  const activateMut = useMutation({
-    mutationFn: () => api(`/form-templates/${id}/`, { method:"PATCH", body: JSON.stringify({ status:"ACTIVE" }) }),
-    onSuccess: () => { toast("Template set to Active.", "success"); qc.invalidateQueries({ queryKey: ["form-template", id] }); },
+  const sourceMut = useMutation({
+    mutationFn: (data: {source_reference: string; source_sha256: string}) => api.patch(`/form-templates/${id}/`, { ...data, mapping_complete: true }),
+    onSuccess: () => { toast("Source map recorded.", "success"); qc.invalidateQueries({ queryKey: ["form-template", id] }); },
+    onError: (error: Error) => toast(error.message, "error"),
   });
+  const approveMut = useMutation({
+    mutationFn: () => api.post(`/form-templates/${id}/approve/`, {}),
+    onSuccess: () => { toast("Form version approved and published.", "success"); qc.invalidateQueries({ queryKey: ["form-template", id] }); },
+    onError: (error: Error) => toast(error.message, "error"),
+  });
+  const cloneMut = useMutation({
+    mutationFn: (version: string) => api.post(`/form-templates/${id}/clone/`, { version }),
+    onSuccess: () => toast("Draft version cloned.", "success"),
+    onError: (error: Error) => toast(error.message, "error"),
+  });
+
+  function captureSource() {
+    const source_reference = window.prompt("Approved source reference");
+    if (!source_reference?.trim()) return;
+    const source_sha256 = window.prompt("Source file SHA-256 (64 hexadecimal characters)");
+    if (!source_sha256 || !/^[a-fA-F0-9]{64}$/.test(source_sha256)) { toast("Enter a valid SHA-256 hash.", "error"); return; }
+    sourceMut.mutate({ source_reference: source_reference.trim(), source_sha256: source_sha256.toLowerCase() });
+  }
 
   if (isLoading) return (
     <div className="space-y-4">
@@ -311,20 +330,30 @@ export default function FormBuilderPage() {
           <p className="text-[12px] font-mono font-semibold text-[#0066cc] mb-1">{template.form_code}</p>
           <h1 className="text-[26px] font-semibold text-[#191c1e]">{template.name}</h1>
           <p className="text-[13px] text-[#43474f] mt-0.5">
+            {template.sector} /{" "}
             {template.provider_category} · {template.frequency} · v{template.version}
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
-          {template.status !== "ACTIVE" && (
-            <button onClick={() => activateMut.mutate()}
+          {template.approval_status !== "APPROVED" && <button onClick={captureSource}
+            className="rounded-[8px] border border-[#c3c6d0] px-4 py-2 text-[12px] font-semibold text-[#43474f]">Source Map</button>}
+          {template.approval_status !== "APPROVED" && template.mapping_complete && (
+            <button onClick={() => approveMut.mutate()}
               className="rounded-[8px] bg-[#1f7a4d] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#175f3b]">
-              Set Active
+              Approve & Publish
             </button>
           )}
-          {template.status === "ACTIVE" && (
+          {template.approval_status === "APPROVED" && (
             <span className="rounded-full bg-[#e5f4eb] px-3 py-1.5 text-[12px] font-semibold text-[#1f7a4d]">● Active</span>
           )}
         </div>
+      </div>
+
+      <div className="rounded-[12px] border border-[#eceef0] bg-white p-4 text-[12px] text-[#43474f]">
+        <p><span className="font-semibold">Source:</span> {template.source_reference || "Not recorded"}</p>
+        <p className="mt-1 break-all font-mono text-[10px] text-[#737780]">{template.source_sha256 || "No source hash"}</p>
+        <button onClick={() => { const version=window.prompt("New version number"); if(version?.trim()) cloneMut.mutate(version.trim()); }}
+          className="mt-3 rounded-[8px] border border-[#c3c6d0] px-3 py-1.5 text-[11px] font-semibold">Clone as new immutable version</button>
       </div>
 
       {/* Section count */}
@@ -332,10 +361,10 @@ export default function FormBuilderPage() {
         <p className="text-[14px] text-[#43474f]">
           <span className="font-semibold text-[#191c1e]">{sections.length}</span> section{sections.length !== 1 ? "s" : ""}
         </p>
-        <button onClick={() => setAddingSection(v => !v)}
+        {template.approval_status !== "APPROVED" && <button onClick={() => setAddingSection(v => !v)}
           className="flex items-center gap-1.5 rounded-[8px] bg-[#001836] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#002d5b]">
           <Plus size={14} /> {addingSection ? "Cancel" : "Add Section"}
-        </button>
+        </button>}
       </div>
 
       {/* Add section form */}
@@ -386,7 +415,7 @@ export default function FormBuilderPage() {
             <div key={s.id} className="flex items-start gap-3">
               <span className="mt-3.5 text-[11px] font-bold text-[#737780] w-6 text-right shrink-0">{idx + 1}</span>
               <div className="flex-1">
-                <SectionBlock section={s} templateId={id} />
+                <SectionBlock section={s} templateId={id} editable={template.approval_status !== "APPROVED"} />
               </div>
             </div>
           ))}

@@ -28,10 +28,12 @@ export function ExcelBackupPanel({
 }: ExcelBackupPanelProps) {
   const [uploading, setUploading] = useState(false);
   const [uploadMsg, setUploadMsg] = useState<"uploading" | "success" | "error" | null>(null);
+  const [errorMessage, setErrorMessage] = useState("Upload failed. Please try again.");
   const [dragOver, setDragOver] = useState(false);
 
   async function handleFileSelect(file: File) {
     if (!file.name.match(/\.(xlsx?|xls)$/i)) {
+      setErrorMessage("Only .xlsx or .xls files are accepted.");
       setUploadMsg("error");
       setTimeout(() => setUploadMsg(null), 3000);
       return;
@@ -43,7 +45,8 @@ export function ExcelBackupPanel({
       await onUpload(file);
       setUploadMsg("success");
       setTimeout(() => setUploadMsg(null), 2000);
-    } catch {
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Upload failed. Please try again.");
       setUploadMsg("error");
       setTimeout(() => setUploadMsg(null), 3000);
     } finally {
@@ -106,7 +109,7 @@ export function ExcelBackupPanel({
       {uploadMsg === "error" && (
         <div className="flex items-center gap-2 text-[12px] text-[#c0112a] bg-[#ffe8e8] rounded-[6px] px-3 py-2">
           <AlertCircle size={14} />
-          Upload failed. Please try again.
+          {errorMessage}
         </div>
       )}
 

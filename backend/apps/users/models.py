@@ -38,6 +38,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     ROLE_CHOICES = [
         ("NCA_ADMIN",           "System Administrator"),
         ("NCA_OFFICER",         "NCA Officer"),
+        ("NCA_VIEWER",          "NCA Data Requester"),
         ("PROVIDER_DATA_ENTRY", "Provider Data Entry User"),
         ("PROVIDER_APPROVER",   "Provider Approver"),
     ]
@@ -65,7 +66,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     @property
     def is_nca(self):
-        return self.role in ("NCA_ADMIN", "NCA_OFFICER")
+        return self.role in ("NCA_ADMIN", "NCA_OFFICER", "NCA_VIEWER")
 
     @property
     def is_provider(self):

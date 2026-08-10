@@ -7,4 +7,5 @@ urlpatterns = [
     path("submissions/<int:pk>/kmz-uploads/<int:uid>/review/", views.KMZReviewView.as_view()),
     path("submissions/<int:pk>/excel-backups/", views.ExcelBackupListView.as_view()),
     path("submissions/<int:pk>/excel-backups/upload/", views.ExcelBackupUploadView.as_view()),
+    path("submissions/<int:pk>/excel-backups/<int:bid>/download/", views.ExcelBackupDownloadView.as_view()),
 ]

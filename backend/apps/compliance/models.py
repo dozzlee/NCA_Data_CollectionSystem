@@ -14,24 +14,33 @@ class EmailTemplate(models.Model):
         ("FINAL_NOTICE", "Final Compliance Notice"),
     ]
 
-    template_type = models.CharField(max_length=30, choices=TYPE_CHOICES, unique=True)
+    template_type = models.CharField(max_length=30, choices=TYPE_CHOICES)
+    version = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=20, choices=[("DRAFT", "Draft"), ("APPROVED", "Approved"), ("ARCHIVED", "Archived")], default="DRAFT")
     subject = models.CharField(max_length=500)
     body = models.TextField()
     placeholders = models.JSONField(default=list, help_text="List of placeholder variable names")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    approved_by = models.ForeignKey("users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="email_templates_approved")
+    approved_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return self.get_template_type_display()
 
     class Meta:
         ordering = ["template_type"]
+        constraints = [models.UniqueConstraint(fields=["template_type", "version"], name="unique_email_template_version")]
 
 
 class EmailLog(models.Model):
     STATUS_CHOICES = [
         ("DRAFT", "Draft"),
+        ("QUEUED", "Queued"),
+        ("SENDING", "Sending"),
         ("SENT", "Sent"),
+        ("DELIVERED", "Delivered"),
+        ("BOUNCED", "Bounced"),
         ("FAILED", "Failed"),
     ]
 
@@ -57,12 +66,37 @@ class EmailLog(models.Model):
     sent_at = models.DateTimeField(null=True, blank=True)
     compliance_stage = models.CharField(max_length=100, blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="DRAFT")
+    provider_key = models.CharField(max_length=50, blank=True)
+    provider_message_id = models.CharField(max_length=255, blank=True)
+    idempotency_key = models.CharField(max_length=100, blank=True, unique=True, null=True)
+    queued_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.subject} → {self.provider}"
 
     class Meta:
         ordering = ["-generated_at"]
+
+
+class EmailDeliveryEvent(models.Model):
+    email = models.ForeignKey(EmailLog, on_delete=models.CASCADE, related_name="delivery_events")
+    event_type = models.CharField(max_length=30)
+    provider_event_id = models.CharField(max_length=255, blank=True)
+    details = models.JSONField(default=dict)
+    occurred_at = models.DateTimeField()
+    recorded_at = models.DateTimeField(auto_now_add=True)
+
+
+class TransactionalOutbox(models.Model):
+    topic = models.CharField(max_length=100)
+    aggregate_type = models.CharField(max_length=100)
+    aggregate_id = models.CharField(max_length=100)
+    payload = models.JSONField(default=dict)
+    idempotency_key = models.CharField(max_length=100, unique=True)
+    status = models.CharField(max_length=20, choices=[("PENDING", "Pending"), ("PROCESSED", "Processed"), ("FAILED", "Failed")], default="PENDING")
+    attempts = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
 
 
 class ComplianceFlag(models.Model):

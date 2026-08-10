@@ -27,6 +27,11 @@ class SubmissionKMZUpload(models.Model):
         "users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="kmz_reviews"
     )
     reviewed_at = models.DateTimeField(null=True, blank=True)
+    sha256 = models.CharField(max_length=64, blank=True)
+    scan_status = models.CharField(max_length=20, choices=[("PENDING", "Pending"), ("CLEAN", "Clean"), ("INFECTED", "Infected"), ("ERROR", "Scan error")], default="PENDING")
+    scan_engine = models.CharField(max_length=100, blank=True)
+    scan_details = models.TextField(blank=True)
+    scanned_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"KMZ: {self.file_name} ({self.submission})"
@@ -57,6 +62,11 @@ class SubmissionExcelBackup(models.Model):
     source_control_status = models.CharField(
         max_length=15, choices=SOURCE_CONTROL_STATUS_CHOICES, default="STORED"
     )
+    sha256 = models.CharField(max_length=64, blank=True)
+    scan_status = models.CharField(max_length=20, choices=[("PENDING", "Pending"), ("CLEAN", "Clean"), ("INFECTED", "Infected"), ("ERROR", "Scan error")], default="PENDING")
+    scan_engine = models.CharField(max_length=100, blank=True)
+    scan_details = models.TextField(blank=True)
+    scanned_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         return f"Excel backup: {self.file_name} ({self.submission})"

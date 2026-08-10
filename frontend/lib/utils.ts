@@ -38,6 +38,11 @@ export const PROVIDER_CATEGORY_LABELS: Record<string, string> = {
   SUBMARINE_FIBRE: "Submarine Fibre",
 };
 
+export const SECTOR_LABELS: Record<string, string> = {
+  TELECOM: "Telecom",
+  BROADCASTING: "Broadcasting",
+};
+
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-GB", {
     day: "numeric",

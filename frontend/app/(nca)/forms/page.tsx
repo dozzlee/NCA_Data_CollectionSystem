@@ -6,8 +6,8 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import type { FormTemplate, ProviderCategory, Frequency } from "@/lib/types";
-import { PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
+import type { FormTemplate, ProviderCategory, Frequency, Sector } from "@/lib/types";
+import { PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 
 const CATEGORIES: ProviderCategory[] = ["MNO","ISP","PAY_TV","TOWER_OPERATOR","TOWER_MAIN","DOMESTIC_FIBRE","SUBMARINE_FIBRE"];
 const FREQUENCIES: Frequency[] = ["MONTHLY","SEMI_ANNUAL","ANNUAL"];
@@ -19,11 +19,11 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 interface NewFormState {
-  form_code: string; name: string; provider_category: ProviderCategory;
+  form_code: string; name: string; sector: Sector; provider_category: ProviderCategory;
   frequency: Frequency; version: string;
 }
 const EMPTY: NewFormState = {
-  form_code:"", name:"", provider_category:"MNO", frequency:"MONTHLY", version:"1.0"
+  form_code:"", name:"", sector:"TELECOM", provider_category:"MNO", frequency:"MONTHLY", version:"1.0"
 };
 
 export default function FormsPage() {
@@ -32,10 +32,16 @@ export default function FormsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<NewFormState>(EMPTY);
   const [filterCat, setFilterCat] = useState("");
+  const [filterSector, setFilterSector] = useState("");
 
   const { data, isLoading } = useQuery<{ results: FormTemplate[] }>({
-    queryKey: ["form-templates", filterCat],
-    queryFn: () => api(`/form-templates/${filterCat ? `?provider_category=${filterCat}` : ""}`),
+    queryKey: ["form-templates", filterCat, filterSector],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (filterCat) params.set("provider_category", filterCat);
+      if (filterSector) params.set("sector", filterSector);
+      return api(`/form-templates/${params.size ? `?${params}` : ""}`);
+    },
   });
 
   const createMutation = useMutation({
@@ -85,6 +91,14 @@ export default function FormsPage() {
               </div>
             ))}
             <div>
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Sector</label>
+              <select value={form.sector}
+                onChange={e => setForm(f => ({ ...f, sector: e.target.value as Sector }))}
+                className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none">
+                {Object.entries(SECTOR_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </div>
+            <div>
               <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Provider Type</label>
               <select value={form.provider_category}
                 onChange={e => setForm(f => ({ ...f, provider_category: e.target.value as ProviderCategory }))}
@@ -110,6 +124,11 @@ export default function FormsPage() {
 
       {/* Filter */}
       <div className="flex gap-3">
+        <select value={filterSector} onChange={e => setFilterSector(e.target.value)}
+          className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none">
+          <option value="">All sectors</option>
+          {Object.entries(SECTOR_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
         <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
           className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none">
           <option value="">All provider types</option>
@@ -122,7 +141,7 @@ export default function FormsPage() {
         <table className="w-full text-left">
           <thead className="border-b border-[#eceef0] bg-[#f7f9fb]">
             <tr>
-              {["Code","Name","Provider Type","Frequency","Version","Status","Sections",""].map(h => (
+              {["Code","Name","Sector","Provider Type","Frequency","Version","Status","Sections",""].map(h => (
                 <th key={h} className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-[#43474f]">{h}</th>
               ))}
             </tr>
@@ -130,7 +149,7 @@ export default function FormsPage() {
           <tbody className="divide-y divide-[#eceef0]">
             {isLoading
               ? Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 8 }).map((_, j) => (
+                  <tr key={i}>{Array.from({ length: 9 }).map((_, j) => (
                     <td key={j} className="px-5 py-3.5"><Skeleton className="h-3.5 w-full" /></td>
                   ))}</tr>
                 ))
@@ -138,6 +157,7 @@ export default function FormsPage() {
                 <tr key={t.id} className="hover:bg-[#f7f9fb] transition-colors">
                   <td className="px-5 py-3.5 font-mono text-[12px] font-semibold text-[#0066cc]">{t.form_code}</td>
                   <td className="px-5 py-3.5 text-[13px] font-medium text-[#191c1e]">{t.name}</td>
+                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{SECTOR_LABELS[t.sector]}</td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{PROVIDER_CATEGORY_LABELS[t.provider_category]}</td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{FREQ_LABELS[t.frequency as Frequency]}</td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{t.version}</td>

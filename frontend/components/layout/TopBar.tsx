@@ -5,7 +5,22 @@ import { useQuery } from "@tanstack/react-query";
 import { Bell, AlertTriangle, Clock, CheckCircle2, MessageSquare } from "lucide-react";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import type { ReportingPeriod } from "@/lib/types";
+import type { ReportingPeriod, User } from "@/lib/types";
+
+interface RequestNotification {
+  id: number;
+  request: string;
+  request_title: string;
+  title: string;
+  message: string;
+  created_at: string;
+  read_at: string | null;
+}
+
+interface RequestNotificationResponse {
+  unread_count: number;
+  results: RequestNotification[];
+}
 
 interface DashboardSummary {
   overdue: number;
@@ -26,18 +41,62 @@ interface NotificationItem {
   href: string;
 }
 
-function NotificationPanel({ onClose }: { onClose: () => void }) {
+function NotificationPanel({ onClose, isRequester }: { onClose: () => void; isRequester: boolean }) {
   const { data: summary } = useQuery<DashboardSummary>({
     queryKey: ["dashboard-summary-notif"],
     queryFn: () => api("/dashboard/summary/"),
     staleTime: 30 * 1000,
+    enabled: !isRequester,
   });
 
   const { data: periodsData } = useQuery<{ results: ReportingPeriod[] }>({
     queryKey: ["active-periods-notif"],
     queryFn: () => api("/periods/?status=ACTIVE&ordering=-year"),
     staleTime: 60 * 1000,
+    enabled: !isRequester,
   });
+
+  const { data: requestNotifications } = useQuery<RequestNotificationResponse>({
+    queryKey: ["data-request-notifications"],
+    queryFn: () => api("/data-request-notifications/"),
+    staleTime: 30 * 1000,
+    enabled: isRequester,
+  });
+
+  if (isRequester) {
+    const items = requestNotifications?.results ?? [];
+    return (
+      <div className="absolute right-0 top-full mt-2 z-50 w-[360px] rounded-[16px] border border-[#eceef0] bg-white shadow-[0_16px_42px_rgba(0,45,91,0.14)] overflow-hidden">
+        <div className="border-b border-[#eceef0] px-5 py-3.5 flex items-center justify-between">
+          <span className="text-[14px] font-semibold text-[#191c1e]">Request notifications</span>
+          {(requestNotifications?.unread_count ?? 0) > 0 && (
+            <span className="rounded-full bg-[#0066cc] px-2 py-0.5 text-[11px] font-bold text-white">
+              {requestNotifications?.unread_count} new
+            </span>
+          )}
+        </div>
+        {items.length === 0 ? (
+          <p className="px-5 py-8 text-center text-[12px] text-[#737780]">No request updates yet.</p>
+        ) : (
+          <div className="divide-y divide-[#eceef0] max-h-[360px] overflow-y-auto">
+            {items.slice(0, 8).map(item => (
+              <Link key={item.id} href={`/data-requests?id=${item.request}`} onClick={onClose}
+                className={`block px-5 py-3 hover:bg-[#f7f9fb] ${item.read_at ? "" : "bg-[#f4f8fd]"}`}>
+                <p className="text-[12px] font-semibold text-[#191c1e]">{item.title}</p>
+                <p className="text-[11px] text-[#43474f] mt-0.5 line-clamp-2">{item.message}</p>
+                <p className="text-[10px] text-[#737780] mt-1">{item.request_title}</p>
+              </Link>
+            ))}
+          </div>
+        )}
+        <div className="border-t border-[#eceef0] px-5 py-3">
+          <Link href="/notifications" onClick={onClose} className="text-[12px] font-medium text-[#0066cc] hover:underline">
+            View all notifications →
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   const activePeriods = periodsData?.results ?? [];
 
@@ -170,6 +229,12 @@ function NotificationPanel({ onClose }: { onClose: () => void }) {
 export function TopBar() {
   const [notifOpen, setNotifOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const { data: user } = useQuery<User>({
+    queryKey: ["me"],
+    queryFn: () => api("/auth/me/"),
+    staleTime: 5 * 60 * 1000,
+  });
+  const isRequester = user?.role === "NCA_VIEWER";
 
   // Count urgent items for the badge
   const { data: summary } = useQuery<DashboardSummary>({
@@ -177,15 +242,27 @@ export function TopBar() {
     queryFn: () => api("/dashboard/summary/"),
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000, // refresh every minute
+    enabled: user !== undefined && !isRequester,
   });
 
-  const urgentCount = (summary?.overdue ?? 0) + (summary?.correction_requested ?? 0);
+  const { data: requestNotifications } = useQuery<RequestNotificationResponse>({
+    queryKey: ["data-request-notifications"],
+    queryFn: () => api("/data-request-notifications/"),
+    staleTime: 30 * 1000,
+    refetchInterval: 60 * 1000,
+    enabled: isRequester,
+  });
+
+  const urgentCount = isRequester
+    ? requestNotifications?.unread_count ?? 0
+    : (summary?.overdue ?? 0) + (summary?.correction_requested ?? 0);
 
   // Active period for indicator
   const { data: periodsData } = useQuery<{ results: ReportingPeriod[] }>({
     queryKey: ["active-periods-notif"],
     queryFn: () => api("/periods/?status=ACTIVE&ordering=-year"),
     staleTime: 60 * 1000,
+    enabled: user !== undefined && !isRequester,
   });
   const latestActive = periodsData?.results?.[0];
 
@@ -217,7 +294,7 @@ export function TopBar() {
               </span>
             )}
           </button>
-          {notifOpen && <NotificationPanel onClose={() => setNotifOpen(false)} />}
+          {notifOpen && <NotificationPanel onClose={() => setNotifOpen(false)} isRequester={isRequester} />}
         </div>
 
         {/* Active period indicator */}

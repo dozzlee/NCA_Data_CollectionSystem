@@ -6,7 +6,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import type { ReportingPeriod, Frequency } from "@/lib/types";
+import type { ReportingPeriod, Frequency, User } from "@/lib/types";
 
 const STATUS_COLORS: Record<string, string> = {
   DRAFT: "bg-[#f2f4f6] text-[#43474f]",
@@ -54,6 +54,11 @@ export default function PeriodsPage() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<CreatePeriodForm>(EMPTY_FORM);
+  const { data: me } = useQuery<User>({
+    queryKey: ["me"],
+    queryFn: () => api("/auth/me/"),
+  });
+  const canManagePeriods = me?.capabilities.can_manage_periods ?? false;
 
   const { data, isLoading } = useQuery<{ results: ReportingPeriod[] }>({
     queryKey: ["periods"],
@@ -95,16 +100,16 @@ export default function PeriodsPage() {
           <h1 className="text-[28px] font-semibold text-[#191c1e]">Reporting Periods</h1>
           <p className="mt-1 text-[14px] text-[#43474f]">Manage data collection windows and submission deadlines.</p>
         </div>
-        <button
+        {canManagePeriods && <button
           onClick={() => setShowCreate((v) => !v)}
           className="rounded-[8px] bg-[#001836] px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-[#002d5b]"
         >
           {showCreate ? "Cancel" : "+ New Period"}
-        </button>
+        </button>}
       </div>
 
       {/* Create form */}
-      {showCreate && (
+      {canManagePeriods && showCreate && (
         <form
           onSubmit={handleCreate}
           className="rounded-[16px] border border-[#eceef0] bg-white p-6 space-y-4"

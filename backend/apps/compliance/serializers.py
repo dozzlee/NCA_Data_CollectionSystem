@@ -1,11 +1,25 @@
 from rest_framework import serializers
-from .models import ComplianceFlag, EmailTemplate, EmailLog, FlagCorrespondence
+from .models import ComplianceFlag, EmailTemplate, EmailLog, FlagCorrespondence, EmailDeliveryEvent
 
 
 class EmailTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = EmailTemplate
-        fields = ["id", "template_type", "subject", "body", "placeholders"]
+        fields = ["id", "template_type", "version", "status", "subject", "body", "placeholders", "approved_by", "approved_at"]
+        read_only_fields = ["version", "status", "placeholders", "approved_by", "approved_at"]
+
+
+class EmailDeliveryEventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EmailDeliveryEvent
+        fields = "__all__"
+        read_only_fields = ["email", "recorded_at"]
+
+    def validate_event_type(self, value):
+        allowed = {"ACCEPTED", "DELIVERED", "FAILED", "BOUNCED", "DEFERRED"}
+        if value not in allowed:
+            raise serializers.ValidationError(f"Event type must be one of: {', '.join(sorted(allowed))}.")
+        return value
 
 
 class EmailLogSerializer(serializers.ModelSerializer):
@@ -18,7 +32,7 @@ class EmailLogSerializer(serializers.ModelSerializer):
             "id", "template", "subject", "recipients", "cc",
             "provider", "provider_name", "expected_submission", "period",
             "generated_by", "generated_by_name", "generated_at",
-            "sent_by", "sent_at", "compliance_stage", "status",
+            "sent_by", "sent_at", "compliance_stage", "status", "provider_key", "provider_message_id", "queued_at",
         ]
 
 

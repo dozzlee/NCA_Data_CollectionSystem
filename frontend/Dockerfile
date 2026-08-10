@@ -9,6 +9,8 @@ RUN npm ci
 # Builder
 FROM base AS builder
 WORKDIR /app
+ARG DJANGO_INTERNAL_URL=http://backend:8000
+ENV DJANGO_INTERNAL_URL=${DJANGO_INTERNAL_URL}
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
@@ -17,6 +19,7 @@ RUN npm run build
 FROM base AS runner
 WORKDIR /app
 ENV NODE_ENV production
+ENV DJANGO_INTERNAL_URL=http://backend:8000
 
 RUN addgroup --system --gid 1001 nodejs
 RUN adduser --system --uid 1001 nextjs

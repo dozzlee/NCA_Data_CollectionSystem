@@ -10,7 +10,7 @@ import {
 } from "@/hooks/useDashboard";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { formatDate, WORKFLOW_LABELS, STATUS_CHART_COLORS, CHART_COLORS, PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
+import { formatDate, WORKFLOW_LABELS, STATUS_CHART_COLORS, CHART_COLORS, PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid,
@@ -128,7 +128,7 @@ export default function DashboardPage() {
   }));
 
   const categoryData = (category.data ?? []).map((d) => ({
-    name: PROVIDER_CATEGORY_LABELS[d.category] ?? d.category,
+    name: `${SECTOR_LABELS[d.sector]} · ${PROVIDER_CATEGORY_LABELS[d.category] ?? d.category}`,
     "Completion %": d.completion_pct,
     total: d.total,
   }));

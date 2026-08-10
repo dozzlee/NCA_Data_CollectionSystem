@@ -56,7 +56,7 @@ export default function PendingApprovalPage() {
         <div className="rounded-[16px] border-2 border-dashed border-[#c3c6d0] py-16 text-center">
           <p className="text-[20px] mb-1">✓</p>
           <p className="text-[14px] font-medium text-[#191c1e]">No submissions pending your approval</p>
-          <p className="text-[13px] text-[#737780] mt-1">Your data entry team hasn't submitted anything yet.</p>
+          <p className="text-[13px] text-[#737780] mt-1">Your data entry team has not submitted anything yet.</p>
         </div>
       )}
 

@@ -29,7 +29,33 @@ FORM_CODES = [
 KMZ_ELIGIBLE_FORMS = {"DC-DBS05", "DC-SUB03"}
 
 
+class FormFamily(models.Model):
+    """Stable identity shared by immutable form versions."""
+    FREQUENCY_DECISIONS = [
+        ("PENDING_DECISION", "Pending source-owner decision"),
+        ("APPROVED", "Approved"),
+    ]
+
+    code = models.CharField(max_length=20, choices=FORM_CODES, unique=True)
+    name = models.CharField(max_length=255)
+    canonical_frequency = models.CharField(
+        max_length=15, choices=[("MONTHLY", "Monthly"), ("SEMI_ANNUAL", "Semi-Annual"), ("ANNUAL", "Annual")],
+        blank=True,
+    )
+    frequency_decision_status = models.CharField(max_length=25, choices=FREQUENCY_DECISIONS, default="APPROVED")
+    frequency_decision_reference = models.CharField(max_length=255, blank=True)
+    source_owner = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.code
+
+
 class FormTemplate(models.Model):
+    SECTOR_CHOICES = [
+        ("TELECOM", "Telecom"),
+        ("BROADCASTING", "Broadcasting"),
+    ]
     FREQUENCY_CHOICES = [
         ("MONTHLY", "Monthly"),
         ("SEMI_ANNUAL", "Semi-Annual"),
@@ -41,8 +67,11 @@ class FormTemplate(models.Model):
         ("ARCHIVED", "Archived"),
     ]
 
-    form_code = models.CharField(max_length=20, choices=FORM_CODES, unique=True)
+    family = models.ForeignKey(FormFamily, null=True, blank=True, on_delete=models.PROTECT, related_name="versions")
+    # Compatibility mirror. FormFamily.code is the source of truth for new versions.
+    form_code = models.CharField(max_length=20, choices=FORM_CODES)
     name = models.CharField(max_length=255)
+    sector = models.CharField(max_length=20, choices=SECTOR_CHOICES, default="TELECOM")
     provider_category = models.CharField(max_length=30)
     frequency = models.CharField(max_length=15, choices=FREQUENCY_CHOICES)
     version = models.CharField(max_length=20, default="1.0")
@@ -51,6 +80,18 @@ class FormTemplate(models.Model):
     kmz_required = models.BooleanField(default=False)
     excel_backup_enabled = models.BooleanField(default=True)
     instructions = models.TextField(blank=True)
+    source_reference = models.CharField(max_length=500, blank=True)
+    source_sha256 = models.CharField(max_length=64, blank=True)
+    mapping_complete = models.BooleanField(default=False)
+    approval_status = models.CharField(
+        max_length=20,
+        choices=[("DRAFT", "Draft"), ("PENDING_APPROVAL", "Pending approval"), ("APPROVED", "Approved")],
+        default="DRAFT",
+    )
+    prepared_by = models.ForeignKey("users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="form_versions_prepared")
+    approved_by = models.ForeignKey("users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="form_versions_approved")
+    approved_at = models.DateTimeField(null=True, blank=True)
+    published_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -58,6 +99,15 @@ class FormTemplate(models.Model):
         # Enforce KMZ restriction — only fibre forms
         if self.form_code not in KMZ_ELIGIBLE_FORMS:
             self.kmz_required = False
+        if not self.family_id and self.form_code:
+            decision = "PENDING_DECISION" if self.form_code == "DC-DBS05" else "APPROVED"
+            canonical = "" if decision == "PENDING_DECISION" else self.frequency
+            self.family, _ = FormFamily.objects.get_or_create(
+                code=self.form_code,
+                defaults={"name": self.name, "canonical_frequency": canonical, "frequency_decision_status": decision},
+            )
+        if self.family_id:
+            self.form_code = self.family.code
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -65,6 +115,28 @@ class FormTemplate(models.Model):
 
     class Meta:
         ordering = ["form_code"]
+        constraints = [models.UniqueConstraint(fields=["family", "version"], name="unique_form_family_version")]
+
+
+class ValidationRule(models.Model):
+    RULE_TYPES = [
+        ("TYPE", "Data type"), ("RANGE", "Range"), ("OPTION", "Allowed option"),
+        ("DATE", "Date"), ("COORDINATE", "Coordinate"), ("CONDITIONAL", "Conditional"),
+        ("FORMULA", "Formula"), ("COMPARISON", "Cross-field comparison"), ("GRID_TOTAL", "Grid total"),
+    ]
+    form_template = models.ForeignKey(FormTemplate, on_delete=models.CASCADE, related_name="validation_rules")
+    field = models.ForeignKey("FormField", null=True, blank=True, on_delete=models.CASCADE, related_name="validation_rules")
+    grid = models.ForeignKey("FormGrid", null=True, blank=True, on_delete=models.CASCADE, related_name="validation_rules")
+    rule_type = models.CharField(max_length=20, choices=RULE_TYPES)
+    severity = models.CharField(max_length=10, choices=[("BLOCK", "Blocking"), ("WARN", "Warning")], default="BLOCK")
+    parameters = models.JSONField(default=dict)
+    message = models.CharField(max_length=500)
+    version = models.PositiveIntegerField(default=1)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
 
 
 class FormSection(models.Model):

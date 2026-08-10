@@ -29,6 +29,8 @@ INSTALLED_APPS = [
     "apps.exports",
     "apps.audit",
     "apps.feedback",
+    "apps.data_requests",
+    "apps.governance",
 ]
 
 MIDDLEWARE = [
@@ -93,6 +95,8 @@ STATIC_ROOT = os.environ.get("STATIC_ROOT", BASE_DIR / "staticfiles")
 
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.environ.get("MEDIA_ROOT", BASE_DIR / "media")
+PRIVATE_EXPORT_ROOT = os.environ.get("PRIVATE_EXPORT_ROOT", BASE_DIR / "private_exports")
+PRIVATE_UPLOAD_ROOT = os.environ.get("PRIVATE_UPLOAD_ROOT", BASE_DIR / "private_uploads")
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -128,9 +132,34 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10MB in memory
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 MAX_KMZ_UPLOAD_MB = 50
 MAX_EXCEL_BACKUP_MB = 50
+MALWARE_SCANNER_REQUIRED = os.environ.get("MALWARE_SCANNER_REQUIRED", "False") == "True"
+CLAMAV_HOST = os.environ.get("CLAMAV_HOST", "clamav")
+CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", 3310))
 
 SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "support@nca.org.gh")
 FEEDBACK_EMAIL = os.environ.get("FEEDBACK_EMAIL", "feedback@nca.org.gh")
+
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_BEAT_SCHEDULE = {
+    "hourly-reminder-evaluation": {"task": "apps.governance.tasks.evaluate_reminders", "schedule": 3600.0},
+    "daily-due-state-refresh": {"task": "apps.governance.tasks.refresh_due_states", "schedule": 86400.0},
+    "daily-compliance-reconciliation": {"task": "apps.governance.tasks.reconcile_compliance", "schedule": 86400.0},
+    "daily-expiry-retention-evaluation": {"task": "apps.governance.tasks.evaluate_expiry_and_retention", "schedule": 86400.0},
+    "daily-audit-anchor": {"task": "apps.governance.tasks.create_daily_audit_anchor", "schedule": 86400.0},
+}
+RETENTION_DISPOSITION_ENABLED = os.environ.get("RETENTION_DISPOSITION_ENABLED", "False") == "True"
+TARGET_RPO_MINUTES = int(os.environ["TARGET_RPO_MINUTES"]) if os.environ.get("TARGET_RPO_MINUTES") else None
+TARGET_RTO_MINUTES = int(os.environ["TARGET_RTO_MINUTES"]) if os.environ.get("TARGET_RTO_MINUTES") else None
+AUDIT_HMAC_KEY = os.environ.get("AUDIT_HMAC_KEY", "")
+PORTAL_URL = os.environ.get("PORTAL_URL", "http://127.0.0.1:3001")
+APPROVED_PENALTY_REFERENCE = os.environ.get("APPROVED_PENALTY_REFERENCE", "")
+IMMUTABLE_AUDIT_STORAGE_REFERENCE = os.environ.get("IMMUTABLE_AUDIT_STORAGE_REFERENCE", "")
+MAIL_PROVIDER_CONFIGURED = os.environ.get("MAIL_PROVIDER_CONFIGURED", "False") == "True"
+RECOVERY_STORAGE_CONFIGURED = os.environ.get("RECOVERY_STORAGE_CONFIGURED", "False") == "True"
+UAT_SIGNOFF_REFERENCE = os.environ.get("UAT_SIGNOFF_REFERENCE", "")
 
 GHANA_REGIONS = [
     "Ahafo", "Ashanti", "Bono", "Bono East", "Central", "Eastern",
