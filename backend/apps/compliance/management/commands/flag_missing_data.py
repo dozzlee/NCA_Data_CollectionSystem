@@ -51,7 +51,7 @@ class Command(BaseCommand):
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"✓ Compliance flags created: {created_count}; updated: {updated_count}; cleared: {cleared_count}"
+                f"Compliance flags created: {created_count}; updated: {updated_count}; cleared: {cleared_count}"
             )
         )
 

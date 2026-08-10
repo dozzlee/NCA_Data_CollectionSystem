@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, FileText, Building2, Calendar,
   ShieldAlert, Download, LogOut, FormInput, Users,
+  Library, ClipboardList, Bell,
+  ShieldCheck, LifeBuoy,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { clearAuthTokens } from "@/lib/auth";
@@ -15,6 +17,7 @@ import type { User } from "@/lib/types";
 const ROLE_LABELS: Record<string, string> = {
   NCA_ADMIN:   "System Administrator",
   NCA_OFFICER: "NCA Officer",
+  NCA_VIEWER:  "NCA Data Requester",
 };
 
 // Base nav — shown to all NCA roles
@@ -31,6 +34,15 @@ const BASE_NAV = [
 const ADMIN_NAV = [
   { href: "/forms",  label: "Form Builder", icon: FormInput },
   { href: "/users",  label: "Users",        icon: Users },
+  { href: "/data-requests", label: "Data Requests", icon: ClipboardList },
+  { href: "/governance", label: "Production Readiness", icon: ShieldCheck },
+  { href: "/support", label: "Support Queue", icon: LifeBuoy },
+];
+
+const REQUESTER_NAV = [
+  { href: "/data-catalog", label: "Data Catalog", icon: Library },
+  { href: "/data-requests", label: "My Requests", icon: ClipboardList },
+  { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
 export function Sidebar() {
@@ -44,7 +56,8 @@ export function Sidebar() {
   });
 
   const isAdmin = user?.role === "NCA_ADMIN";
-  const navItems = isAdmin ? [...BASE_NAV, ...ADMIN_NAV] : BASE_NAV;
+  const isRequester = user?.role === "NCA_VIEWER";
+  const navItems = isRequester ? REQUESTER_NAV : isAdmin ? [...BASE_NAV, ...ADMIN_NAV] : BASE_NAV;
 
   function handleSignOut() {
     clearAuthTokens();
@@ -99,7 +112,7 @@ export function Sidebar() {
         })}
 
         {/* Admin section divider */}
-        {isAdmin && (
+        {isAdmin && !isRequester && (
           <p className="px-3 mt-4 mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-white/35">
             Administration
           </p>

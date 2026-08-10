@@ -1,7 +1,5 @@
 from rest_framework import generics
-from rest_framework.permissions import IsAuthenticated
-
-from apps.users.permissions import IsNCAUser, IsSystemAdmin, IsNCAOrReadOnly
+from apps.users.permissions import IsSystemAdmin, IsNCAOperationsOrProvider
 from .models import ProviderProfile, ProviderContact
 from .serializers import (
     ProviderProfileSerializer,
@@ -15,7 +13,7 @@ class ProviderListView(generics.ListCreateAPIView):
     GET  — any authenticated user (providers can look up their own org).
     POST — NCA staff only. Providers cannot self-register or add other providers.
     """
-    filterset_fields = ["category", "status"]
+    filterset_fields = ["sector", "category", "status"]
     search_fields = ["registered_name", "trade_name", "licence_number", "primary_email"]
     ordering_fields = ["registered_name", "category", "status", "created_at"]
     ordering = ["registered_name"]
@@ -23,7 +21,7 @@ class ProviderListView(generics.ListCreateAPIView):
     def get_permissions(self):
         if self.request.method == "POST":
             return [IsSystemAdmin()]
-        return [IsAuthenticated()]
+        return [IsNCAOperationsOrProvider()]
 
     def get_queryset(self):
         qs = ProviderProfile.objects.prefetch_related("contacts").all()
@@ -44,10 +42,19 @@ class ProviderDetailView(generics.RetrieveUpdateAPIView):
     GET   — any authenticated user (providers scoped to own org above).
     PATCH — NCA staff only.
     """
-    permission_classes = [IsSystemAdmin]
-    queryset = ProviderProfile.objects.prefetch_related("contacts").all()
     serializer_class = ProviderProfileSerializer
     http_method_names = ["get", "patch", "head", "options"]
+
+    def get_permissions(self):
+        if self.request.method == "PATCH":
+            return [IsSystemAdmin()]
+        return [IsNCAOperationsOrProvider()]
+
+    def get_queryset(self):
+        queryset = ProviderProfile.objects.prefetch_related("contacts").all()
+        if self.request.user.is_provider and self.request.user.organization_id:
+            queryset = queryset.filter(organization_id=self.request.user.organization_id)
+        return queryset
 
 
 class ProviderContactListView(generics.ListCreateAPIView):
@@ -60,10 +67,14 @@ class ProviderContactListView(generics.ListCreateAPIView):
     def get_permissions(self):
         if self.request.method == "POST":
             return [IsSystemAdmin()]
-        return [IsAuthenticated()]
+        return [IsNCAOperationsOrProvider()]
 
     def get_queryset(self):
-        return ProviderContact.objects.filter(provider_id=self.kwargs["pk"])
+        providers = ProviderProfile.objects.all()
+        if self.request.user.is_provider and self.request.user.organization_id:
+            providers = providers.filter(organization_id=self.request.user.organization_id)
+        provider = generics.get_object_or_404(providers, pk=self.kwargs["pk"])
+        return ProviderContact.objects.filter(provider=provider)
 
     def perform_create(self, serializer):
         provider = generics.get_object_or_404(ProviderProfile, pk=self.kwargs["pk"])
@@ -75,12 +86,20 @@ class ProviderContactDetailView(generics.RetrieveUpdateAPIView):
     GET   — any authenticated user.
     PATCH — NCA staff only.
     """
-    permission_classes = [IsSystemAdmin]
     serializer_class = ProviderContactSerializer
     http_method_names = ["get", "patch", "head", "options"]
 
+    def get_permissions(self):
+        if self.request.method == "PATCH":
+            return [IsSystemAdmin()]
+        return [IsNCAOperationsOrProvider()]
+
     def get_queryset(self):
-        return ProviderContact.objects.filter(provider_id=self.kwargs["pk"])
+        providers = ProviderProfile.objects.all()
+        if self.request.user.is_provider and self.request.user.organization_id:
+            providers = providers.filter(organization_id=self.request.user.organization_id)
+        provider = generics.get_object_or_404(providers, pk=self.kwargs["pk"])
+        return ProviderContact.objects.filter(provider=provider)
 
     def get_object(self):
         return generics.get_object_or_404(

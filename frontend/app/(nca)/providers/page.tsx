@@ -5,8 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
-import type { ProviderProfile, ProviderCategory, ProviderStatus } from "@/lib/types";
-import { PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
+import type { ProviderProfile, ProviderCategory, ProviderStatus, Sector } from "@/lib/types";
+import { PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 
 const STATUS_COLORS: Record<ProviderStatus, string> = {
   ACTIVE:   "bg-[#e5f4eb] text-[#1f7a4d]",
@@ -23,15 +23,17 @@ const STATUSES: ProviderStatus[] = ["ACTIVE","INACTIVE","SUSPENDED","ARCHIVED"];
 export default function ProvidersPage() {
   const router = useRouter();
   const [category, setCategory] = useState("");
+  const [sector, setSector] = useState<Sector | "">("");
   const [status,   setStatus]   = useState("");
 
   // Build the query string — re-computed whenever filters change
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
+    if (sector)   p.set("sector", sector);
     if (category) p.set("category", category);
     if (status)   p.set("status",   status);
     return p.toString();
-  }, [category, status]);
+  }, [category, sector, status]);
 
   const { data, isLoading } = useQuery<{ results: ProviderProfile[] }>({
     queryKey:  ["providers", queryString],
@@ -53,6 +55,11 @@ export default function ProvidersPage() {
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-center">
+        <select value={sector} onChange={e => setSector(e.target.value as Sector | "")}
+          className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none">
+          <option value="">All sectors</option>
+          {Object.entries(SECTOR_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
         <select value={category} onChange={e => setCategory(e.target.value)}
           className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none">
           <option value="">All categories</option>
@@ -67,8 +74,8 @@ export default function ProvidersPage() {
           ))}
         </select>
 
-        {(category || status) && (
-          <button onClick={() => { setCategory(""); setStatus(""); }}
+        {(sector || category || status) && (
+          <button onClick={() => { setSector(""); setCategory(""); setStatus(""); }}
             className="text-[13px] font-medium text-[#737780] hover:text-[#0066cc]">
             Clear filters
           </button>
@@ -86,7 +93,7 @@ export default function ProvidersPage() {
         <table className="w-full text-left">
           <thead className="border-b border-[#eceef0] bg-[#f7f9fb]">
             <tr>
-              {["Provider","Category","Licence No.","Email","Phone","Status"].map(h => (
+              {["Provider","Sector","Category","Licence No.","Email","Phone","Status"].map(h => (
                 <th key={h} className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-[#43474f]">{h}</th>
               ))}
             </tr>
@@ -95,7 +102,7 @@ export default function ProvidersPage() {
             {isLoading
               ? Array.from({length:6}).map((_,i) => (
                   <tr key={i}>
-                    {Array.from({length:6}).map((_,j) => (
+                    {Array.from({length:7}).map((_,j) => (
                       <td key={j} className="px-5 py-3.5"><Skeleton className="h-3.5 w-full"/></td>
                     ))}
                   </tr>
@@ -103,9 +110,9 @@ export default function ProvidersPage() {
               : providers.length === 0
               ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-12 text-center">
+                  <td colSpan={7} className="px-5 py-12 text-center">
                     <p className="text-[14px] font-medium text-[#191c1e]">No providers found</p>
-                    {(category || status) && (
+                    {(sector || category || status) && (
                       <p className="text-[13px] text-[#737780] mt-1">Try adjusting or clearing your filters.</p>
                     )}
                   </td>
@@ -123,6 +130,7 @@ export default function ProvidersPage() {
                     </p>
                     {p.trade_name && <p className="text-[11px] text-[#737780]">{p.trade_name}</p>}
                   </td>
+                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{SECTOR_LABELS[p.sector]}</td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">
                     {PROVIDER_CATEGORY_LABELS[p.category]}
                   </td>

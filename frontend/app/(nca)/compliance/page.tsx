@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { formatDateTime } from "@/lib/utils";
 import { AlertTriangle, Mail, Send, CheckCircle2, Clock, ShieldAlert, ChevronRight, ChevronDown, X } from "lucide-react";
 import Link from "next/link";
-import type { ExpectedSubmission, PaginatedResponse } from "@/lib/types";
+import type { ExpectedSubmission, PaginatedResponse, User } from "@/lib/types";
 
 interface ComplianceSummary {
   overdue: number;
@@ -41,7 +41,7 @@ interface EmailLog {
   subject: string;
   provider_name: string;
   compliance_stage: string;
-  status: "DRAFT" | "SENT" | "FAILED";
+  status: "DRAFT" | "QUEUED" | "SENDING" | "SENT" | "DELIVERED" | "BOUNCED" | "FAILED";
   generated_by_name: string;
   generated_at: string;
   sent_at: string | null;
@@ -100,6 +100,11 @@ export default function CompliancePage() {
   const [draftTemplate, setDraftTemplate] = useState("");
   const [noteText, setNoteText] = useState("");
   const [addingNote, setAddingNote] = useState<number | null>(null);
+  const { data: me } = useQuery<User>({
+    queryKey: ["me"],
+    queryFn: () => api.get<User>("/auth/me/"),
+  });
+  const canManageCompliance = me?.capabilities.can_manage_compliance ?? false;
 
   // ── Queries ──────────────────────────────────────────────────────────────
   const summaryQ = useQuery({
@@ -190,8 +195,8 @@ export default function CompliancePage() {
     }
   }
 
-  async function markSent(emailId: number) {
-    await api.patch(`/compliance/emails/${emailId}/mark-sent/`, {});
+  async function queueEmail(emailId: number) {
+    await api.post(`/compliance/emails/${emailId}/queue/`, {});
     qc.invalidateQueries({ queryKey: ["email-logs"] });
     qc.invalidateQueries({ queryKey: ["compliance-summary"] });
   }
@@ -322,7 +327,7 @@ export default function CompliancePage() {
                           className="rounded-[6px] border border-[#c3c6d0] px-3 py-1.5 text-[11px] font-medium text-[#43474f] hover:bg-[#f2f4f6] flex items-center gap-1 whitespace-nowrap">
                           View <ChevronRight size={11} />
                         </Link>
-                        <div className="flex gap-1">
+                        {canManageCompliance && <div className="flex gap-1">
                           {(["OPEN", "ACKNOWLEDGED", "IN_PROGRESS", "RESOLVED"] as const).map((status) => (
                             <button
                               key={status}
@@ -340,7 +345,7 @@ export default function CompliancePage() {
                               {status}
                             </button>
                           ))}
-                        </div>
+                        </div>}
                       </div>
                       <button onClick={() => setExpandedFlag(isExpanded ? null : flag.id)}
                         className="text-[#43474f] hover:text-[#191c1e] mt-1">
@@ -373,7 +378,7 @@ export default function CompliancePage() {
                       )}
 
                       {/* Draft email or add note form */}
-                      {draftingFlag === flag.id ? (
+                      {canManageCompliance && (draftingFlag === flag.id ? (
                         <div className="rounded-[8px] border border-[#c3c6d0] bg-white p-3 space-y-2">
                           <select value={draftTemplate} onChange={(e) => setDraftTemplate(e.target.value)}
                             className="w-full rounded-[6px] border border-[#c3c6d0] bg-white px-2 py-1.5 text-[11px] text-[#191c1e] focus:outline-none focus:border-[#0066cc]">
@@ -432,7 +437,7 @@ export default function CompliancePage() {
                             Add Note
                           </button>
                         </div>
-                      )}
+                      ))}
                     </div>
                   )}
                 </div>
@@ -464,14 +469,14 @@ export default function CompliancePage() {
                   const checked = selectedIds.includes(sub.id);
                   return (
                     <label key={sub.id} className="flex items-center gap-3 px-5 py-3 hover:bg-[#f7f9fb] cursor-pointer transition-colors">
-                      <input
+                      {canManageCompliance && <input
                         type="checkbox"
                         checked={checked}
                         onChange={(e) => setSelectedIds((ids) =>
                           e.target.checked ? [...ids, sub.id] : ids.filter((i) => i !== sub.id)
                         )}
                         className="h-4 w-4 accent-[#0066cc]"
-                      />
+                      />}
                       <div className="flex-1 min-w-0">
                         <p className="text-[12px] font-medium text-[#191c1e] truncate">{sub.provider_name}</p>
                         <p className="text-[11px] text-[#737780]">{sub.form_code} · {sub.period_name}</p>
@@ -483,7 +488,7 @@ export default function CompliancePage() {
             }
           </div>
 
-          <div className="border-t border-[#eceef0] px-5 py-4 space-y-3">
+          {canManageCompliance && <div className="border-t border-[#eceef0] px-5 py-4 space-y-3">
             <div className="flex gap-2">
               <select value={templateType} onChange={(e) => setTemplateType(e.target.value)}
                 className="flex-1 rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[12px] text-[#191c1e] focus:outline-none focus:border-[#0066cc]">
@@ -507,9 +512,9 @@ export default function CompliancePage() {
               </p>
             )}
             <p className="text-[10px] text-[#737780]">
-              Select overdue submissions, choose a template, and generate email drafts for manual dispatch.
+              Drafts can be queued, but no message is sent until an approved delivery provider is configured.
             </p>
-          </div>
+          </div>}
         </div>
 
         {/* Email log */}
@@ -526,7 +531,8 @@ export default function CompliancePage() {
               : emails.map((email) => (
                   <div key={email.id} className="flex items-start gap-3 px-5 py-3">
                     <div className={`mt-1 h-2 w-2 rounded-full shrink-0 ${
-                      email.status === "SENT" ? "bg-[#1f7a4d]"
+                      ["SENT", "DELIVERED"].includes(email.status) ? "bg-[#1f7a4d]"
+                      : email.status === "QUEUED" ? "bg-[#0066cc]"
                       : email.status === "DRAFT" ? "bg-[#ffd100]"
                       : "bg-[#E31937]"
                     }`} />
@@ -537,13 +543,13 @@ export default function CompliancePage() {
                       </p>
                       <p className="text-[10px] text-[#737780] tabular-nums">{formatDateTime(email.generated_at)}</p>
                     </div>
-                    {email.status === "DRAFT" && (
-                      <button onClick={() => markSent(email.id)}
+                    {canManageCompliance && email.status === "DRAFT" && (
+                      <button onClick={() => queueEmail(email.id)}
                         className="flex items-center gap-1 shrink-0 rounded-[6px] border border-[#1f7a4d] px-2 py-1 text-[10px] font-semibold text-[#1f7a4d] hover:bg-[#e5f4eb]">
-                        <Send size={9} /> Mark sent
+                        <Send size={9} /> Queue
                       </button>
                     )}
-                    {email.status === "SENT" && (
+                    {["SENT", "DELIVERED"].includes(email.status) && (
                       <span className="flex items-center gap-1 text-[10px] font-medium text-[#1f7a4d] shrink-0">
                         <CheckCircle2 size={11} /> Sent
                       </span>

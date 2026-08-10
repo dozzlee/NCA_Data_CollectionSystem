@@ -3,7 +3,7 @@
 **Version:** 1.0  
 **Last Updated:** 2026-06-16  
 **System URL (Live):** https://codedematrix-datacollection.hf.space/  
-**System URL (Local):** http://localhost:3000  
+**System URL (Local):** http://localhost:3001
 
 ---
 
@@ -36,7 +36,7 @@ The API test script (`testing/api_test.sh`) makes real HTTP calls to the system.
 bash testing/api_test.sh
 
 # Or explicitly:
-bash testing/api_test.sh http://localhost:8000
+bash testing/api_test.sh http://localhost:8001
 ```
 
 ### Running Against Live Deployment
@@ -411,12 +411,12 @@ To be completed after UAT is done:
 | Authentication | 3 | | | |
 | Dashboard | 2 | | | |
 | Providers | 5 | | | |
-| Submissions | 9 | | | |
+| Submissions | 12 | | | |
 | Compliance | 5 | | | |
 | Users | 3 | | | |
 | Exports | 2 | | | |
 | Access Control | 2 | | | |
-| **TOTAL** | **31** | | | |
+| **TOTAL** | **34** | | | |
 
 **Tested by:** ___________________________  
 **Date:** ___________________________  

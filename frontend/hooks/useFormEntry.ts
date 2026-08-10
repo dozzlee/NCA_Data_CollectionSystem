@@ -27,6 +27,16 @@ interface SectionCompletion {
 
 interface CompletionData {
   completion_pct: number;
+  can_submit: boolean;
+  missing_required_count: number;
+  missing_by_type: Record<string, number>;
+  blocking_issues: {
+    code: string;
+    type: string;
+    id: number | string;
+    section_code: string;
+    label: string;
+  }[];
   sections: SectionCompletion[];
 }
 

@@ -67,8 +67,20 @@ class ReportingPeriod(models.Model):
 
     def activate(self):
         """Generate ExpectedSubmission records for all assigned provider-form pairs."""
+        invalid = []
+        for form in self.applicable_form_templates.filter(frequency=self.frequency).select_related("family"):
+            if not form.mapping_complete or form.approval_status != "APPROVED": invalid.append(f"{form.form_code}: mapping is not approved")
+            elif not form.family_id: invalid.append(f"{form.form_code}: form family is missing")
+            elif form.family.frequency_decision_status != "APPROVED": invalid.append(f"{form.form_code}: canonical frequency decision is pending")
+            elif form.family.canonical_frequency != self.frequency: invalid.append(f"{form.form_code}: canonical frequency does not match the period")
+        if invalid:
+            raise ValueError("Period activation blocked. " + "; ".join(invalid))
         for provider in self.assigned_providers.all():
-            for form in self.applicable_form_templates.filter(provider_category=provider.category):
+            for form in self.applicable_form_templates.filter(
+                provider_category=provider.category,
+                sector=provider.sector,
+                frequency=self.frequency,
+            ):
                 ExpectedSubmission.objects.get_or_create(
                     provider=provider,
                     form_template=form,
@@ -80,6 +92,21 @@ class ReportingPeriod(models.Model):
 
     class Meta:
         ordering = ["-year", "-month"]
+
+
+class ReminderPolicy(models.Model):
+    period = models.ForeignKey(ReportingPeriod, on_delete=models.CASCADE, related_name="reminder_policies")
+    version = models.PositiveIntegerField(default=1)
+    name = models.CharField(max_length=255)
+    rules = models.JSONField(default=list, help_text="Approved offsets/channels/recipient roles")
+    status = models.CharField(max_length=20, choices=[("DRAFT", "Draft"), ("APPROVED", "Approved"), ("ARCHIVED", "Archived")], default="DRAFT")
+    prepared_by = models.ForeignKey("users.User", null=True, on_delete=models.SET_NULL, related_name="reminder_policies_prepared")
+    approved_by = models.ForeignKey("users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="reminder_policies_approved")
+    approved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["period", "version"], name="unique_period_reminder_version")]
 
 
 class ExpectedSubmission(models.Model):
@@ -101,7 +128,7 @@ class ExpectedSubmission(models.Model):
             return "CLOSED"
         if self.period.opens_at > now:
             return "NOT_OPEN"
-        effective_due = self.due_at_override or self.period.due_at
+        effective_due = self.effective_due_at
         submitted = self.workflow_status in ("SUBMITTED", "UNDER_REVIEW", "RESUBMITTED", "APPROVED")
         if submitted:
             return "CLOSED"
@@ -127,6 +154,38 @@ class ExpectedSubmission(models.Model):
         unique_together = [["provider", "form_template", "period"]]
         ordering = ["-period__year", "-period__month"]
 
+    @property
+    def effective_due_at(self):
+        approved = self.deadline_changes.filter(status="APPROVED").order_by("-decided_at", "-id").first()
+        return approved.proposed_due_at if approved else (self.due_at_override or self.period.due_at)
+
+
+class DeadlineChangeRequest(models.Model):
+    expected_submission = models.ForeignKey(ExpectedSubmission, on_delete=models.CASCADE, related_name="deadline_changes")
+    previous_due_at = models.DateTimeField()
+    proposed_due_at = models.DateTimeField()
+    reason = models.TextField()
+    status = models.CharField(max_length=20, choices=[("PENDING", "Pending"), ("APPROVED", "Approved"), ("REJECTED", "Rejected")], default="PENDING")
+    requested_by = models.ForeignKey("users.User", on_delete=models.PROTECT, related_name="deadline_changes_requested")
+    requested_at = models.DateTimeField(auto_now_add=True)
+    decided_by = models.ForeignKey("users.User", null=True, blank=True, on_delete=models.PROTECT, related_name="deadline_changes_decided")
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(blank=True)
+
+
+class SubmissionOverride(models.Model):
+    expected_submission = models.ForeignKey(ExpectedSubmission, on_delete=models.CASCADE, related_name="readiness_overrides")
+    blocker_ids = models.JSONField(default=list)
+    reason = models.TextField()
+    evidence_reference = models.CharField(max_length=500, blank=True)
+    expires_at = models.DateTimeField()
+    status = models.CharField(max_length=20, choices=[("PENDING", "Pending"), ("APPROVED", "Approved"), ("REJECTED", "Rejected"), ("EXPIRED", "Expired")], default="PENDING")
+    requested_by = models.ForeignKey("users.User", on_delete=models.PROTECT, related_name="submission_overrides_requested")
+    requested_at = models.DateTimeField(auto_now_add=True)
+    approved_by = models.ForeignKey("users.User", null=True, blank=True, on_delete=models.PROTECT, related_name="submission_overrides_approved")
+    approved_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(blank=True)
+
 
 class Submission(models.Model):
     expected = models.ForeignKey(ExpectedSubmission, on_delete=models.PROTECT, related_name="versions")
@@ -148,6 +207,26 @@ class Submission(models.Model):
     class Meta:
         ordering = ["-version"]
         unique_together = [["expected", "version"]]
+
+
+class ValidationRun(models.Model):
+    submission = models.ForeignKey(Submission, on_delete=models.CASCADE, related_name="validation_runs")
+    scope = models.CharField(max_length=100, default="FULL")
+    status = models.CharField(max_length=10, choices=[("PASS", "Pass"), ("WARN", "Warnings"), ("FAIL", "Failed")])
+    ruleset_snapshot = models.JSONField(default=list)
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+
+class ValidationResult(models.Model):
+    run = models.ForeignKey(ValidationRun, on_delete=models.CASCADE, related_name="results")
+    rule = models.ForeignKey("forms_engine.ValidationRule", null=True, on_delete=models.SET_NULL)
+    severity = models.CharField(max_length=10)
+    target_type = models.CharField(max_length=20)
+    target_id = models.CharField(max_length=100)
+    code = models.CharField(max_length=50)
+    message = models.TextField()
+    details = models.JSONField(default=dict)
 
 
 class SubmissionValue(models.Model):
@@ -195,3 +274,32 @@ class ReviewAction(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class CorrectionItem(models.Model):
+    source_submission = models.ForeignKey(Submission, on_delete=models.CASCADE, related_name="correction_items")
+    target_type = models.CharField(max_length=20, choices=ReviewAction.TARGET_CHOICES)
+    target_id = models.CharField(max_length=100)
+    instruction = models.TextField()
+    status = models.CharField(max_length=20, choices=[("OPEN", "Open"), ("ADDRESSED", "Addressed"), ("VERIFIED", "Verified")], default="OPEN")
+    created_by = models.ForeignKey("users.User", on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class NonFilledDisposition(models.Model):
+    value = models.OneToOneField(SubmissionValue, on_delete=models.CASCADE, related_name="non_filled_disposition")
+    decision = models.CharField(max_length=10, choices=[("ACCEPTED", "Accepted"), ("REJECTED", "Rejected")])
+    note = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey("users.User", on_delete=models.PROTECT)
+    reviewed_at = models.DateTimeField(auto_now_add=True)
+
+
+class SubmissionReceipt(models.Model):
+    submission = models.OneToOneField(Submission, on_delete=models.PROTECT, related_name="receipt")
+    reference = models.CharField(max_length=50, unique=True)
+    snapshot = models.JSONField(default=dict)
+    private_path = models.CharField(max_length=500)
+    mime_type = models.CharField(max_length=100, default="application/pdf")
+    file_size = models.PositiveBigIntegerField(default=0)
+    sha256 = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)

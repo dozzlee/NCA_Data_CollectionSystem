@@ -35,7 +35,9 @@ export default function LoginPage() {
 
       // Route by role
       const role: string = data.user?.role ?? "";
-      window.location.assign(role.startsWith("NCA") ? "/dashboard" : "/provider/dashboard");
+      window.location.assign(
+        role === "NCA_VIEWER" ? "/data-requests" : role.startsWith("NCA") ? "/dashboard" : "/provider/dashboard"
+      );
     } catch {
       setError("Connection failed. Please check your network and try again.");
     } finally {

@@ -3,6 +3,7 @@
 export type UserRole =
   | "NCA_ADMIN"           // System Administrator
   | "NCA_OFFICER"         // NCA Officer
+  | "NCA_VIEWER"          // Governed NCA data requester
   | "PROVIDER_DATA_ENTRY" // Provider Data Entry User
   | "PROVIDER_APPROVER";  // Provider Approver
 
@@ -21,6 +22,103 @@ export interface User {
   is_active: boolean;
   mfa_enabled: boolean;
   created_at: string;
+  capabilities: {
+    can_view_nca_operations: boolean;
+    can_review_submissions: boolean;
+    can_manage_compliance: boolean;
+    can_manage_periods: boolean;
+    can_manage_forms: boolean;
+    can_manage_users: boolean;
+    can_export: boolean;
+    can_request_data: boolean;
+    can_manage_data_requests: boolean;
+  };
+}
+
+export type DataRequestStatus =
+  | "SUBMITTED" | "UNDER_REVIEW" | "CHANGES_REQUESTED" | "APPROVED"
+  | "PREPARING" | "READY" | "GENERATION_FAILED" | "REJECTED"
+  | "WITHDRAWN" | "EXPIRED";
+
+export interface DataRequestScope {
+  form_template_ids: number[];
+  period_ids: number[];
+  all_fields: boolean;
+  field_ids: number[];
+  grid_column_ids: number[];
+  provider_scope: "ALL" | "SECTOR" | "CATEGORY" | "SELECTED";
+  sector: string;
+  provider_category: string;
+  provider_ids: number[];
+}
+
+export interface DataRequestEvent {
+  id: number;
+  actor_name: string;
+  actor_email: string;
+  event_type: string;
+  from_status: string;
+  to_status: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface DataRequestArtifact {
+  filename: string;
+  mime_type: string;
+  file_size: number;
+  row_count: number;
+  sha256: string;
+  generated_at: string;
+  expires_at: string;
+  is_expired: boolean;
+}
+
+export interface DataRequestItem {
+  id: string;
+  requester: string;
+  requester_name: string;
+  requester_email: string;
+  requesting_division: string;
+  title: string;
+  purpose: string;
+  requested_format: "CSV" | "XLSX" | "PDF";
+  scope: DataRequestScope;
+  status: DataRequestStatus;
+  reviewer_name: string | null;
+  expected_delivery_at: string | null;
+  decision_note: string;
+  submitted_at: string;
+  updated_at: string;
+  approved_at: string | null;
+  completed_at: string | null;
+  projected_row_count: number | null;
+  events: DataRequestEvent[];
+  artifact?: DataRequestArtifact;
+}
+
+export interface CatalogField {
+  id: number; code: string; label: string; type: string; unit: string;
+  description: string; required: boolean;
+}
+export interface CatalogGrid {
+  id: number; code: string; title: string; description: string; row_mode: string;
+  columns: CatalogField[];
+}
+export interface CatalogForm {
+  id: number; code: string; name: string; description: string; sector: string;
+  provider_category: string; frequency: string; version: string;
+  available_period_ids: number[];
+  sections: Array<{ id: number; code: string; title: string; description: string; fields: CatalogField[]; grids: CatalogGrid[] }>;
+}
+export interface DataCatalog {
+  forms: CatalogForm[];
+  periods: Array<{ id: number; name: string; frequency: string; year: number; month: number | null }>;
+  providers: Array<{ id: number; provider_id: string; name: string; trade_name: string; sector: string; category: string }>;
+  sectors: string[];
+  provider_categories: string[];
+  frequencies: string[];
 }
 
 export interface AuthResponse {
@@ -41,12 +139,15 @@ export type ProviderCategory =
   | "SUBMARINE_FIBRE";
 
 export type ProviderStatus = "ACTIVE" | "INACTIVE" | "SUSPENDED" | "ARCHIVED";
+export type Sector = "TELECOM" | "BROADCASTING";
 
 export interface ProviderProfile {
   id: number;
   provider_id: string;
+  organization_id: number | null;
   registered_name: string;
   trade_name: string;
+  sector: Sector;
   category: ProviderCategory;
   licence_type: string;
   licence_number: string;
@@ -81,14 +182,22 @@ export type FieldType =
 
 export interface FormTemplate {
   id: number;
+  family: number | null;
   form_code: FormCode;
   name: string;
+  sector: Sector;
   provider_category: ProviderCategory;
   frequency: Frequency;
   version: string;
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   kmz_required: boolean;
   excel_backup_enabled: boolean;
+  mapping_complete: boolean;
+  approval_status: "DRAFT" | "PENDING_APPROVAL" | "APPROVED";
+  source_reference: string;
+  source_sha256: string;
+  approved_at: string | null;
+  published_at: string | null;
 }
 
 export interface FormSection {
@@ -98,8 +207,17 @@ export interface FormSection {
   instructions: string;
   sort_order: number;
   kmz_upload_required: boolean;
+  kmz_requirements: KMZRequirement[];
   fields: FormField[];
   grids: FormGrid[];
+}
+
+export interface KMZRequirement {
+  id: number;
+  category: string;
+  description: string;
+  is_required: boolean;
+  max_file_size_mb: number;
 }
 
 export interface FormField {
@@ -171,6 +289,7 @@ export interface ReportingPeriod {
   month: number | null;
   opens_at: string;
   due_at: string;
+  effective_due_at: string;
   status: "DRAFT" | "ACTIVE" | "CLOSED";
 }
 
@@ -178,10 +297,12 @@ export interface ExpectedSubmission {
   id: number;
   provider: number;
   provider_name: string;
+  provider_sector: Sector;
   provider_category: ProviderCategory;
   form_template: number;
   form_code: FormCode;
   form_name: string;
+  form_sector: Sector;
   period: number;
   period_name: string;
   due_at: string;
@@ -218,6 +339,7 @@ export interface StatusDonutItem {
 }
 
 export interface CategoryCompletionItem {
+  sector: Sector;
   category: ProviderCategory;
   completion_pct: number;
   total: number;

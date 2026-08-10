@@ -52,9 +52,27 @@ class SystemIssueTicket(models.Model):
     reported_at = models.DateTimeField(auto_now_add=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
     resolution_note = models.TextField(blank=True)
+    assigned_to = models.ForeignKey("users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="support_tickets_assigned")
+    assigned_team = models.CharField(max_length=100, blank=True)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    sla_due_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["-reported_at"]
 
     def __str__(self):
         return f"[{self.severity}] {self.title}"
+
+
+class SystemIssueEvent(models.Model):
+    ticket = models.ForeignKey(SystemIssueTicket, on_delete=models.CASCADE, related_name="events")
+    event_type = models.CharField(max_length=30)
+    from_status = models.CharField(max_length=15, blank=True)
+    to_status = models.CharField(max_length=15, blank=True)
+    note = models.TextField(blank=True)
+    actor = models.ForeignKey("users.User", null=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]

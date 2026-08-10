@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { useToast } from "@/components/ui/Toast";
 import type { ProviderProfile, ExpectedSubmission } from "@/lib/types";
-import { PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
+import { PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 
 interface ProviderContact {
   id: number; name: string; designation: string;
@@ -115,7 +115,7 @@ export default function ProviderDetailPage() {
           {provider.trade_name && <p className="text-[14px] text-[#43474f]">Trading as {provider.trade_name}</p>}
           <div className="flex items-center gap-2 mt-1.5">
             <span className="rounded-full bg-[#e8f1fb] px-2.5 py-0.5 text-[11px] font-semibold text-[#004999] uppercase tracking-wide">
-              {PROVIDER_CATEGORY_LABELS[provider.category]}
+              {SECTOR_LABELS[provider.sector]} · {PROVIDER_CATEGORY_LABELS[provider.category]}
             </span>
             <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${
               provider.status==="ACTIVE"    ? "bg-[#e5f4eb] text-[#1f7a4d]" :

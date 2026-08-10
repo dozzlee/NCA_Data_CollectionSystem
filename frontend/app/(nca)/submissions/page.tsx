@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useExpectedSubmissions } from "@/hooks/useDashboard";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { formatDate, WORKFLOW_LABELS, DUE_STATE_LABELS, PROVIDER_CATEGORY_LABELS, getDueStateRowBg } from "@/lib/utils";
+import { formatDate, WORKFLOW_LABELS, DUE_STATE_LABELS, PROVIDER_CATEGORY_LABELS, SECTOR_LABELS, getDueStateRowBg } from "@/lib/utils";
 import { ChevronRight } from "lucide-react";
 import type { DueState, WorkflowStatus } from "@/lib/types";
 
@@ -21,14 +21,16 @@ function SubmissionsPageContent() {
   const [statusFilter, setStatusFilter] = useState<WorkflowStatus | "">((searchParams.get("workflow_status") as WorkflowStatus) ?? "");
   const [dueStateFilter, setDueStateFilter] = useState<DueState | "">((searchParams.get("due_state") as DueState) ?? "");
   const [categoryFilter, setCategoryFilter] = useState(searchParams.get("provider__category") ?? "");
+  const [sectorFilter, setSectorFilter] = useState(searchParams.get("provider__sector") ?? "");
 
   const params = useMemo(() => {
     const p: Record<string, string> = {};
     if (statusFilter) p.workflow_status = statusFilter;
     if (dueStateFilter) p.due_state = dueStateFilter;
+    if (sectorFilter) p.provider__sector = sectorFilter;
     if (categoryFilter) p.provider__category = categoryFilter;
     return p;
-  }, [statusFilter, dueStateFilter, categoryFilter]);
+  }, [statusFilter, dueStateFilter, categoryFilter, sectorFilter]);
 
   const { data, isLoading } = useExpectedSubmissions(params);
 
@@ -41,6 +43,11 @@ function SubmissionsPageContent() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
+        <select value={sectorFilter} onChange={(e) => setSectorFilter(e.target.value)}
+          className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:outline-none focus:border-[#0066cc]">
+          <option value="">All sectors</option>
+          {Object.entries(SECTOR_LABELS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        </select>
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as WorkflowStatus | "")}
           className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] focus:outline-none focus:border-[#0066cc]">
           <option value="">All statuses</option>
@@ -90,7 +97,9 @@ function SubmissionsPageContent() {
                     className={`border-b border-[#eceef0] last:border-0 hover:brightness-[0.97] transition-colors cursor-pointer group ${getDueStateRowBg(sub.due_state, sub.workflow_status)}`}>
                     <td className="px-5 py-3">
                       <p className="text-[13px] font-medium text-[#191c1e] max-w-[160px] truncate">{sub.provider_name}</p>
-                      <p className="text-[11px] text-[#737780]">{PROVIDER_CATEGORY_LABELS[sub.provider_category] ?? sub.provider_category}</p>
+                      <p className="text-[11px] text-[#737780]">
+                        {SECTOR_LABELS[sub.provider_sector]} · {PROVIDER_CATEGORY_LABELS[sub.provider_category] ?? sub.provider_category}
+                      </p>
                     </td>
                     <td className="px-5 py-3">
                       <p className="text-[12px] font-mono font-medium text-[#002d5b]">{sub.form_code}</p>

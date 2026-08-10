@@ -16,25 +16,59 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: sh -c "cd backend && python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    command: sh -c "cd backend && python manage.py migrate && python manage.py seed_data && python manage.py runserver 0.0.0.0:8000"
     environment:
       DATABASE_URL: postgresql://nca:nca_dev_pass@db:5432/nca_dc
       DEBUG: "True"
       SECRET_KEY: dev-secret-key
+      PRIVATE_UPLOAD_ROOT: /app/private_uploads
+      PRIVATE_EXPORT_ROOT: /app/private_exports
+      CELERY_BROKER_URL: redis://redis:6379/0
+    volumes:
+      - private_uploads:/app/private_uploads
+      - private_exports:/app/private_exports
     ports:
-      - "8000:8000"
+      - "8001:8000"
     depends_on:
       - db
+      - redis
 
   frontend:
     build:
       context: .
       dockerfile: Dockerfile
-    command: sh -c "cd frontend && NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev"
+    # Next.js proxies browser requests from /api/* to Django. Inside the
+    # frontend container Django is reachable by its Compose service name,
+    # not by localhost (which points back to the frontend container).
+    command: sh -c "cd frontend && DJANGO_INTERNAL_URL=http://backend:8000 npm run dev"
     ports:
-      - "3000:3000"
+      - "3001:3000"
     depends_on:
       - backend
 
+  redis:
+    image: redis:7-alpine
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sh -c "cd backend && celery -A config worker --loglevel=info"
+    environment:
+      DATABASE_URL: postgresql://nca:nca_dev_pass@db:5432/nca_dc
+      DEBUG: "True"
+      SECRET_KEY: dev-secret-key
+      CELERY_BROKER_URL: redis://redis:6379/0
+      PRIVATE_UPLOAD_ROOT: /app/private_uploads
+      PRIVATE_EXPORT_ROOT: /app/private_exports
+    volumes:
+      - private_uploads:/app/private_uploads
+      - private_exports:/app/private_exports
+    depends_on:
+      - db
+      - redis
+
 volumes:
   postgres_data:
+  private_uploads:
+  private_exports:

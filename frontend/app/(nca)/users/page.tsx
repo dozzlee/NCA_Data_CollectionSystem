@@ -12,6 +12,7 @@ import { PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
 const ROLES: { value: UserRole; label: string; group: string }[] = [
   { value:"NCA_ADMIN",           label:"System Administrator", group:"NCA" },
   { value:"NCA_OFFICER",         label:"NCA Officer",          group:"NCA" },
+  { value:"NCA_VIEWER",          label:"NCA Data Requester",     group:"NCA" },
   { value:"PROVIDER_DATA_ENTRY", label:"Provider Data Entry",  group:"Provider" },
   { value:"PROVIDER_APPROVER",   label:"Provider Approver",    group:"Provider" },
 ];
@@ -19,6 +20,7 @@ const ROLES: { value: UserRole; label: string; group: string }[] = [
 const ROLE_COLORS: Record<UserRole, string> = {
   NCA_ADMIN:           "bg-[#ffe8e8] text-[#c0112a]",
   NCA_OFFICER:         "bg-[#e8f1fb] text-[#004999]",
+  NCA_VIEWER:          "bg-[#eef2ff] text-[#3949ab]",
   PROVIDER_DATA_ENTRY: "bg-[#f2f4f6] text-[#43474f]",
   PROVIDER_APPROVER:   "bg-[#e5f4eb] text-[#1f7a4d]",
 };
@@ -26,6 +28,7 @@ const ROLE_COLORS: Record<UserRole, string> = {
 const ROLE_LABELS: Record<UserRole, string> = {
   NCA_ADMIN:           "System Admin",
   NCA_OFFICER:         "NCA Officer",
+  NCA_VIEWER:          "Data Requester",
   PROVIDER_DATA_ENTRY: "Data Entry",
   PROVIDER_APPROVER:   "Approver",
 };
@@ -74,7 +77,7 @@ function UsersPageContent() {
       method: "POST",
       body: JSON.stringify({
         name: form.name, email: form.email, password: form.password,
-        role: form.role, organization: form.organization || null,
+        role: form.role, organization_id: form.organization || null,
       }),
     }),
     onSuccess: () => {
@@ -104,7 +107,7 @@ function UsersPageContent() {
         <div>
           <h1 className="text-[28px] font-semibold text-[#191c1e]">User Management</h1>
           <p className="mt-1 text-[14px] text-[#43474f]">
-            Create and manage accounts for all four roles. All actions are audited.
+            Create and manage accounts for all five roles. All actions are audited.
           </p>
         </div>
         <button onClick={() => setShowCreate(v => !v)}
@@ -160,13 +163,13 @@ function UsersPageContent() {
                   value={form.organization}
                   onChange={e => setForm(f => ({ ...f, organization: e.target.value }))}>
                   <option value="">Select provider…</option>
-                  {(providersData?.results ?? []).map(p => (
-                    <option key={p.id} value={p.id}>
+                  {(providersData?.results ?? []).filter(p => p.organization_id).map(p => (
+                    <option key={p.id} value={p.organization_id ?? ""}>
                       {p.registered_name} ({PROVIDER_CATEGORY_LABELS[p.category]})
                     </option>
                   ))}
                 </select>
-                <p className="text-[11px] text-[#737780] mt-1">Provider users only see their own organisation's data.</p>
+                <p className="text-[11px] text-[#737780] mt-1">Provider users only see data belonging to their organisation.</p>
               </div>
             ) : (
               <div>

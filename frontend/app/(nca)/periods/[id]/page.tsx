@@ -8,14 +8,19 @@ import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { useToast } from "@/components/ui/Toast";
-import type { ReportingPeriod, ExpectedSubmission, FormTemplate, ProviderProfile } from "@/lib/types";
-import { PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
+import type { ReportingPeriod, ExpectedSubmission, FormTemplate, ProviderProfile, User } from "@/lib/types";
+import { PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 
 export default function PeriodDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
   const qc = useQueryClient();
   const [confirmActivate, setConfirmActivate] = useState(false);
+  const { data: me } = useQuery<User>({
+    queryKey: ["me"],
+    queryFn: () => api("/auth/me/"),
+  });
+  const canManagePeriods = me?.capabilities.can_manage_periods ?? false;
 
   const { data: period, isLoading: periodLoading } = useQuery<ReportingPeriod>({
     queryKey: ["period", id],
@@ -32,13 +37,13 @@ export default function PeriodDetailPage() {
   const { data: allTemplates } = useQuery<{ results: FormTemplate[] }>({
     queryKey: ["form-templates-all"],
     queryFn: () => api("/form-templates/?status=ACTIVE"),
-    enabled: period?.status === "DRAFT",
+    enabled: canManagePeriods && period?.status === "DRAFT",
   });
 
   const { data: allProviders } = useQuery<{ results: ProviderProfile[] }>({
     queryKey: ["providers-all"],
     queryFn: () => api("/providers/?status=ACTIVE"),
-    enabled: period?.status === "DRAFT",
+    enabled: canManagePeriods && period?.status === "DRAFT",
   });
 
   // Currently assigned
@@ -124,7 +129,7 @@ export default function PeriodDetailPage() {
           }`}>{period.status}</span>
         </div>
 
-        {period.status === "DRAFT" && (
+        {canManagePeriods && period.status === "DRAFT" && (
           <div>
             {confirmActivate ? (
               <div className="flex gap-2 items-center">
@@ -166,7 +171,7 @@ export default function PeriodDetailPage() {
       </div>
 
       {/* ── DRAFT: Assignment panels ─────────────────────────────────────── */}
-      {period.status === "DRAFT" && (
+      {canManagePeriods && period.status === "DRAFT" && (
         <div className="space-y-4">
           {/* Coverage preview — shows which categories will get forms */}
           {assignedTemplateIds.size > 0 && assignedProviderIds.size > 0 && (() => {
@@ -216,7 +221,7 @@ export default function PeriodDetailPage() {
               <div className="space-y-3 max-h-72 overflow-y-auto">
                 {Object.entries(
                   (allTemplates?.results ?? []).reduce<Record<string, FormTemplate[]>>((acc, t) => {
-                    const cat = PROVIDER_CATEGORY_LABELS[t.provider_category] ?? t.provider_category;
+                    const cat = `${SECTOR_LABELS[t.sector]} · ${PROVIDER_CATEGORY_LABELS[t.provider_category] ?? t.provider_category}`;
                     if (!acc[cat]) acc[cat] = [];
                     acc[cat].push(t);
                     return acc;
@@ -255,7 +260,7 @@ export default function PeriodDetailPage() {
               <div className="space-y-3 max-h-72 overflow-y-auto">
                 {Object.entries(
                   (allProviders?.results ?? []).reduce<Record<string, ProviderProfile[]>>((acc, p) => {
-                    const cat = PROVIDER_CATEGORY_LABELS[p.category] ?? p.category;
+                    const cat = `${SECTOR_LABELS[p.sector]} · ${PROVIDER_CATEGORY_LABELS[p.category] ?? p.category}`;
                     if (!acc[cat]) acc[cat] = [];
                     acc[cat].push(p);
                     return acc;

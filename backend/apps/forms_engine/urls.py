@@ -5,6 +5,12 @@ urlpatterns = [
     # Form Templates
     path("form-templates/",                                         views.FormTemplateListView.as_view()),
     path("form-templates/<int:pk>/",                                views.FormTemplateDetailView.as_view()),
+    path("form-families/",                                         views.FormFamilyListCreate.as_view()),
+    path("form-families/<int:pk>/approve-frequency/",             views.ApproveFrequencyDecisionView.as_view()),
+    path("form-templates/<int:pk>/clone/",                         views.CloneFormVersionView.as_view()),
+    path("form-templates/<int:pk>/approve/",                       views.ApproveFormVersionView.as_view()),
+    path("form-templates/<int:pk>/publication-checks/",            views.PublicationChecksView.as_view()),
+    path("form-templates/<int:pk>/validation-rules/",              views.ValidationRuleListCreate.as_view()),
     path("form-templates/<int:pk>/sections/",                       views.SectionListCreateView.as_view()),
     path("form-templates/<int:pk>/sections/<int:sid>/",             views.SectionDetailView.as_view()),
     path("form-templates/<int:pk>/sections/<int:sid>/fields/",      views.FieldListCreateView.as_view()),

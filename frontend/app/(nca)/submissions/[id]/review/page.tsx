@@ -11,7 +11,7 @@ import {
   CheckCircle2, XCircle, AlertTriangle, MessageSquare,
   Clock, ChevronDown, ChevronUp, ChevronRight,
 } from "lucide-react";
-import type { WorkflowStatus, FormSection, FieldStatus } from "@/lib/types";
+import type { WorkflowStatus, FormSection, FieldStatus, User } from "@/lib/types";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -32,6 +32,8 @@ interface SectionValue {
   id: number; field: number | null; grid: number | null;
   grid_row_id: string; grid_column: number | null;
   value: string; value_status: FieldStatus; explanation: string;
+  non_filled_disposition: "ACCEPTED" | "REJECTED" | null;
+  disposition_note: string;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -70,9 +72,11 @@ const STATUS_COLORS: Partial<Record<FieldStatus, string>> = {
 // ─── Section Data Panel ───────────────────────────────────────────────────────
 
 function SectionDataPanel({
-  section, submissionId,
-}: { section: FormSection; submissionId: number }) {
+  section, submissionId, canReview,
+}: { section: FormSection; submissionId: number; canReview: boolean }) {
   const [open, setOpen] = useState(false);
+  const qc = useQueryClient();
+  const [decisionPending, setDecisionPending] = useState<number | null>(null);
 
   const { data: values, isLoading } = useQuery<SectionValue[]>({
     queryKey: ["section-values", submissionId, section.section_code],
@@ -81,6 +85,16 @@ function SectionDataPanel({
   });
 
   const valueMap = new Map((values ?? []).map(v => [v.field, v]));
+
+  async function setDisposition(valueId: number, decision: "ACCEPTED" | "REJECTED") {
+    const note = decision === "REJECTED" ? window.prompt("Why is this explanation rejected?") : "Accepted during regulatory review.";
+    if (decision === "REJECTED" && !note?.trim()) return;
+    setDecisionPending(valueId);
+    try {
+      await api.post(`/submissions/${submissionId}/values/${valueId}/non-filled-disposition/`, { decision, note });
+      await qc.invalidateQueries({ queryKey: ["section-values", submissionId, section.section_code] });
+    } finally { setDecisionPending(null); }
+  }
 
   const hasIssues = (values ?? []).some(v =>
     v.value_status === "MISSING" || v.value_status === "WAITING_CORRECTION"
@@ -158,6 +172,17 @@ function SectionDataPanel({
                             {v?.explanation && (
                               <p className="text-[11px] text-[#737780] mt-0.5 italic">{v.explanation}</p>
                             )}
+                            {v && ["NOT_APPLICABLE", "NOT_AVAILABLE", "NOT_REQUIRED"].includes(v.value_status) && (
+                              <div className="mt-2 flex items-center gap-1.5">
+                                <span className="text-[10px] text-[#737780]">Disposition: {v.non_filled_disposition ?? "Pending"}</span>
+                                {canReview && <>
+                                  <button disabled={decisionPending === v.id} onClick={() => setDisposition(v.id, "ACCEPTED")}
+                                    className="rounded border border-[#1f7a4d] px-2 py-0.5 text-[10px] text-[#1f7a4d]">Accept</button>
+                                  <button disabled={decisionPending === v.id} onClick={() => setDisposition(v.id, "REJECTED")}
+                                    className="rounded border border-[#e31937] px-2 py-0.5 text-[10px] text-[#e31937]">Reject</button>
+                                </>}
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-2.5">
                             {isIssue && (
@@ -202,6 +227,11 @@ export default function ReviewPage() {
   const [activeTab, setActiveTab]       = useState<"data" | "review">("data");
   const [submitting, setSubmitting]     = useState(false);
   const [error, setError]               = useState<string | null>(null);
+  const { data: me } = useQuery<User>({
+    queryKey: ["me"],
+    queryFn: () => api.get<User>("/auth/me/"),
+  });
+  const canReview = me?.capabilities.can_review_submissions ?? false;
 
   const submissionQ = useQuery({
     queryKey: ["submission", submissionId],
@@ -258,12 +288,28 @@ export default function ReviewPage() {
     }
   }
 
+  async function startReview() {
+    setSubmitting(true); setError(null);
+    try {
+      await api.post(`/submissions/${submissionId}/review/start/`, {});
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["submission", submissionId] }),
+        qc.invalidateQueries({ queryKey: ["review-history", submissionId] }),
+      ]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Review could not be started.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   if (submissionQ.isLoading) {
     return <div className="space-y-4">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}</div>;
   }
   if (!sub) return <p className="text-[13px] text-[#737780]">Submission not found.</p>;
 
-  const reviewable = ["SUBMITTED", "UNDER_REVIEW", "RESUBMITTED"].includes(sub.workflow_status);
+  const reviewable = sub.workflow_status === "UNDER_REVIEW";
+  const canStartReview = ["SUBMITTED", "RESUBMITTED"].includes(sub.workflow_status);
   const missingCount = (completion?.sections ?? []).filter(s => !s.complete).length;
 
   return (
@@ -365,7 +411,7 @@ export default function ReviewPage() {
               </div>
             ) : (
               formSections.map(section => (
-                <SectionDataPanel key={section.id} section={section} submissionId={submissionId} />
+                <SectionDataPanel key={section.id} section={section} submissionId={submissionId} canReview={canReview && sub.workflow_status === "UNDER_REVIEW"} />
               ))
             )}
           </div>
@@ -410,7 +456,18 @@ export default function ReviewPage() {
 
           {/* Right: action panel + history */}
           <div className="col-span-2 space-y-4">
-            {reviewable && (
+            {canReview && canStartReview && (
+              <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-5">
+                <p className="text-[13px] font-semibold text-[#191c1e]">Regulatory review has not started</p>
+                <p className="mt-1 text-[12px] text-[#737780]">Start review to record the reviewer and timestamp before making a disposition.</p>
+                {error && <p className="mt-2 text-[12px] text-[#e31937]">{error}</p>}
+                <button onClick={startReview} disabled={submitting}
+                  className="mt-4 rounded-[8px] bg-[#002d5b] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">
+                  {submitting ? "Starting…" : "Start Review"}
+                </button>
+              </div>
+            )}
+            {canReview && reviewable && (
               <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-5">
                 <p className="text-[13px] font-semibold text-[#191c1e] mb-4">Review Action</p>
                 <div className="grid grid-cols-2 gap-2 mb-4">

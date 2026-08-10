@@ -3,6 +3,7 @@ from . import views as v
 
 urlpatterns = [
     path("dashboard/summary/", v.DashboardSummaryView.as_view()),
+    path("dashboard/metric-catalogue/", v.MetricCatalogueView.as_view()),
     path("dashboard/charts/status-donut/", v.StatusDonutView.as_view()),
     path("dashboard/charts/category-completion/", v.CategoryCompletionView.as_view()),
     path("dashboard/charts/submission-trend/", v.SubmissionTrendView.as_view()),
@@ -21,11 +22,20 @@ urlpatterns = [
     path("submissions/<int:pk>/submit-for-approval/", v.SubmitForApprovalView.as_view()),
     path("submissions/<int:pk>/official-submit/", v.OfficialSubmitView.as_view()),
     path("submissions/<int:pk>/review/history/", v.ReviewHistoryView.as_view()),
+    path("submissions/<int:pk>/review/start/", v.StartReviewView.as_view()),
     path("submissions/<int:pk>/review/approve/", v.ReviewApproveView.as_view()),
     path("submissions/<int:pk>/review/reject/", v.ReviewRejectView.as_view()),
     path("submissions/<int:pk>/review/request-correction/", v.ReviewRequestCorrectionView.as_view()),
     path("submissions/<int:pk>/review/add-note/", v.ReviewAddNoteView.as_view()),
+    path("submissions/<int:pk>/values/<int:value_id>/non-filled-disposition/", v.NonFilledDispositionView.as_view()),
+    path("submissions/<int:pk>/correction-diff/", v.CorrectionDiffView.as_view()),
+    path("submissions/<int:pk>/receipt/", v.ReceiptDownloadView.as_view()),
     path("submissions/<int:pk>/return-to-draft/", v.ReturnToDraftView.as_view()),
     path("expected-submissions/<int:pk>/assign/", v.AssignOfficerView.as_view()),
     path("expected-submissions/<int:pk>/override-due-date/", v.OverrideDueDateView.as_view()),
+    path("deadline-change-requests/<int:pk>/decision/", v.DeadlineDecisionView.as_view()),
+    path("expected-submissions/<int:pk>/overrides/", v.SubmissionOverrideView.as_view()),
+    path("submission-overrides/<int:pk>/decision/", v.SubmissionOverrideDecisionView.as_view()),
+    path("periods/<int:period_id>/reminder-policies/", v.ReminderPolicyListCreate.as_view()),
+    path("reminder-policies/<int:pk>/approve/", v.ApproveReminderPolicyView.as_view()),
 ]

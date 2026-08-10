@@ -3,6 +3,10 @@ from django.db import models
 
 
 class ProviderProfile(models.Model):
+    SECTOR_CHOICES = [
+        ("TELECOM", "Telecom"),
+        ("BROADCASTING", "Broadcasting"),
+    ]
     CATEGORY_CHOICES = [
         ("MNO", "MNO"),
         ("ISP", "ISP"),
@@ -26,6 +30,7 @@ class ProviderProfile(models.Model):
     )
     registered_name = models.CharField(max_length=255)
     trade_name = models.CharField(max_length=255, blank=True)
+    sector = models.CharField(max_length=20, choices=SECTOR_CHOICES, default="TELECOM")
     category = models.CharField(max_length=30, choices=CATEGORY_CHOICES)
     licence_type = models.CharField(max_length=100)
     licence_number = models.CharField(max_length=100)

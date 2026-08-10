@@ -258,14 +258,14 @@ fi
 section "7. Exports"
 # =============================================================================
 
-if [ -n "$NCA_TOKEN" ] && [ -n "$PROV_ID" ] && [ -n "$PERIOD_ID" ]; then
+if [ -n "$NCA_TOKEN" ] && [ -n "$PROV_ID" ]; then
   EXPORT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/exports/csv/" \
     -H "Authorization: Bearer $NCA_TOKEN" \
     -H "Content-Type: application/json" \
-    -d "{\"provider_id\":$PROV_ID}")
+    -d "{\"filters\":{\"provider\":$PROV_ID}}")
   check_status "POST /exports/csv/" "200" "$EXPORT_STATUS" ""
 else
-  skip "Export test" "Need provider ID and period ID from earlier tests"
+  skip "Export test" "Need provider ID from earlier tests"
 fi
 
 # =============================================================================

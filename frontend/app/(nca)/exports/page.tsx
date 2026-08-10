@@ -2,15 +2,14 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, downloadAuthenticated } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatDateTime } from "@/lib/utils";
 import { Download, FileText, Clock } from "lucide-react";
-import { getAccessToken } from "@/lib/auth";
 
 interface ExportLog {
   id: number;
-  export_type: "CSV" | "PDF";
+  export_type: "CSV" | "XLSX" | "PDF";
   filters: Record<string, string>;
   generated_by: string;
   generated_at: string;
@@ -31,23 +30,13 @@ export default function ExportsPage() {
     setExporting(true);
     setExported(null);
     try {
-      const token = getAccessToken();
-      const res = await fetch("/api/v1/exports/csv/", {
+      await downloadAuthenticated("/exports/csv/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ filters }),
-      });
-      if (!res.ok) throw new Error("Export failed");
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `nca_export_${new Date().toISOString().slice(0, 10)}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
+      }, `nca_export_${new Date().toISOString().slice(0, 10)}.csv`);
       setExported("CSV downloaded successfully.");
       logsQ.refetch();
     } catch {

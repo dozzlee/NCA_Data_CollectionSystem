@@ -1,13 +1,15 @@
 from django.utils import timezone
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
-from apps.users.permissions import IsNCAUser
+from apps.users.permissions import IsNCAEditor, IsNCAUser, IsSystemAdmin
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.submissions.models import ExpectedSubmission
-from .models import ComplianceFlag, EmailTemplate, EmailLog, FlagCorrespondence
-from .serializers import ComplianceFlagSerializer, EmailTemplateSerializer, EmailLogSerializer, FlagCorrespondenceSerializer
+from .models import ComplianceFlag, EmailTemplate, EmailLog, FlagCorrespondence, EmailDeliveryEvent, TransactionalOutbox
+from .serializers import ComplianceFlagSerializer, EmailTemplateSerializer, EmailLogSerializer, FlagCorrespondenceSerializer, EmailDeliveryEventSerializer
+from .emailing import render_template, validate_template
+from apps.audit.services import record_audit
 
 
 class ProviderComplianceFlagListView(generics.ListAPIView):
@@ -48,9 +50,34 @@ class ComplianceDashboardView(APIView):
         })
 
 
-class EmailTemplateListView(generics.ListAPIView):
+class EmailTemplateListView(generics.ListCreateAPIView):
     queryset = EmailTemplate.objects.all()
     serializer_class = EmailTemplateSerializer
+
+    def get_permissions(self):
+        return [(IsSystemAdmin if self.request.method == "POST" else IsNCAUser)()]
+
+    def perform_create(self, serializer):
+        template_type = serializer.validated_data["template_type"]
+        version = (EmailTemplate.objects.filter(template_type=template_type).order_by("-version").values_list("version", flat=True).first() or 0) + 1
+        serializer.save(version=version, status="DRAFT")
+
+
+class ApproveEmailTemplateView(APIView):
+    permission_classes = [IsSystemAdmin]
+
+    def post(self, request, pk):
+        template = generics.get_object_or_404(EmailTemplate, pk=pk, status="DRAFT")
+        check = validate_template(template)
+        if not check["valid"]:
+            return Response({"detail": "Template contains unsupported placeholders.", **check}, status=409)
+        EmailTemplate.objects.filter(template_type=template.template_type, status="APPROVED").update(status="ARCHIVED")
+        template.status = "APPROVED"; template.approved_by = request.user; template.approved_at = timezone.now()
+        template.placeholders = check["used"]
+        template.save(update_fields=["status", "approved_by", "approved_at", "placeholders"])
+        record_audit(user=request.user, action="EMAIL_TEMPLATE_APPROVED", entity_type="EmailTemplate", entity_id=template.id,
+            after={"template_type": template.template_type, "version": template.version})
+        return Response(EmailTemplateSerializer(template).data)
 
 
 class ComplianceFlagListView(generics.ListAPIView):
@@ -68,7 +95,7 @@ class ComplianceFlagListView(generics.ListAPIView):
 
 class UpdateFlagStatusView(APIView):
     """Update flag status to any valid status."""
-    permission_classes = [IsNCAUser]
+    permission_classes = [IsNCAEditor]
 
     def patch(self, request, pk):
         try:
@@ -94,7 +121,7 @@ class UpdateFlagStatusView(APIView):
 
 class AcknowledgeFlagView(APIView):
     """Deprecated: use UpdateFlagStatusView instead."""
-    permission_classes = [IsNCAUser]
+    permission_classes = [IsNCAEditor]
 
     def patch(self, request, pk):
         try:
@@ -109,7 +136,7 @@ class AcknowledgeFlagView(APIView):
 
 class ResolveFlagView(APIView):
     """Deprecated: use UpdateFlagStatusView instead."""
-    permission_classes = [IsNCAUser]
+    permission_classes = [IsNCAEditor]
 
     def patch(self, request, pk):
         try:
@@ -123,14 +150,16 @@ class ResolveFlagView(APIView):
 
 
 class GenerateEmailView(APIView):
-    permission_classes = [IsNCAUser]
+    permission_classes = [IsNCAEditor]
 
     def post(self, request):
         template_type = request.data.get("template_type")
         expected_ids = request.data.get("expected_submission_ids", [])
 
         try:
-            template = EmailTemplate.objects.get(template_type=template_type)
+            template = EmailTemplate.objects.filter(template_type=template_type, status="APPROVED").order_by("-version").first()
+            if not template:
+                raise EmailTemplate.DoesNotExist
         except EmailTemplate.DoesNotExist:
             return Response({"detail": f"No template for type: {template_type}"}, status=400)
 
@@ -146,19 +175,10 @@ class GenerateEmailView(APIView):
             if not recipients:
                 recipients = [{"email": expected.provider.primary_email, "name": expected.provider.registered_name}]
 
-            # Simple placeholder substitution
-            body = template.body
-            subject = template.subject
-            replacements = {
-                "{{provider_name}}": expected.provider.registered_name,
-                "{{form_name}}": expected.form_template.name,
-                "{{period_name}}": expected.period.name,
-                "{{due_date}}": expected.period.due_at.strftime("%d %B %Y"),
-                "{{workflow_status}}": expected.workflow_status,
-            }
-            for k, v in replacements.items():
-                body = body.replace(k, v)
-                subject = subject.replace(k, v)
+            try:
+                subject, body, _ = render_template(template, expected)
+            except ValueError as exc:
+                return Response({"detail": str(exc)}, status=409)
 
             log = EmailLog.objects.create(
                 template=template, subject=subject, body=body,
@@ -172,30 +192,83 @@ class GenerateEmailView(APIView):
 
 
 class EmailLogListView(generics.ListAPIView):
+    permission_classes = [IsNCAUser]
     queryset = EmailLog.objects.select_related("provider", "period", "generated_by").order_by("-generated_at")
     serializer_class = EmailLogSerializer
     filterset_fields = ["status", "provider", "compliance_stage"]
 
 
 class MarkEmailSentView(APIView):
-    permission_classes = [IsNCAUser]
+    permission_classes = [IsNCAEditor]
 
     def patch(self, request, pk):
         try:
             log = EmailLog.objects.get(pk=pk)
         except EmailLog.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
-        log.status = "SENT"
-        log.sent_by = request.user
-        log.sent_at = timezone.now()
-        log.save(update_fields=["status", "sent_by", "sent_at"])
-        return Response({"detail": "Marked as sent."})
+        return Response({"detail": "Manual Sent status is disabled. Queue the message through a configured delivery provider."}, status=410)
+
+
+class QueueEmailView(APIView):
+    permission_classes = [IsNCAEditor]
+
+    def post(self, request, pk):
+        log = generics.get_object_or_404(EmailLog, pk=pk, status="DRAFT")
+        log.status = "QUEUED"
+        log.queued_at = timezone.now()
+        log.idempotency_key = log.idempotency_key or f"email:{log.id}"
+        log.save(update_fields=["status", "queued_at", "idempotency_key"])
+        TransactionalOutbox.objects.get_or_create(
+            topic="email.queued", aggregate_type="EmailLog", aggregate_id=str(log.id),
+            idempotency_key=log.idempotency_key,
+            defaults={"payload": {"email_log_id": log.id, "provider": "UNCONFIGURED"}},
+        )
+        record_audit(user=request.user, action="EMAIL_QUEUED", entity_type="EmailLog", entity_id=log.id)
+        return Response({"id": log.id, "status": log.status, "delivery_enabled": False}, status=202)
+
+
+class ValidateTemplateView(APIView):
+    permission_classes = [IsNCAEditor]
+
+    def post(self, request, pk):
+        return Response(validate_template(generics.get_object_or_404(EmailTemplate, pk=pk)))
+
+
+class DeliveryEventList(generics.ListCreateAPIView):
+    permission_classes = [IsNCAUser]
+    serializer_class = EmailDeliveryEventSerializer
+
+    def get_queryset(self):
+        return EmailDeliveryEvent.objects.filter(email_id=self.kwargs["pk"]).order_by("occurred_at")
+
+    def get_permissions(self):
+        permission_class = IsNCAUser if self.request.method == "GET" else IsSystemAdmin
+        return [permission_class()]
+
+    def perform_create(self, serializer):
+        email = generics.get_object_or_404(EmailLog, pk=self.kwargs["pk"])
+        event = serializer.save(email=email)
+        terminal_status = {"DELIVERED": "DELIVERED", "FAILED": "FAILED", "BOUNCED": "FAILED"}.get(event.event_type)
+        if terminal_status:
+            email.status = terminal_status
+            email.save(update_fields=["status"])
+        record_audit(
+            user=self.request.user,
+            action="EMAIL_DELIVERY_EVENT_RECORDED",
+            entity_type="EmailLog",
+            entity_id=email.id,
+            after={"event_type": event.event_type, "provider_event_id": event.provider_event_id},
+        )
 
 
 class FlagCorrespondenceListView(generics.ListCreateAPIView):
     """List correspondence for a specific flag, or add a note."""
     permission_classes = [IsNCAUser]
     serializer_class = FlagCorrespondenceSerializer
+
+    def get_permissions(self):
+        permission_class = IsNCAUser if self.request.method == "GET" else IsNCAEditor
+        return [permission_class()]
 
     def get_queryset(self):
         flag_id = self.kwargs.get("flag_id")
@@ -207,7 +280,7 @@ class FlagCorrespondenceListView(generics.ListCreateAPIView):
 
 class DraftEmailFromFlagView(APIView):
     """Draft an email directly from a flag with a specific template."""
-    permission_classes = [IsNCAUser]
+    permission_classes = [IsNCAEditor]
 
     def post(self, request, flag_id):
         try:
@@ -217,7 +290,9 @@ class DraftEmailFromFlagView(APIView):
 
         template_type = request.data.get("template_type")
         try:
-            template = EmailTemplate.objects.get(template_type=template_type)
+            template = EmailTemplate.objects.filter(template_type=template_type, status="APPROVED").order_by("-version").first()
+            if not template:
+                raise EmailTemplate.DoesNotExist
         except EmailTemplate.DoesNotExist:
             return Response({"detail": f"No template for type: {template_type}"}, status=400)
 
@@ -227,18 +302,10 @@ class DraftEmailFromFlagView(APIView):
         if not recipients:
             recipients = [{"email": expected.provider.primary_email, "name": expected.provider.registered_name}]
 
-        body = template.body
-        subject = template.subject
-        replacements = {
-            "{{provider_name}}": expected.provider.registered_name,
-            "{{form_name}}": expected.form_template.name,
-            "{{period_name}}": expected.period.name,
-            "{{due_date}}": expected.period.due_at.strftime("%d %B %Y"),
-            "{{workflow_status}}": expected.workflow_status,
-        }
-        for k, v in replacements.items():
-            body = body.replace(k, v)
-            subject = subject.replace(k, v)
+        try:
+            subject, body, _ = render_template(template, expected)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=409)
 
         log = EmailLog.objects.create(
             template=template, subject=subject, body=body,
@@ -249,9 +316,9 @@ class DraftEmailFromFlagView(APIView):
 
         FlagCorrespondence.objects.create(
             flag=flag,
-            message_type="EMAIL_SENT",
+            message_type="NOTE",
             subject=subject,
-            message=body,
+            message="Email draft created; it has not been sent.\n\n" + body,
             created_by=request.user,
             email_log=log,
         )
