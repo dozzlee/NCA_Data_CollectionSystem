@@ -20,7 +20,7 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProviderProfile
         fields = [
-            "id", "provider_id", "registered_name", "trade_name", "category",
+            "id", "provider_id", "organization", "registered_name", "trade_name", "category",
             "licence_type", "licence_number", "licence_issue_date", "licence_expiry_date",
             "physical_address", "digital_address", "postal_address", "website",
             "primary_email", "primary_phone", "status",
@@ -34,7 +34,7 @@ class ProviderProfileListSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProviderProfile
         fields = [
-            "id", "provider_id", "registered_name", "trade_name", "category",
+            "id", "provider_id", "organization", "registered_name", "trade_name", "category",
             "licence_type", "licence_number", "primary_email", "primary_phone",
             "status", "created_at",
         ]

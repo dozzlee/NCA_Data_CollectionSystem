@@ -21,6 +21,8 @@ env/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+*.sqlite3
+*.sqlite3-journal
 staticfiles/
 media/
 
@@ -32,6 +34,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.pnpm-store/
+pnpm-lock.yaml
+pnpm-workspace.yaml
+*.tsbuildinfo
+
+# Local analysis workspace
+.analysis/
 
 # OS
 .DS_Store

@@ -28,7 +28,7 @@ export default function PeriodDetailPage() {
   });
 
   const activateMutation = useMutation({
-    mutationFn: () => api(`/periods/${id}/activate/`, { method: "POST" }),
+    mutationFn: () => api.post<{ detail: string; expected_count: number }>(`/periods/${id}/activate/`),
     onSuccess: (data: { detail: string; expected_count: number }) => {
       toast(`Period activated — ${data.expected_count} expected submissions created.`, "success");
       setConfirmActivate(false);

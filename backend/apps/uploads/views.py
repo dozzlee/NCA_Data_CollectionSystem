@@ -10,6 +10,7 @@ from rest_framework.parsers import MultiPartParser
 from apps.audit.models import AuditEvent
 from apps.forms_engine.models import KMZUploadRequirement, KMZ_ELIGIBLE_FORMS
 from apps.submissions.models import Submission
+from apps.users.permissions import IsNCAUser, IsProviderDataEntry
 from .models import SubmissionKMZUpload, SubmissionExcelBackup
 
 
@@ -30,13 +31,20 @@ def save_upload(file, subfolder, filename):
     return os.path.join(subfolder, filename)
 
 
+def submission_for(user, pk):
+    qs = Submission.objects.select_related("expected__provider__organization", "expected__form_template")
+    if user.is_provider:
+        qs = qs.filter(expected__provider__organization=user.organization)
+    return qs.get(pk=pk)
+
+
 class KMZUploadView(APIView):
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser]
 
     def get(self, request, pk):
         try:
-            submission = Submission.objects.get(pk=pk)
+            submission = submission_for(request.user, pk)
         except Submission.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
 
@@ -57,11 +65,15 @@ class KMZUploadView(APIView):
 
     def post(self, request, pk):
         try:
-            submission = Submission.objects.get(pk=pk)
+            submission = submission_for(request.user, pk)
         except Submission.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
 
         form_code = submission.expected.form_template.form_code
+        if request.user.role != "PROVIDER_DATA_ENTRY":
+            return Response({"detail": "Only Provider Data Entry can upload files."}, status=403)
+        if submission.expected.workflow_status not in ("DRAFT", "CORRECTION_REQUESTED"):
+            return Response({"detail": "Submission is not editable."}, status=400)
         if form_code not in KMZ_ELIGIBLE_FORMS:
             return Response(
                 {"detail": f"KMZ uploads are only accepted for fibre forms (DC-DBS05, DC-SUB03). This form is {form_code}."},
@@ -114,7 +126,7 @@ class KMZDownloadView(APIView):
 
     def get(self, request, pk, uid):
         try:
-            submission = Submission.objects.get(pk=pk)
+            submission = submission_for(request.user, pk)
             upload = SubmissionKMZUpload.objects.get(pk=uid, submission=submission)
         except (Submission.DoesNotExist, SubmissionKMZUpload.DoesNotExist):
             return Response({"detail": "Not found."}, status=404)
@@ -128,7 +140,7 @@ class KMZDownloadView(APIView):
 
 
 class KMZReviewView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def patch(self, request, pk, uid):
         try:
@@ -160,7 +172,7 @@ class ExcelBackupListView(APIView):
 
     def get(self, request, pk):
         try:
-            submission = Submission.objects.get(pk=pk)
+            submission = submission_for(request.user, pk)
         except Submission.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
         backups = SubmissionExcelBackup.objects.filter(submission=submission).order_by("-uploaded_at")
@@ -174,16 +186,18 @@ class ExcelBackupListView(APIView):
 
 
 class ExcelBackupUploadView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsProviderDataEntry]
     parser_classes = [MultiPartParser]
 
     def post(self, request, pk):
         try:
-            submission = Submission.objects.get(pk=pk)
+            submission = submission_for(request.user, pk)
         except Submission.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
 
         file = request.FILES.get("file")
+        if submission.expected.workflow_status not in ("DRAFT", "CORRECTION_REQUESTED"):
+            return Response({"detail": "Submission is not editable."}, status=400)
         if not file:
             return Response({"detail": "file is required."}, status=400)
 

@@ -1,0 +1,1395 @@
+{
+  "source": {
+    "fileName": "Industry_Dashboard_Indicators_and_Charts.docx",
+    "authority": "Indicator definitions and chart-group mapping",
+    "reviewedAt": "2026-07-30",
+    "observationData": "Not supplied in the source document",
+    "targetData": "Not supplied in the source document"
+  },
+  "summary": {
+    "chartPlacements": 50,
+    "distinctGraphs": 39,
+    "indicatorSections": 14,
+    "seriesMentions": 157,
+    "mappedPlacements": 50
+  },
+  "commonElements": [
+    {
+      "field": "Granularity",
+      "details": "Monthly, quarterly, and yearly views are available."
+    },
+    {
+      "field": "Period controls",
+      "details": "Range view supports from/to periods; single-period view focuses the dashboard on one selected period."
+    },
+    {
+      "field": "Operator filter",
+      "details": "Operator selector supports all operators or a single selected operator when applicable."
+    },
+    {
+      "field": "Trend modes",
+      "details": "Absolute values, quarter-on-quarter, year-on-year, and index views are supported for range analysis."
+    },
+    {
+      "field": "Data table toggle",
+      "details": "Each chart can expose its underlying data table."
+    },
+    {
+      "field": "KPI grid",
+      "details": "The dashboard shows headline KPI cards from the visible charts in the active indicator section."
+    },
+    {
+      "field": "CSV export",
+      "details": "Exports visible chart data with dashboard, section, granularity, chart, unit, period, series, value, and source workbook."
+    },
+    {
+      "field": "Workbook upload",
+      "details": "Each dashboard includes an upload panel for replacing demo data with a live workbook dataset."
+    },
+    {
+      "field": "Forecast panel",
+      "details": "A forecast panel is available for the configured default metric and can switch to other chart metrics."
+    },
+    {
+      "field": "Custom charts",
+      "details": "When a workbook is active, users can create custom charts and add dashboard-visible custom chart sections."
+    }
+  ],
+  "sectors": [
+    {
+      "id": "mobile",
+      "label": "Mobile Industry",
+      "dashboardTitle": "Mobile Industry Trends",
+      "scope": "Voice, data, SMS, tariffs, devices, and market structure by operator.",
+      "defaultRange": "12 periods",
+      "defaultForecastMetric": "Mobile Data Traffic",
+      "indicatorSections": [
+        "Overview",
+        "Voice",
+        "SMS",
+        "Mobile Data",
+        "Tariffs",
+        "Devices"
+      ]
+    },
+    {
+      "id": "fixed",
+      "label": "Fixed Network",
+      "dashboardTitle": "Fixed Network Trends",
+      "scope": "Fixed voice, data, broadband subscriptions, traffic, and operator structure.",
+      "defaultRange": "10 periods",
+      "defaultForecastMetric": "Total Fixed Broadband Subscriptions",
+      "indicatorSections": [
+        "Overview",
+        "Fixed Voice",
+        "Fixed Data",
+        "Fixed Broadband"
+      ]
+    },
+    {
+      "id": "bwa",
+      "label": "BWA",
+      "dashboardTitle": "BWA Trends",
+      "scope": "Broadband Wireless Access subscriptions, traffic, and usage per subscription.",
+      "defaultRange": "10 periods",
+      "defaultForecastMetric": "BWA Total Data Traffic",
+      "indicatorSections": [
+        "Overview",
+        "Subscriptions",
+        "Traffic",
+        "Usage"
+      ]
+    }
+  ],
+  "sectionCounts": [
+    {
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Overview",
+      "placements": 4
+    },
+    {
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Voice",
+      "placements": 9
+    },
+    {
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "SMS",
+      "placements": 4
+    },
+    {
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Mobile Data",
+      "placements": 7
+    },
+    {
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Tariffs",
+      "placements": 2
+    },
+    {
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Devices",
+      "placements": 2
+    },
+    {
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Overview",
+      "placements": 4
+    },
+    {
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Voice",
+      "placements": 4
+    },
+    {
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Data",
+      "placements": 2
+    },
+    {
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Broadband",
+      "placements": 3
+    },
+    {
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Overview",
+      "placements": 3
+    },
+    {
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Subscriptions",
+      "placements": 3
+    },
+    {
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Traffic",
+      "placements": 2
+    },
+    {
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Usage",
+      "placements": 1
+    }
+  ],
+  "sectorCounts": [
+    {
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "placements": 28
+    },
+    {
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "placements": 13
+    },
+    {
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "placements": 9
+    }
+  ],
+  "dataQualityNotes": [
+    "The source document inventories indicator names, chart groupings, series, and source-sheet references, but it does not provide machine-readable observations.",
+    "No target values are defined in the source document, so actual-versus-target comparisons are intentionally not displayed.",
+    "Repeated graphs are preserved as separate placements when the document lists them in more than one dashboard section.",
+    "Units are not specified in the indicator tables and are therefore shown as unavailable rather than inferred.",
+    "Embedded screenshots are treated as visual references, not as authoritative observation datasets."
+  ],
+  "placements": [
+    {
+      "id": "mobile-overview-chart-1-01",
+      "sourceBlock": 12,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Overview",
+      "chartLabel": "Chart 1",
+      "graph": "Mobile Data Subscriptions and Penetration Rate",
+      "series": [
+        "Mobile data subscriptions",
+        "Penetration Rate"
+      ],
+      "sourceSheet": "Tab12. Mob Data Subs & Pen_Rate",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Mobile Industry / Overview",
+        "Mobile Industry / Mobile Data"
+      ]
+    },
+    {
+      "id": "mobile-overview-chart-2-02",
+      "sourceBlock": 12,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Overview",
+      "chartLabel": "Chart 2",
+      "graph": "Mobile Data Traffic",
+      "series": [
+        "Total Mobile data usage"
+      ],
+      "sourceSheet": "Tab 16. Mobile Data Traffic",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Mobile Industry / Overview",
+        "Mobile Industry / Mobile Data"
+      ]
+    },
+    {
+      "id": "mobile-overview-chart-3-03",
+      "sourceBlock": 12,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Overview",
+      "chartLabel": "Chart 3",
+      "graph": "Mobile Data Usage per Subscription",
+      "series": [
+        "Total Mobile data usage",
+        "Average Data Subscription",
+        "Data Usage per Subscription"
+      ],
+      "sourceSheet": "Tab17. Mob Data Usage per Subs.",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Mobile Industry / Overview",
+        "Mobile Industry / Mobile Data"
+      ]
+    },
+    {
+      "id": "mobile-overview-chart-4-04",
+      "sourceBlock": 12,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Overview",
+      "chartLabel": "Chart 4",
+      "graph": "Mobile Voice Subscriptions and Market Share per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Glo",
+        "Market share for each operator"
+      ],
+      "sourceSheet": "2. Mobile Voice & Market Share",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Mobile Industry / Overview",
+        "Mobile Industry / Voice"
+      ]
+    },
+    {
+      "id": "mobile-voice-chart-1-05",
+      "sourceBlock": 16,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Voice",
+      "chartLabel": "Chart 1",
+      "graph": "Mobile Voice Subscriptions and Market Share per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Glo",
+        "Market share for each operator"
+      ],
+      "sourceSheet": "2. Mobile Voice & Market Share",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Mobile Industry / Overview",
+        "Mobile Industry / Voice"
+      ]
+    },
+    {
+      "id": "mobile-voice-chart-2-06",
+      "sourceBlock": 16,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Voice",
+      "chartLabel": "Chart 2",
+      "graph": "Prepaid and Postpaid Mobile Voice Subscriptions",
+      "series": [
+        "Prepaid",
+        "Postpaid",
+        "Subscription share for prepaid and postpaid"
+      ],
+      "sourceSheet": "3. MVoice Prepaid & Post Paid",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Voice"
+      ]
+    },
+    {
+      "id": "mobile-voice-chart-3-07",
+      "sourceBlock": 16,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Voice",
+      "chartLabel": "Chart 3",
+      "graph": "Domestic Voice Traffic",
+      "series": [
+        "Off-Net",
+        "On-Net",
+        "Total traffic"
+      ],
+      "sourceSheet": "Tab 5. Total Domestic-MVoice",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Voice"
+      ]
+    },
+    {
+      "id": "mobile-voice-chart-4-08",
+      "sourceBlock": 16,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Voice",
+      "chartLabel": "Chart 4",
+      "graph": "On-Net Domestic Mobile Voice Traffic",
+      "series": [
+        "On-Net Traffic"
+      ],
+      "sourceSheet": "4. Domestic Traffic-OnNet",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Voice"
+      ]
+    },
+    {
+      "id": "mobile-voice-chart-5-09",
+      "sourceBlock": 16,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Voice",
+      "chartLabel": "Chart 5",
+      "graph": "Off-Net Domestic Voice Traffic",
+      "series": [
+        "Mobile to Mobile",
+        "Mobile to Fixed",
+        "Total Off-Net Traffic"
+      ],
+      "sourceSheet": "OffNet Btn Mobile & Fixed",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Voice"
+      ]
+    },
+    {
+      "id": "mobile-voice-chart-6-10",
+      "sourceBlock": 16,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Voice",
+      "chartLabel": "Chart 6",
+      "graph": "Total Domestic Voice Traffic",
+      "series": [
+        "Total traffic"
+      ],
+      "sourceSheet": "Tab 5. Total Domestic-MVoice",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Voice"
+      ]
+    },
+    {
+      "id": "mobile-voice-chart-7-11",
+      "sourceBlock": 16,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Voice",
+      "chartLabel": "Chart 7",
+      "graph": "Total Domestic Voice Traffic per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Operator share rows when available"
+      ],
+      "sourceSheet": "Tab 6. Total Dom-MVoice per MNO",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Voice"
+      ]
+    },
+    {
+      "id": "mobile-voice-chart-8-12",
+      "sourceBlock": 16,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Voice",
+      "chartLabel": "Chart 8",
+      "graph": "International Mobile Voice Traffic",
+      "series": [
+        "Incoming International",
+        "Outgoing International"
+      ],
+      "sourceSheet": "Tab 7. MV International Traffic",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Voice"
+      ]
+    },
+    {
+      "id": "mobile-voice-chart-9-13",
+      "sourceBlock": 16,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Voice",
+      "chartLabel": "Chart 9",
+      "graph": "Minutes of Use per Subscription",
+      "series": [
+        "Minutes of Use",
+        "Average subscriptions"
+      ],
+      "sourceSheet": "Tab 8. MVoice MoU per Subs",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Voice"
+      ]
+    },
+    {
+      "id": "mobile-sms-chart-1-14",
+      "sourceBlock": 20,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "SMS",
+      "chartLabel": "Chart 1",
+      "graph": "Short Message Services (SMS)",
+      "series": [
+        "Off-Net SMS",
+        "On-Net SMS",
+        "Total SMS"
+      ],
+      "sourceSheet": "Tab 9. Number of SMS",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / SMS"
+      ]
+    },
+    {
+      "id": "mobile-sms-chart-2-15",
+      "sourceBlock": 20,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "SMS",
+      "chartLabel": "Chart 2",
+      "graph": "SMS per Subscription",
+      "series": [
+        "SMS per Subscription"
+      ],
+      "sourceSheet": "Tab 11.Average SMS per subs",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / SMS"
+      ]
+    },
+    {
+      "id": "mobile-sms-chart-3-16",
+      "sourceBlock": 20,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "SMS",
+      "chartLabel": "Chart 3",
+      "graph": "Off-Net SMS per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Tigo",
+        "Airtel",
+        "Glo",
+        "Expresso"
+      ],
+      "sourceSheet": "Tab 10. No. of SMS per MNOs",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / SMS"
+      ]
+    },
+    {
+      "id": "mobile-sms-chart-4-17",
+      "sourceBlock": 20,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "SMS",
+      "chartLabel": "Chart 4",
+      "graph": "On-Net SMS per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Tigo",
+        "Airtel",
+        "Glo",
+        "Expresso"
+      ],
+      "sourceSheet": "Tab 10. No. of SMS per MNOs",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / SMS"
+      ]
+    },
+    {
+      "id": "mobile-mobile-data-chart-1-18",
+      "sourceBlock": 24,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Mobile Data",
+      "chartLabel": "Chart 1",
+      "graph": "Mobile Data Subscriptions and Penetration Rate",
+      "series": [
+        "Mobile data subscriptions",
+        "Penetration Rate"
+      ],
+      "sourceSheet": "Tab12. Mob Data Subs & Pen_Rate",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Mobile Industry / Overview",
+        "Mobile Industry / Mobile Data"
+      ]
+    },
+    {
+      "id": "mobile-mobile-data-chart-2-19",
+      "sourceBlock": 24,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Mobile Data",
+      "chartLabel": "Chart 2",
+      "graph": "Machine to Machine Subscriptions",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Total",
+        "Operator share rows when available"
+      ],
+      "sourceSheet": "Tab 13. M-to-M Subscriptions",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Mobile Data"
+      ]
+    },
+    {
+      "id": "mobile-mobile-data-chart-3-20",
+      "sourceBlock": 24,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Mobile Data",
+      "chartLabel": "Chart 3",
+      "graph": "Mobile Data Prepaid and Postpaid Subscriptions",
+      "series": [
+        "Prepaid",
+        "Postpaid",
+        "Subscription share for prepaid and postpaid"
+      ],
+      "sourceSheet": "Tab14. Mob Data Subs_Pre_&_Post",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Mobile Data"
+      ]
+    },
+    {
+      "id": "mobile-mobile-data-chart-4-21",
+      "sourceBlock": 24,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Mobile Data",
+      "chartLabel": "Chart 4",
+      "graph": "Mobile Data Subscriptions per Operator and Market Share",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Glo",
+        "Tigo",
+        "Airtel",
+        "Market share for each operator"
+      ],
+      "sourceSheet": "Tab 15.Mob Data & Mkt Share (2)",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Mobile Data"
+      ]
+    },
+    {
+      "id": "mobile-mobile-data-chart-5-22",
+      "sourceBlock": 24,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Mobile Data",
+      "chartLabel": "Chart 5",
+      "graph": "Mobile Data Traffic",
+      "series": [
+        "Total Mobile data usage"
+      ],
+      "sourceSheet": "Tab 16. Mobile Data Traffic",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Mobile Industry / Overview",
+        "Mobile Industry / Mobile Data"
+      ]
+    },
+    {
+      "id": "mobile-mobile-data-chart-6-23",
+      "sourceBlock": 24,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Mobile Data",
+      "chartLabel": "Chart 6",
+      "graph": "Mobile Data Usage per Subscription",
+      "series": [
+        "Total Mobile data usage",
+        "Average Data Subscription",
+        "Data Usage per Subscription"
+      ],
+      "sourceSheet": "Tab17. Mob Data Usage per Subs.",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Mobile Industry / Overview",
+        "Mobile Industry / Mobile Data"
+      ]
+    },
+    {
+      "id": "mobile-mobile-data-chart-7-24",
+      "sourceBlock": 24,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Mobile Data",
+      "chartLabel": "Chart 7",
+      "graph": "Mobile Data Traffic per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Airtel",
+        "Glo",
+        "Expresso",
+        "Operator share rows when available"
+      ],
+      "sourceSheet": "Tab 18. Mob Data Traffic",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Mobile Data"
+      ]
+    },
+    {
+      "id": "mobile-tariffs-chart-1-25",
+      "sourceBlock": 28,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Tariffs",
+      "chartLabel": "Chart 1",
+      "graph": "Mobile Telecommunications Service Tariffs",
+      "series": [
+        "On-Net mobile tariff",
+        "Off-Net mobile tariff",
+        "On-Net SMS tariff",
+        "Off-Net SMS tariff",
+        "Data/Mb tariff"
+      ],
+      "sourceSheet": "Tab 19. Ave Mob Tariff",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Tariffs"
+      ]
+    },
+    {
+      "id": "mobile-tariffs-chart-2-26",
+      "sourceBlock": 28,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Tariffs",
+      "chartLabel": "Chart 2",
+      "graph": "Average Mobile Tariff per Service",
+      "series": [
+        "Voice On-Net",
+        "Voice Off-Net",
+        "SMS On-Net",
+        "SMS Off-Net",
+        "Data/Mb"
+      ],
+      "sourceSheet": "Tab 19. Ave Mob Tariff",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Tariffs"
+      ]
+    },
+    {
+      "id": "mobile-devices-chart-1-27",
+      "sourceBlock": 32,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Devices",
+      "chartLabel": "Chart 1",
+      "graph": "Devices per MNO",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Tigo",
+        "Airtel",
+        "Glo",
+        "Expresso",
+        "Operator share rows when available"
+      ],
+      "sourceSheet": "Tab 20. Devices&Terminals -MNOs",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Devices"
+      ]
+    },
+    {
+      "id": "mobile-devices-chart-2-28",
+      "sourceBlock": 32,
+      "sectorId": "mobile",
+      "sector": "Mobile Industry",
+      "section": "Devices",
+      "chartLabel": "Chart 2",
+      "graph": "Devices per Type",
+      "series": [
+        "Smartphone Devices",
+        "Feature Phone Devices",
+        "Basic Phone Devices",
+        "Device-type share rows when available"
+      ],
+      "sourceSheet": "Tab 20. Devices&Terminals -MNOs",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Mobile Industry / Devices"
+      ]
+    },
+    {
+      "id": "fixed-overview-chart-1-29",
+      "sourceBlock": 38,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Overview",
+      "chartLabel": "Chart 1",
+      "graph": "Fixed Voice Subscriptions and Market Share per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Market share for each operator"
+      ],
+      "sourceSheet": "24. Fixed Voice & Pen Rate",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Fixed Network / Overview",
+        "Fixed Network / Fixed Voice"
+      ]
+    },
+    {
+      "id": "fixed-overview-chart-2-30",
+      "sourceBlock": 38,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Overview",
+      "chartLabel": "Chart 2",
+      "graph": "Total Fixed Broadband Subscriptions",
+      "series": [
+        "Total Fixed Broadband Subscriptions"
+      ],
+      "sourceSheet": "29. Fixed Broadband Subs",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Fixed Network / Overview",
+        "Fixed Network / Fixed Broadband"
+      ]
+    },
+    {
+      "id": "fixed-overview-chart-3-31",
+      "sourceBlock": 38,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Overview",
+      "chartLabel": "Chart 3",
+      "graph": "Fixed Data Subscriptions and Market Share per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Market share for each operator"
+      ],
+      "sourceSheet": "27. Fixed Line Data &Pen Rate",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Fixed Network / Overview",
+        "Fixed Network / Fixed Data"
+      ]
+    },
+    {
+      "id": "fixed-overview-chart-4-32",
+      "sourceBlock": 38,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Overview",
+      "chartLabel": "Chart 4",
+      "graph": "Fixed Broadband Traffic per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "Total"
+      ],
+      "sourceSheet": "31. Fixed Broadband Traffic",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Fixed Network / Overview",
+        "Fixed Network / Fixed Broadband"
+      ]
+    },
+    {
+      "id": "fixed-fixed-voice-chart-1-33",
+      "sourceBlock": 45,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Voice",
+      "chartLabel": "Chart 1",
+      "graph": "Fixed Voice Subscriptions and Market Share per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Market share for each operator"
+      ],
+      "sourceSheet": "24. Fixed Voice & Pen Rate",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Fixed Network / Overview",
+        "Fixed Network / Fixed Voice"
+      ]
+    },
+    {
+      "id": "fixed-fixed-voice-chart-2-34",
+      "sourceBlock": 45,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Voice",
+      "chartLabel": "Chart 2",
+      "graph": "Total Fixed Voice Subscriptions and Penetration Rate",
+      "series": [
+        "Total Fixed Voice Subscriptions",
+        "Penetration Rate"
+      ],
+      "sourceSheet": "24. Fixed Voice & Pen Rate",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Fixed Network / Fixed Voice"
+      ]
+    },
+    {
+      "id": "fixed-fixed-voice-chart-3-35",
+      "sourceBlock": 45,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Voice",
+      "chartLabel": "Chart 3",
+      "graph": "Fixed Voice Traffic",
+      "series": [
+        "On-Net Traffic",
+        "Off-Net Traffic",
+        "Total Traffic"
+      ],
+      "sourceSheet": "25. Fixed Voice Traffic",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Fixed Network / Fixed Voice"
+      ]
+    },
+    {
+      "id": "fixed-fixed-voice-chart-4-36",
+      "sourceBlock": 45,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Voice",
+      "chartLabel": "Chart 4",
+      "graph": "Fixed Voice Minutes of Use per Subscription",
+      "series": [
+        "MoU per Subscription",
+        "Average Subscription",
+        "Total Traffic"
+      ],
+      "sourceSheet": "26. Fixed Voice MoU",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Fixed Network / Fixed Voice"
+      ]
+    },
+    {
+      "id": "fixed-fixed-data-chart-1-37",
+      "sourceBlock": 48,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Data",
+      "chartLabel": "Chart 1",
+      "graph": "Fixed Data Subscriptions and Market Share per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "AT",
+        "Market share for each operator"
+      ],
+      "sourceSheet": "27. Fixed Line Data &Pen Rate",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Fixed Network / Overview",
+        "Fixed Network / Fixed Data"
+      ]
+    },
+    {
+      "id": "fixed-fixed-data-chart-2-38",
+      "sourceBlock": 48,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Data",
+      "chartLabel": "Chart 2",
+      "graph": "Total Fixed Data Subscriptions and Penetration Rate",
+      "series": [
+        "Total Fixed Data Subscriptions",
+        "Penetration Rate"
+      ],
+      "sourceSheet": "27. Fixed Line Data &Pen Rate",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Fixed Network / Fixed Data"
+      ]
+    },
+    {
+      "id": "fixed-fixed-broadband-chart-1-39",
+      "sourceBlock": 51,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Broadband",
+      "chartLabel": "Chart 1",
+      "graph": "Total Fixed Broadband Subscriptions",
+      "series": [
+        "Total Fixed Broadband Subscriptions"
+      ],
+      "sourceSheet": "29. Fixed Broadband Subs",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Fixed Network / Overview",
+        "Fixed Network / Fixed Broadband"
+      ]
+    },
+    {
+      "id": "fixed-fixed-broadband-chart-2-40",
+      "sourceBlock": 51,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Broadband",
+      "chartLabel": "Chart 2",
+      "graph": "Fixed Broadband Subscriptions and Market Share per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "Market share for each operator"
+      ],
+      "sourceSheet": "30. Fixed BB per operator",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "Fixed Network / Fixed Broadband"
+      ]
+    },
+    {
+      "id": "fixed-fixed-broadband-chart-3-41",
+      "sourceBlock": 51,
+      "sectorId": "fixed",
+      "sector": "Fixed Network",
+      "section": "Fixed Broadband",
+      "chartLabel": "Chart 3",
+      "graph": "Fixed Broadband Traffic per Operator",
+      "series": [
+        "MTN",
+        "Telecel",
+        "Total"
+      ],
+      "sourceSheet": "31. Fixed Broadband Traffic",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "Fixed Network / Overview",
+        "Fixed Network / Fixed Broadband"
+      ]
+    },
+    {
+      "id": "bwa-overview-chart-1-42",
+      "sourceBlock": 58,
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Overview",
+      "chartLabel": "Chart 1",
+      "graph": "BWA Subscriptions and Penetration Rate",
+      "series": [
+        "BWA Subscriptions",
+        "Penetration Rate"
+      ],
+      "sourceSheet": "19. BWA Subs and Penetration",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "BWA / Overview",
+        "BWA / Subscriptions"
+      ]
+    },
+    {
+      "id": "bwa-overview-chart-2-43",
+      "sourceBlock": 58,
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Overview",
+      "chartLabel": "Chart 2",
+      "graph": "BWA Total Data Traffic",
+      "series": [
+        "Industry Total"
+      ],
+      "sourceSheet": "Ta21. BBand Vol of Int. Traffic",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "BWA / Overview",
+        "BWA / Traffic"
+      ]
+    },
+    {
+      "id": "bwa-overview-chart-3-44",
+      "sourceBlock": 58,
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Overview",
+      "chartLabel": "Chart 3",
+      "graph": "BWA Data Usage per Subscription",
+      "series": [
+        "Total Traffic",
+        "Average Subscription",
+        "Usage per Subscription"
+      ],
+      "sourceSheet": "23. Data Usage per BWA",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "BWA / Overview",
+        "BWA / Usage"
+      ]
+    },
+    {
+      "id": "bwa-subscriptions-chart-1-45",
+      "sourceBlock": 61,
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Subscriptions",
+      "chartLabel": "Chart 1",
+      "graph": "BWA Subscriptions and Penetration Rate",
+      "series": [
+        "BWA Subscriptions",
+        "Penetration Rate"
+      ],
+      "sourceSheet": "19. BWA Subs and Penetration",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "BWA / Overview",
+        "BWA / Subscriptions"
+      ]
+    },
+    {
+      "id": "bwa-subscriptions-chart-2-46",
+      "sourceBlock": 61,
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Subscriptions",
+      "chartLabel": "Chart 2",
+      "graph": "BWA Subscriptions and Market Share per Operator",
+      "series": [
+        "Telesol",
+        "Market share for Telesol when available"
+      ],
+      "sourceSheet": "20. BWA Subs per Operator",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "BWA / Subscriptions"
+      ]
+    },
+    {
+      "id": "bwa-subscriptions-chart-3-47",
+      "sourceBlock": 61,
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Subscriptions",
+      "chartLabel": "Chart 3",
+      "graph": "Total BWA Subscriptions",
+      "series": [
+        "Industry Total"
+      ],
+      "sourceSheet": "20. BWA Subs per Operator",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "BWA / Subscriptions"
+      ]
+    },
+    {
+      "id": "bwa-traffic-chart-1-48",
+      "sourceBlock": 64,
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Traffic",
+      "chartLabel": "Chart 1",
+      "graph": "BWA Total Data Traffic",
+      "series": [
+        "Industry Total"
+      ],
+      "sourceSheet": "Ta21. BBand Vol of Int. Traffic",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "BWA / Overview",
+        "BWA / Traffic"
+      ]
+    },
+    {
+      "id": "bwa-traffic-chart-2-49",
+      "sourceBlock": 64,
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Traffic",
+      "chartLabel": "Chart 2",
+      "graph": "BWA Data Traffic per Operator",
+      "series": [
+        "Telesol",
+        "Industry Total"
+      ],
+      "sourceSheet": "22. Traffic per BWAs",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": false,
+      "placementContexts": [
+        "BWA / Traffic"
+      ]
+    },
+    {
+      "id": "bwa-usage-chart-1-50",
+      "sourceBlock": 67,
+      "sectorId": "bwa",
+      "sector": "BWA",
+      "section": "Usage",
+      "chartLabel": "Chart 1",
+      "graph": "BWA Data Usage per Subscription",
+      "series": [
+        "Total Traffic",
+        "Average Subscription",
+        "Usage per Subscription"
+      ],
+      "sourceSheet": "23. Data Usage per BWA",
+      "unit": null,
+      "periodValuesAvailable": false,
+      "targetsAvailable": false,
+      "sourceStatus": "Definition only",
+      "duplicatePlacement": true,
+      "placementContexts": [
+        "BWA / Overview",
+        "BWA / Usage"
+      ]
+    }
+  ]
+}

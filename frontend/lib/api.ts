@@ -61,7 +61,7 @@ async function refreshTokens(): Promise<boolean> {
   }
 }
 
-export const api = {
+export const api = Object.assign(request, {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
@@ -70,6 +70,6 @@ export const api = {
   put: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
-};
+});
 
 export { ApiError };

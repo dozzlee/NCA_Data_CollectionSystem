@@ -195,3 +195,53 @@ class ReviewAction(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class EditRequest(models.Model):
+    STATUS_CHOICES = [
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("DENIED", "Denied"),
+    ]
+
+    submission = models.ForeignKey(Submission, on_delete=models.PROTECT, related_name="edit_requests")
+    reason = models.TextField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    requested_by = models.ForeignKey(
+        "users.User", on_delete=models.PROTECT, related_name="edit_requests_created"
+    )
+    requested_at = models.DateTimeField(auto_now_add=True)
+    decided_by = models.ForeignKey(
+        "users.User", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="edit_requests_decided",
+    )
+    decision_note = models.TextField(blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    reopened_submission = models.ForeignKey(
+        Submission, null=True, blank=True, on_delete=models.PROTECT,
+        related_name="source_edit_requests",
+    )
+
+    class Meta:
+        ordering = ["-requested_at"]
+
+
+class Notification(models.Model):
+    recipient = models.ForeignKey(
+        "users.User", on_delete=models.CASCADE, related_name="notifications"
+    )
+    event_type = models.CharField(max_length=50)
+    title = models.CharField(max_length=255)
+    message = models.TextField(blank=True)
+    target_url = models.CharField(max_length=500, blank=True)
+    event_key = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["recipient", "event_key"], name="unique_notification_recipient_event"
+            )
+        ]

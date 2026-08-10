@@ -7,10 +7,11 @@ from rest_framework.views import APIView
 from apps.submissions.models import ExpectedSubmission
 from .models import EmailTemplate, EmailLog
 from .serializers import EmailTemplateSerializer, EmailLogSerializer
+from apps.users.permissions import IsNCAUser
 
 
 class ComplianceDashboardView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def get(self, request):
         overdue = ExpectedSubmission.objects.filter(due_state="OVERDUE").count()
@@ -29,12 +30,13 @@ class ComplianceDashboardView(APIView):
 
 
 class EmailTemplateListView(generics.ListAPIView):
+    permission_classes = [IsNCAUser]
     queryset = EmailTemplate.objects.all()
     serializer_class = EmailTemplateSerializer
 
 
 class GenerateEmailView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def post(self, request):
         template_type = request.data.get("template_type")
@@ -83,13 +85,14 @@ class GenerateEmailView(APIView):
 
 
 class EmailLogListView(generics.ListAPIView):
+    permission_classes = [IsNCAUser]
     queryset = EmailLog.objects.select_related("provider", "period", "generated_by").order_by("-generated_at")
     serializer_class = EmailLogSerializer
     filterset_fields = ["status", "provider", "compliance_stage"]
 
 
 class MarkEmailSentView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def patch(self, request, pk):
         try:

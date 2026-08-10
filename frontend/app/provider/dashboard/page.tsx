@@ -7,6 +7,7 @@ import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import type { ExpectedSubmission } from "@/lib/types";
 import { WORKFLOW_LABELS } from "@/lib/utils";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 
 const STATUS_GROUPS: { label: string; statuses: string[]; color: string }[] = [
   { label: "Action Required", statuses: ["CORRECTION_REQUESTED"], color: "#ffe8e8" },
@@ -21,6 +22,7 @@ function formatDue(iso: string): string {
 }
 
 export default function ProviderDashboardPage() {
+  const userQ = useCurrentUser();
   const { data, isLoading } = useQuery<{ results: ExpectedSubmission[] }>({
     queryKey: ["provider-expected-submissions"],
     queryFn: () => api("/expected-submissions/?ordering=period__due_at"),
@@ -114,8 +116,12 @@ export default function ProviderDashboardPage() {
           </div>
         ) : (
           <div className="divide-y divide-[#eceef0]">
-            {submissions.map((s) => (
-              <div key={s.id} className="flex items-center justify-between gap-4 px-6 py-4 hover:bg-[#f7f9fb] transition-colors">
+            {submissions.map((s) => {
+              const href = userQ.data?.role === "PROVIDER_APPROVER"
+                ? (s.latest_submission_id ? `/provider/approvals/${s.latest_submission_id}` : "/provider/history")
+                : `/provider/submissions/${s.id}`;
+              return (
+              <Link key={s.id} href={href} className="flex items-center justify-between gap-4 px-6 py-4 hover:bg-[#f7f9fb] transition-colors focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[#0066cc]">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-[14px] font-medium text-[#191c1e]">{s.form_name}</p>
                   <p className="mt-0.5 text-[12px] text-[#737780]">
@@ -131,16 +137,15 @@ export default function ProviderDashboardPage() {
                   <DueStateBadge state={s.due_state} />
                   <WorkflowBadge status={s.workflow_status} />
                   {["NOT_STARTED", "DRAFT", "CORRECTION_REQUESTED"].includes(s.workflow_status) && (
-                    <Link
-                      href={`/submissions/${s.id}`}
+                    <span
                       className="rounded-[6px] bg-[#001836] px-3 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-[#002d5b]"
                     >
-                      {s.workflow_status === "NOT_STARTED" ? "Start" : "Continue"}
-                    </Link>
+                      {s.workflow_status === "NOT_STARTED" ? "Start" : "Open"}
+                    </span>
                   )}
                 </div>
-              </div>
-            ))}
+              </Link>
+            )})}
           </div>
         )}
       </div>

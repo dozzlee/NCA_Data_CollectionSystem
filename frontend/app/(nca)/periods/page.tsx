@@ -107,7 +107,7 @@ export default function PeriodsPage() {
                 <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">{label}</label>
                 <input
                   type={type}
-                  value={(form as Record<string, string>)[key]}
+                  value={(form as unknown as Record<string, string>)[key]}
                   onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))}
                   placeholder={placeholder}
                   required={key !== "month"}

@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { formatDate, WORKFLOW_LABELS, PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
 import { Search, ChevronRight } from "lucide-react";
 import type { WorkflowStatus } from "@/lib/types";
+import { useRouter } from "next/navigation";
 
 const STATUS_FILTERS: WorkflowStatus[] = [
   "NOT_STARTED", "DRAFT", "PENDING_APPROVAL", "SUBMITTED",
@@ -15,6 +16,7 @@ const STATUS_FILTERS: WorkflowStatus[] = [
 ];
 
 export default function SubmissionsPage() {
+  const router = useRouter();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<WorkflowStatus | "">("");
   const [categoryFilter, setCategoryFilter] = useState("");
@@ -82,8 +84,13 @@ export default function SubmissionsPage() {
                 ))
               : !data?.results.length
               ? <tr><td colSpan={7} className="px-5 py-14 text-center text-[13px] text-[#737780]">No submissions match the current filters.</td></tr>
-              : data.results.map((sub) => (
-                  <tr key={sub.id} className="border-b border-[#eceef0] last:border-0 hover:bg-[#f7f9fb] transition-colors">
+              : data.results.map((sub) => {
+                const reviewHref = sub.latest_submission_id ? `/submissions/${sub.latest_submission_id}/review` : "";
+                return (
+                  <tr key={sub.id} tabIndex={reviewHref ? 0 : -1}
+                    onClick={() => reviewHref && router.push(reviewHref)}
+                    onKeyDown={(event) => { if (reviewHref && (event.key === "Enter" || event.key === " ")) router.push(reviewHref); }}
+                    className="border-b border-[#eceef0] last:border-0 hover:bg-[#f7f9fb] transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[#0066cc]">
                     <td className="px-5 py-3">
                       <p className="text-[13px] font-medium text-[#191c1e] max-w-[160px] truncate">{sub.provider_name}</p>
                       <p className="text-[11px] text-[#737780]">{PROVIDER_CATEGORY_LABELS[sub.provider_category] ?? sub.provider_category}</p>
@@ -98,13 +105,13 @@ export default function SubmissionsPage() {
                     <td className="px-5 py-3"><WorkflowBadge status={sub.workflow_status} /></td>
                     <td className="px-5 py-3"><DueStateBadge state={sub.due_state} /></td>
                     <td className="px-5 py-3">
-                      <Link href={`/submissions/${sub.id}/review`}
+                      {reviewHref ? <Link href={reviewHref} onClick={(event) => event.stopPropagation()}
                         className="flex items-center gap-1 text-[12px] font-medium text-[#0066cc] hover:text-[#002d5b] transition-colors">
                         Review <ChevronRight size={12} />
-                      </Link>
+                      </Link> : <span className="text-[11px] text-[#737780]">Not started</span>}
                     </td>
                   </tr>
-                ))
+                )})
             }
           </tbody>
         </table>

@@ -9,10 +9,10 @@ from .serializers import (
     ProviderProfileListSerializer,
     ProviderContactSerializer,
 )
+from apps.users.permissions import IsNCAAdmin, IsNCAUser
 
 
 class ProviderListView(generics.ListCreateAPIView):
-    permission_classes = [IsAuthenticated]
     filterset_fields = ["category", "status"]
     search_fields = ["registered_name", "trade_name", "licence_number", "primary_email"]
     ordering_fields = ["registered_name", "category", "status", "created_at"]
@@ -21,6 +21,9 @@ class ProviderListView(generics.ListCreateAPIView):
     def get_queryset(self):
         return ProviderProfile.objects.prefetch_related("contacts").all()
 
+    def get_permissions(self):
+        return [(IsNCAAdmin if self.request.method == "POST" else IsNCAUser)()]
+
     def get_serializer_class(self):
         if self.request.method == "GET":
             return ProviderProfileListSerializer
@@ -28,14 +31,15 @@ class ProviderListView(generics.ListCreateAPIView):
 
 
 class ProviderDetailView(generics.RetrieveUpdateAPIView):
-    permission_classes = [IsAuthenticated]
     queryset = ProviderProfile.objects.prefetch_related("contacts").all()
     serializer_class = ProviderProfileSerializer
     http_method_names = ["get", "patch", "head", "options"]
 
+    def get_permissions(self):
+        return [(IsNCAAdmin if self.request.method == "PATCH" else IsNCAUser)()]
+
 
 class ProviderContactListView(generics.ListCreateAPIView):
-    permission_classes = [IsAuthenticated]
     serializer_class = ProviderContactSerializer
 
     def get_queryset(self):
@@ -45,9 +49,12 @@ class ProviderContactListView(generics.ListCreateAPIView):
         provider = generics.get_object_or_404(ProviderProfile, pk=self.kwargs["pk"])
         serializer.save(provider=provider)
 
+    def get_permissions(self):
+        return [(IsNCAAdmin if self.request.method == "POST" else IsNCAUser)()]
+
 
 class ProviderContactDetailView(generics.RetrieveUpdateAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAAdmin]
     serializer_class = ProviderContactSerializer
     http_method_names = ["get", "patch", "head", "options"]
 

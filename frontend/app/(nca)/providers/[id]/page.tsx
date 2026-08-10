@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import type { ProviderProfile } from "@/lib/types";
 import { PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 
 interface ProviderContact {
   id: number;
@@ -33,6 +34,7 @@ function Field({ label, value }: { label: string; value: string | null | undefin
 }
 
 export default function ProviderDetailPage() {
+  const canManage = useCurrentUser().data?.role === "NCA_ADMIN";
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -43,12 +45,15 @@ export default function ProviderDetailPage() {
 
   const { data: provider, isLoading } = useQuery<ProviderDetail>({
     queryKey: ["provider", id],
-    queryFn: () => api(`/providers/${id}/`),
-    onSuccess: (d: ProviderDetail) => setForm(d),
+    queryFn: () => api.get<ProviderDetail>(`/providers/${id}/`),
   });
 
+  useEffect(() => {
+    if (provider) setForm(provider);
+  }, [provider]);
+
   const updateMutation = useMutation({
-    mutationFn: (data: Partial<ProviderProfile>) => api(`/providers/${id}/`, { method: "PATCH", body: JSON.stringify(data) }),
+    mutationFn: (data: Partial<ProviderProfile>) => api.patch(`/providers/${id}/`, data),
     onSuccess: () => {
       toast("Provider updated.", "success");
       setEditMode(false);
@@ -59,7 +64,7 @@ export default function ProviderDetailPage() {
 
   const addContactMutation = useMutation({
     mutationFn: (data: typeof newContact) =>
-      api(`/providers/${id}/contacts/`, { method: "POST", body: JSON.stringify(data) }),
+      api.post(`/providers/${id}/contacts/`, data),
     onSuccess: () => {
       toast("Contact added.", "success");
       setAddingContact(false);
@@ -95,13 +100,13 @@ export default function ProviderDetailPage() {
             {PROVIDER_CATEGORY_LABELS[provider.category]}
           </p>
         </div>
-        <button
+        {canManage && <button
           onClick={() => (editMode ? updateMutation.mutate(form) : setEditMode(true))}
           className="rounded-[8px] bg-[#001836] px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-[#002d5b] disabled:opacity-50"
           disabled={updateMutation.isPending}
         >
           {editMode ? (updateMutation.isPending ? "Saving…" : "Save Changes") : "Edit Provider"}
-        </button>
+        </button>}
       </div>
 
       {/* Profile card */}
@@ -159,12 +164,12 @@ export default function ProviderDetailPage() {
       <div className="rounded-[16px] border border-[#eceef0] bg-white p-6">
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-[16px] font-semibold text-[#191c1e]">Contacts</h2>
-          <button
+          {canManage && <button
             onClick={() => setAddingContact((v) => !v)}
             className="text-[13px] font-medium text-[#0066cc] hover:underline"
           >
             {addingContact ? "Cancel" : "+ Add Contact"}
-          </button>
+          </button>}
         </div>
 
         {addingContact && (

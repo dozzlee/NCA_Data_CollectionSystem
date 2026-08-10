@@ -9,10 +9,11 @@ from rest_framework.views import APIView
 from apps.audit.models import AuditEvent
 from apps.submissions.models import ExpectedSubmission, SubmissionValue
 from .models import ExportLog
+from apps.users.permissions import IsNCAUser
 
 
 class CSVExportView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def post(self, request):
         filters = request.data.get("filters", {})
@@ -93,7 +94,7 @@ class CSVExportView(APIView):
 
 
 class ExportLogListView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsNCAUser]
 
     def get(self, request):
         logs = ExportLog.objects.select_related("generated_by").order_by("-generated_at")[:50]

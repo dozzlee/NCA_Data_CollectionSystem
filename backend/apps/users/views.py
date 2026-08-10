@@ -8,6 +8,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from apps.audit.models import AuditEvent
 from .models import User
 from .serializers import LoginSerializer, UserSerializer
+from .permissions import IsNCAAdmin
 
 
 def get_client_ip(request):
@@ -64,13 +65,10 @@ class MeView(APIView):
 class UserListView(generics.ListCreateAPIView):
     queryset = User.objects.select_related("organization").all()
     serializer_class = UserSerializer
-
-    def get_queryset(self):
-        if self.request.user.role != "NCA_ADMIN":
-            return User.objects.none()
-        return super().get_queryset()
+    permission_classes = [IsNCAAdmin]
 
 
 class UserDetailView(generics.RetrieveUpdateAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    permission_classes = [IsNCAAdmin]

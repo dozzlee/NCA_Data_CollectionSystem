@@ -3,15 +3,31 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { FileText, LayoutDashboard, LogOut } from "lucide-react";
-
-const NAV = [
-  { href: "/provider/dashboard", label: "My Submissions", icon: LayoutDashboard },
-  { href: "/provider/submissions", label: "Forms", icon: FileText },
-];
+import { FileClock, FileText, LayoutDashboard, LogOut, ShieldCheck } from "lucide-react";
+import Cookies from "js-cookie";
+import { useRouter } from "next/navigation";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { NotificationBell } from "./NotificationBell";
 
 export function ProviderTopBar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const userQ = useCurrentUser();
+  const user = userQ.data;
+  const nav = [
+    { href: "/provider/dashboard", label: user?.role === "PROVIDER_APPROVER" ? "Overview" : "My Forms", icon: LayoutDashboard },
+    ...(user?.role === "PROVIDER_APPROVER"
+      ? [{ href: "/provider/approvals", label: "Pending Approval", icon: ShieldCheck }]
+      : []),
+    { href: "/provider/history", label: "History", icon: FileClock },
+    { href: "/provider/requests", label: "Edit Requests", icon: FileText },
+  ];
+
+  function signOut() {
+    Cookies.remove("access_token");
+    Cookies.remove("refresh_token");
+    router.replace("/login");
+  }
 
   return (
     <header className="sticky top-0 z-40 border-b border-[#e6e8ea] bg-white">
@@ -25,7 +41,7 @@ export function ProviderTopBar() {
         </div>
 
         <nav className="flex items-center gap-1">
-          {NAV.map(({ href, label, icon: Icon }) => {
+          {nav.map(({ href, label, icon: Icon }) => {
             const active = pathname.startsWith(href);
             return (
               <Link
@@ -46,11 +62,12 @@ export function ProviderTopBar() {
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
+          <NotificationBell />
           <div className="text-right">
-            <p className="text-[12px] font-medium text-[#191c1e]">Provider User</p>
-            <p className="text-[11px] text-[#737780]">data@provider.example</p>
+            <p className="text-[12px] font-medium text-[#191c1e]">{user?.name ?? "Provider User"}</p>
+            <p className="text-[11px] text-[#737780]">{user?.email}</p>
           </div>
-          <button className="flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[12px] text-[#737780] hover:bg-[#eceef0] hover:text-[#191c1e] transition-colors">
+          <button onClick={signOut} className="flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[12px] text-[#737780] hover:bg-[#eceef0] hover:text-[#191c1e] transition-colors">
             <LogOut size={13} />
             Sign out
           </button>

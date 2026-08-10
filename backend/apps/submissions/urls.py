@@ -24,6 +24,12 @@ urlpatterns = [
     path("submissions/<int:pk>/review/request-correction/", v.ReviewRequestCorrectionView.as_view()),
     path("submissions/<int:pk>/review/add-note/", v.ReviewAddNoteView.as_view()),
     path("submissions/<int:pk>/return-to-draft/", v.ReturnToDraftView.as_view()),
+    path("provider/history/", v.ProviderHistoryView.as_view()),
+    path("edit-requests/", v.EditRequestListCreateView.as_view()),
+    path("edit-requests/<int:pk>/<str:decision>/", v.EditRequestDecisionView.as_view()),
+    path("notifications/", v.NotificationListView.as_view()),
+    path("notifications/<int:pk>/read/", v.NotificationReadView.as_view()),
+    path("notifications/read-all/", v.NotificationReadAllView.as_view()),
     path("expected-submissions/<int:pk>/assign/", v.AssignOfficerView.as_view()),
     path("expected-submissions/<int:pk>/override-due-date/", v.OverrideDueDateView.as_view()),
 ]

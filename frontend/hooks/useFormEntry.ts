@@ -36,7 +36,7 @@ interface SubmissionValue {
   grid_column?: number | null;
   value: string;
   value_status: string;
-  explanation?: string;
+  explanation: string;
 }
 
 export function useFormTemplate(id: number) {

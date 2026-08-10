@@ -21,6 +21,7 @@ import {
 import { api } from "@/lib/api";
 import { Save, Send, ChevronRight, ChevronLeft, AlertTriangle } from "lucide-react";
 import type { FormSection, FieldStatus } from "@/lib/types";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
 
 // ─── Local value state for one section ───────────────────────────────────────
 
@@ -69,7 +70,7 @@ function SectionContent({
   const [saveMsg, setSaveMsg] = useState<"saved" | "error" | null>(null);
 
   const [fieldValues, setFieldValues] = useSectionFieldState(section.fields, serverValues.data ?? []);
-  const [gridValues, setGridValues] = useState<Record<number, { grid_row_id: string; grid_column_id: number; value: string; value_status: string }[]>>({});
+  const [gridValues, setGridValues] = useState<Record<number, { grid_row_id: string; grid_column_id: number; value: string; value_status: FieldStatus | "" }[]>>({});
 
   function handleFieldChange(fieldId: number, value: string, status: FieldStatus | "", explanation: string) {
     setFieldValues((prev) => ({ ...prev, [fieldId]: { value, status, explanation } }));
@@ -87,7 +88,7 @@ function SectionContent({
         explanation: v.explanation,
       }));
       const gridPayload = Object.entries(gridValues).flatMap(([gid, rows]) =>
-        rows.map((r) => ({ grid: Number(gid), grid_row_id: r.grid_row_id, grid_column: r.grid_column_id, value: r.value, value_status: r.value_status }))
+        rows.map((r) => ({ grid: Number(gid), grid_row_id: r.grid_row_id, grid_column: r.grid_column_id, value: r.value, value_status: r.value_status, explanation: "" }))
       );
       await saveMutation.mutateAsync({ sectionCode: section.section_code, values: [...fieldPayload, ...gridPayload] });
       setDirty(false);
@@ -225,6 +226,7 @@ export default function FormEntryPage() {
 
   const expectedQ = useExpectedSubmission(expectedId);
   const expected = expectedQ.data;
+  const userQ = useCurrentUser();
 
   // Get or create submission
   const latestSubmissionId = expected ? (expected as { latest_submission_id?: number }).latest_submission_id ?? null : null;
@@ -252,7 +254,8 @@ export default function FormEntryPage() {
   const currentSectionIndex = sections.findIndex((s) => s.section_code === activeSection);
   const currentSection = sections[currentSectionIndex];
 
-  const isEditable = expected?.workflow_status === "DRAFT" || expected?.workflow_status === "CORRECTION_REQUESTED";
+  const isEditable = userQ.data?.role === "PROVIDER_DATA_ENTRY" &&
+    (expected?.workflow_status === "DRAFT" || expected?.workflow_status === "CORRECTION_REQUESTED");
 
   async function handleStart() {
     if (!expectedId) return;
@@ -282,7 +285,7 @@ export default function FormEntryPage() {
   }
 
   // Not yet started
-  if (expected.workflow_status === "NOT_STARTED") {
+  if (expected.workflow_status === "NOT_STARTED" && userQ.data?.role === "PROVIDER_DATA_ENTRY") {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] text-center space-y-4">
         <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-8 max-w-md space-y-4"

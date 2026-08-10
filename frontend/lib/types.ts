@@ -3,7 +3,6 @@
 export type UserRole =
   | "NCA_ADMIN"
   | "NCA_OFFICER"
-  | "PROVIDER_ADMIN"
   | "PROVIDER_DATA_ENTRY"
   | "PROVIDER_APPROVER";
 
@@ -45,6 +44,7 @@ export type ProviderStatus = "ACTIVE" | "INACTIVE" | "SUSPENDED" | "ARCHIVED";
 
 export interface ProviderProfile {
   id: number;
+  organization: number;
   provider_id: string;
   registered_name: string;
   trade_name: string;
@@ -90,6 +90,7 @@ export interface FormTemplate {
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   kmz_required: boolean;
   excel_backup_enabled: boolean;
+  sections: FormSection[];
 }
 
 export interface FormSection {
@@ -129,6 +130,7 @@ export interface FormGrid {
   title: string;
   row_mode: "FIXED" | "REPEATABLE";
   sort_order: number;
+  instructions: string;
   columns: GridColumn[];
   fixed_rows?: GridRow[];
 }
@@ -190,7 +192,62 @@ export interface ExpectedSubmission {
   due_state: DueState;
   assigned_officer: number | null;
   assigned_officer_name: string | null;
+  latest_submission_id: number | null;
+  latest_version: number | null;
+  latest_completion_pct: number;
+  latest_submitted_by: string | null;
+  latest_submitted_at: string | null;
   created_at: string;
+}
+
+export interface SubmissionHistoryEvent {
+  type: string;
+  comment: string;
+  actor: string;
+  created_at: string;
+}
+
+export interface SubmissionVersion {
+  id: number;
+  version: number;
+  completion_pct: string;
+  workflow_status: WorkflowStatus;
+  submitted_by_email: string | null;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+  events: SubmissionHistoryEvent[];
+}
+
+export interface SubmissionHistory extends ExpectedSubmission {
+  versions: SubmissionVersion[];
+}
+
+export interface EditRequest {
+  id: number;
+  submission: number;
+  provider_name: string;
+  form_name: string;
+  period_name: string;
+  version: number;
+  reason: string;
+  status: "PENDING" | "APPROVED" | "DENIED";
+  requested_by_name: string;
+  requested_at: string;
+  decided_by_name: string | null;
+  decision_note: string;
+  decided_at: string | null;
+  reopened_submission: number | null;
+}
+
+export interface Notification {
+  id: number;
+  event_type: string;
+  title: string;
+  message: string;
+  target_url: string;
+  created_at: string;
+  read_at: string | null;
+  is_read: boolean;
 }
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────
