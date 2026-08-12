@@ -1,7 +1,7 @@
 from datetime import timedelta
 from django.utils import timezone
 from rest_framework.test import APITestCase
-from apps.users.models import User
+from apps.users.models import User, NCADivision
 from apps.forms_engine.models import FormTemplate, FormSection, FormField
 from apps.providers.models import ProviderProfile
 from apps.submissions.models import ReportingPeriod, ExpectedSubmission, Submission, SubmissionValue
@@ -10,8 +10,10 @@ from apps.submissions.models import ReportingPeriod, ExpectedSubmission, Submiss
 class DataRequestWorkflowTests(APITestCase):
     def setUp(self):
         self.admin = User.objects.create_user("admin-request-test@nca.org.gh", "long-test-password", name="Admin", role="NCA_ADMIN")
-        self.viewer = User.objects.create_user("viewer-request-test@nca.org.gh", "long-test-password", name="Viewer", role="NCA_VIEWER")
-        self.other = User.objects.create_user("other-viewer@nca.org.gh", "long-test-password", name="Other", role="NCA_VIEWER")
+        self.officer = User.objects.create_user("officer-request-test@nca.org.gh", "long-test-password", name="Officer", role="NCA_OFFICER")
+        division = NCADivision.objects.create(code="research", name="Research")
+        self.viewer = User.objects.create_user("viewer-request-test@nca.org.gh", "long-test-password", name="Viewer", role="NCA_VIEWER", division=division, grade="Principal Manager")
+        self.other = User.objects.create_user("other-viewer@nca.org.gh", "long-test-password", name="Other", role="NCA_VIEWER", division=division, grade="Manager")
         self.form = FormTemplate.objects.create(form_code="DC-ISP06", name="ISP data", sector="TELECOM", provider_category="ISP", frequency="ANNUAL", effective_from="2024-01-01", status="ACTIVE")
         section = FormSection.objects.create(form_template=self.form, section_code="main", title="Main")
         self.field = FormField.objects.create(section=section, field_code="revenue", label="Revenue", field_type="number")
@@ -50,6 +52,12 @@ class DataRequestWorkflowTests(APITestCase):
         approved = self.client.post(f"/api/v1/data-requests/{request_id}/approve/", {}, format="json")
         self.assertEqual(approved.status_code, 200, approved.data)
         self.assertEqual(approved.data["status"], "READY")
+        self.assertIn("artifact", approved.data)
+        self.assertEqual(approved.data["requesting_division"], "Research")
+        self.assertEqual(approved.data["requester_grade_snapshot"], "Principal Manager")
+        self.assertEqual(self.client.get(f"/api/v1/data-requests/{request_id}/download/").status_code, 200)
+        self.client.force_authenticate(self.officer)
+        self.assertEqual(self.client.get(f"/api/v1/data-requests/{request_id}/download/").status_code, 404)
         self.client.force_authenticate(self.viewer)
         self.assertEqual(self.client.get(f"/api/v1/data-requests/{request_id}/download/").status_code, 200)
 

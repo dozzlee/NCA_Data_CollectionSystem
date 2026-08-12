@@ -22,7 +22,11 @@ def canonical_row_dicts(submissions, *, selected_field_ids=None, selected_column
     submissions = submissions.select_related(
         "expected__provider", "expected__form_template", "expected__period",
         "expected__assigned_officer", "submitted_by", "reviewed_by",
-    ).prefetch_related("values__field__section", "values__grid__section", "values__grid_column", "values__non_filled_disposition", "review_actions", "expected__compliance_flags")
+    ).prefetch_related(
+        "values__field__section", "values__grid__section", "values__grid__fixed_rows",
+        "values__grid_column", "values__non_filled_disposition", "review_actions",
+        "expected__compliance_flags",
+    )
     for submission in submissions:
         expected = submission.expected
         provider, form, period = expected.provider, expected.form_template, expected.period
@@ -40,7 +44,9 @@ def canonical_row_dicts(submissions, *, selected_field_ids=None, selected_column
                     continue
                 section = value.grid.section
                 kind, code, label, value_type, unit = "GRID", "", "", value.grid_column.field_type, value.grid_column.unit
-                grid_code, grid_name, row_label = value.grid.grid_code, value.grid.title, value.grid_row_id
+                fixed_row_labels = {str(row.id): row.row_label for row in value.grid.fixed_rows.all()}
+                grid_code, grid_name = value.grid.grid_code, value.grid.title
+                row_label = fixed_row_labels.get(value.grid_row_id, value.grid_row_id)
                 column_code, column_name = value.grid_column.column_code, value.grid_column.label
             else:
                 continue

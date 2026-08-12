@@ -35,6 +35,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
+    "config.middleware.TrustedProxyHeaderMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -102,8 +103,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # DRF
 REST_FRAMEWORK = {
+    # `format` is an application-level export parameter. Do not treat it as a
+    # renderer override (which would reject ?format=xlsx before the view runs).
+    "URL_FORMAT_OVERRIDE": None,
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.users.authentication.CookieJWTAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -115,6 +119,8 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
+    "DEFAULT_THROTTLE_CLASSES": ["rest_framework.throttling.ScopedRateThrottle"],
+    "DEFAULT_THROTTLE_RATES": {"login": "10/min", "password_reset": "5/hour"},
 }
 
 # JWT
@@ -126,6 +132,13 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
+AUTH_ACCESS_COOKIE = "nca_access"
+AUTH_REFRESH_COOKIE = "nca_refresh"
+AUTH_COOKIE_SAMESITE = "Lax"
+AUTH_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_SECURE", "False") == "True"
+CORS_ALLOW_CREDENTIALS = True
+LOGIN_MAX_FAILURES = int(os.environ.get("LOGIN_MAX_FAILURES", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
 
 # File uploads
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10MB in memory
@@ -160,6 +173,11 @@ IMMUTABLE_AUDIT_STORAGE_REFERENCE = os.environ.get("IMMUTABLE_AUDIT_STORAGE_REFE
 MAIL_PROVIDER_CONFIGURED = os.environ.get("MAIL_PROVIDER_CONFIGURED", "False") == "True"
 RECOVERY_STORAGE_CONFIGURED = os.environ.get("RECOVERY_STORAGE_CONFIGURED", "False") == "True"
 UAT_SIGNOFF_REFERENCE = os.environ.get("UAT_SIGNOFF_REFERENCE", "")
+INDUSTRY_DASHBOARD_DATASET = os.environ.get("INDUSTRY_DASHBOARD_DATASET", "")
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+TRUSTED_PROXY_CIDRS = [value.strip() for value in os.environ.get(
+    "TRUSTED_PROXY_CIDRS", "127.0.0.1/32,::1/128"
+).split(",") if value.strip()]
 
 GHANA_REGIONS = [
     "Ahafo", "Ashanti", "Bono", "Bono East", "Central", "Eastern",

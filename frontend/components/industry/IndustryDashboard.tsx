@@ -47,6 +47,7 @@ import {
   useState,
 } from "react";
 import { cn } from "@/lib/utils";
+import { downloadAuthenticated } from "@/lib/api";
 import {
   PALETTE,
   buildChartData,
@@ -163,7 +164,7 @@ function modalAnimation(reduceMotion: boolean | null) {
 
 function useDialogFocus(
   open: boolean,
-  closeRef: RefObject<HTMLButtonElement>,
+  closeRef: RefObject<HTMLButtonElement | null>,
   onClose: () => void
 ) {
   useEffect(() => {
@@ -487,6 +488,7 @@ function ChartCard({
   onDetails,
   onOperatorChange,
   viewLabel,
+  showProvenance,
 }: {
   chart: IndustryChart;
   range: Range;
@@ -499,6 +501,7 @@ function ChartCard({
   onDetails: (chart: IndustryChart, trigger: HTMLButtonElement) => void;
   onOperatorChange: (operator: string) => void;
   viewLabel: string;
+  showProvenance: boolean;
 }) {
   const [shareMode, setShareMode] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
@@ -559,9 +562,6 @@ function ChartCard({
         "Period",
         "Series",
         "Value",
-        "Source workbook",
-        "Source sheet",
-        "Provenance",
       ],
     ];
     for (const datum of data) {
@@ -575,9 +575,6 @@ function ChartCard({
           datum.period,
           item.name,
           typeof datum[item.name] === "number" ? (datum[item.name] as number) : null,
-          chart.sourceWorkbook,
-          chart.sourceSheet,
-          chart.provenance ?? "baseline",
         ]);
       }
     }
@@ -605,22 +602,24 @@ function ChartCard({
             <span className="text-[10px] font-semibold uppercase tracking-[0.075em] text-[#7b838c]">
               {VIEW_META[chart.sectorId].short}
             </span>
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-[9px] font-semibold",
-                chart.provenance === "uploaded"
-                  ? "bg-[#e3f7ef] text-[#15704d]"
-                  : "bg-[#eef2f6] text-[#62707c]"
-              )}
-            >
-              {chart.provenance === "uploaded" ? "Uploaded" : "Workbook baseline"}
-            </span>
+            {showProvenance && (
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[9px] font-semibold",
+                  chart.provenance === "uploaded"
+                    ? "bg-[#e3f7ef] text-[#15704d]"
+                    : "bg-[#eef2f6] text-[#62707c]"
+                )}
+              >
+                {chart.provenance === "uploaded" ? "Uploaded" : "Workbook baseline"}
+              </span>
+            )}
           </div>
           <h3 className="mt-1.5 text-[14px] font-semibold leading-5 text-[#1a1d21]">
             {chart.title}
           </h3>
           <p className="mt-1 text-[10px] text-[#858d96]">
-            {chart.unitLabel} · {chart.sourceSheet}
+            {chart.unitLabel}{showProvenance && chart.sourceSheet ? ` · ${chart.sourceSheet}` : ""}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -724,6 +723,7 @@ function DetailDrawer({
   operatorNames,
   reduceMotion,
   charts,
+  showProvenance,
 }: {
   chart: IndustryChart | null;
   open: boolean;
@@ -735,6 +735,7 @@ function DetailDrawer({
   operatorNames: string[];
   reduceMotion: boolean | null;
   charts: IndustryChart[];
+  showProvenance: boolean;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useDialogFocus(open, closeRef, onClose);
@@ -814,10 +815,12 @@ function DetailDrawer({
               </section>
               <section className="grid gap-3 sm:grid-cols-2">
                 {[
-                  ["Source workbook", chart.sourceWorkbook],
-                  ["Source sheet", chart.sourceSheet],
                   ["Display unit", chart.unitLabel],
-                  ["Data provenance", chart.provenance === "uploaded" ? "Uploaded workbook" : "Bundled workbook baseline"],
+                  ...(showProvenance ? [
+                    ["Source workbook", chart.sourceWorkbook],
+                    ["Source sheet", chart.sourceSheet],
+                    ["Data provenance", chart.provenance === "uploaded" ? "Uploaded workbook" : "Bundled workbook baseline"],
+                  ] : []),
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-[12px] border border-[#dfe5eb] bg-white p-4">
                     <p className="text-[9px] font-semibold uppercase tracking-[0.07em] text-[#838b94]">
@@ -1853,7 +1856,7 @@ function CoverageView({
   );
 }
 
-export function IndustryDashboard() {
+export function IndustryDashboard({ canManage = false }: { canManage?: boolean }) {
   const reduceMotion = useReducedMotion();
   const [dataset, setDataset] = useState<IndustryDashboardDataset | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -1882,7 +1885,7 @@ export function IndustryDashboard() {
   useEffect(() => {
     let active = true;
     setLoadError(false);
-    fetch("/data/industry-dashboard.json")
+    fetch("/api/v1/industry-dashboard/data/", { credentials: "include" })
       .then((response) => {
         if (!response.ok) throw new Error("Dataset request failed.");
         return response.json() as Promise<IndustryDashboardDataset>;
@@ -2068,39 +2071,9 @@ export function IndustryDashboard() {
     ]);
   };
 
-  const exportVisible = () => {
-    const rows: (string | number | null)[][] = [
-      ["Dashboard", "Section", "Chart", "Unit", "Period", "Series", "Value", "Source workbook", "Source sheet", "Provenance"],
-    ];
-    for (const chart of visibleCharts) {
-      const series = prepareSeries(chart, {
-        shareMode: false,
-        operator,
-        operatorNames,
-        granularity,
-        trendMode,
-      });
-      const data = buildChartData(series, range, granularity);
-      for (const datum of data) {
-        for (const item of series) {
-          rows.push([
-            viewLabel,
-            activeSection?.label ?? "Overview",
-            chart.title,
-            chartUnit(chart, trendMode, false),
-            datum.period,
-            item.name,
-            typeof datum[item.name] === "number" ? (datum[item.name] as number) : null,
-            chart.sourceWorkbook,
-            chart.sourceSheet,
-            chart.provenance ?? "baseline",
-          ]);
-        }
-      }
-    }
-    downloadCsv(
-      `industry-${activeView}-${range.end.replace(" ", "-")}.csv`,
-      rows
+  const exportVisible = async () => {
+    await downloadAuthenticated(
+      "/industry-dashboard/export/?format=xlsx", {}, "nca_industry_dashboard_aggregate.xlsx"
     );
   };
 
@@ -2140,7 +2113,7 @@ export function IndustryDashboard() {
               >
                 {[
                   ["analytics", PanelTop, "Analytics"],
-                  ["coverage", BookOpen, "Coverage & Sources"],
+                  ...(canManage ? [["coverage", BookOpen, "Coverage & Sources"]] : []),
                 ].map(([value, Icon, label]) => (
                   <button
                     key={String(value)}
@@ -2162,15 +2135,15 @@ export function IndustryDashboard() {
               </div>
               {mode === "analytics" && (
                 <>
-                  <button
+                  {canManage && <button
                     type="button"
                     onClick={() => setUploadOpen(true)}
                     className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-[#dce3e9] bg-white px-3 text-[10px] font-semibold text-[#40505f] hover:bg-[#f6f8fa]"
                   >
                     <Upload size={14} aria-hidden="true" />
                     Upload workbook
-                  </button>
-                  {hasUpload && (
+                  </button>}
+                  {canManage && hasUpload && (
                     <button
                       type="button"
                       onClick={() => setCustomOpen(true)}
@@ -2269,7 +2242,7 @@ export function IndustryDashboard() {
                   onClick={exportVisible}
                 >
                   <Download size={13} aria-hidden="true" />
-                  Export view
+                   Export aggregate XLSX
                 </button>
                 <button
                   type="button"
@@ -2279,7 +2252,7 @@ export function IndustryDashboard() {
                   <Sparkles size={13} aria-hidden="true" />
                   Forecast
                 </button>
-                {hasUpload && (
+                {canManage && hasUpload && (
                   <button
                     type="button"
                     className="inline-flex h-9 items-center gap-2 rounded-[9px] border border-[#e0d4ed] bg-[#faf7fd] px-3 text-[10px] font-semibold text-[#6f3e9d]"
@@ -2433,6 +2406,7 @@ export function IndustryDashboard() {
                       globalTable={globalTable}
                       reduceMotion={reduceMotion}
                       viewLabel={viewLabel}
+                      showProvenance={canManage}
                       onOperatorChange={setOperator}
                       onDetails={(selected, trigger) => {
                         detailTrigger.current = trigger;
@@ -2454,6 +2428,7 @@ export function IndustryDashboard() {
                     globalTable={globalTable}
                     reduceMotion={reduceMotion}
                     viewLabel={`${viewLabel} · Custom`}
+                    showProvenance={canManage}
                     onOperatorChange={setOperator}
                     onDetails={(selected, trigger) => {
                       detailTrigger.current = trigger;
@@ -2586,6 +2561,7 @@ export function IndustryDashboard() {
         operatorNames={operatorNames}
         reduceMotion={reduceMotion}
         charts={charts}
+        showProvenance={canManage}
       />
       <ForecastDialog
         open={forecastOpen}
@@ -2596,7 +2572,7 @@ export function IndustryDashboard() {
         operatorNames={operatorNames}
         reduceMotion={reduceMotion}
       />
-      <UploadDialog
+      {canManage && <UploadDialog
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
         dataset={{ ...dataset, charts }}
@@ -2621,14 +2597,14 @@ export function IndustryDashboard() {
             end: preview.latestObservedPeriod,
           }));
         }}
-      />
-      <CustomChartDialog
+      />}
+      {canManage && <CustomChartDialog
         open={customOpen}
         onClose={() => setCustomOpen(false)}
         charts={charts}
         reduceMotion={reduceMotion}
         onAdd={(chart) => setCustomCharts((current) => [...current, chart])}
-      />
+      />}
     </div>
   );
 }

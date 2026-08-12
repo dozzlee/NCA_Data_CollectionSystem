@@ -15,6 +15,7 @@ interface Submission {
   period_name: string;
   kmz_required: boolean;
   submitted_at: string | null;
+  revision: number;
 }
 
 interface SectionCompletion {
@@ -95,14 +96,17 @@ export function useSectionValues(submissionId: number | null, sectionCode: strin
 export function useSaveSectionValues(submissionId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ sectionCode, values }: { sectionCode: string; values: SubmissionValue[] }) =>
-      api.put<{ saved: number; completion_pct: number }>(
+    mutationFn: ({ sectionCode, values, revision }: { sectionCode: string; values: SubmissionValue[]; revision?: number }) =>
+      api.put<{ saved: number; completion_pct: number; revision: number }>(
         `/submissions/${submissionId}/sections/${sectionCode}/values/`,
-        { values }
+        { values, revision }
       ),
-    onSuccess: (_, { sectionCode }) => {
+    onSuccess: (response, { sectionCode }) => {
       qc.invalidateQueries({ queryKey: ["section-values", submissionId, sectionCode] });
       qc.invalidateQueries({ queryKey: ["submission-completion", submissionId] });
+      qc.setQueryData<Submission>(["submission", submissionId], (current) =>
+        current ? { ...current, revision: response.revision } : current
+      );
     },
   });
 }

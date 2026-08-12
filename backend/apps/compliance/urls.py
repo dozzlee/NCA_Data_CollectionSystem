@@ -14,7 +14,6 @@ urlpatterns = [
     path("compliance/email-templates/<int:pk>/approve/", views.ApproveEmailTemplateView.as_view()),
     path("compliance/generate-email/", views.GenerateEmailView.as_view()),
     path("compliance/emails/", views.EmailLogListView.as_view()),
-    path("compliance/emails/<int:pk>/mark-sent/", views.MarkEmailSentView.as_view()),
     path("compliance/emails/<int:pk>/queue/", views.QueueEmailView.as_view()),
     path("compliance/emails/<int:pk>/delivery-events/", views.DeliveryEventList.as_view()),
     path("compliance/email-templates/<int:pk>/validate/", views.ValidateTemplateView.as_view()),

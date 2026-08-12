@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import type { FormTemplate, FormSection, FormField, FieldType } from "@/lib/types";
+import type { FormTemplate, FormSection, FormField, FormGrid, FieldType } from "@/lib/types";
 import { ChevronDown, ChevronRight, Plus, Trash2, GripVertical } from "lucide-react";
 
 const FIELD_TYPES: { value: FieldType; label: string }[] = [
@@ -27,19 +28,31 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
 const inp = "w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20";
 const lbl = "block text-[11px] font-semibold uppercase tracking-wide text-[#737780] mb-1";
 
-function AddFieldForm({ templateId, sectionId, onDone }: { templateId: string; sectionId: number; onDone: () => void }) {
+function AddFieldForm({ templateId, sectionId, availableFields, onDone }: { templateId: string; sectionId: number; availableFields: FormField[]; onDone: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [d, setD] = useState({ field_code:"", label:"", field_type:"text" as FieldType, unit:"", is_required:true, help_text:"" });
+  const initial = { field_code:"", label:"", field_type:"text" as FieldType, unit:"", is_required:true, help_text:"", formula:"", conditional_on_field:"", conditional_on_value:"", options:"" };
+  const [d, setD] = useState(initial);
 
   const mut = useMutation({
-    mutationFn: () => api(`/form-templates/${templateId}/sections/${sectionId}/fields/`, {
-      method:"POST", body: JSON.stringify(d)
-    }),
+    mutationFn: async () => {
+      const { options, conditional_on_field, ...fieldData } = d;
+      const field = await api<FormField>(`/form-templates/${templateId}/sections/${sectionId}/fields/`, {
+        method:"POST",
+        body: JSON.stringify({ ...fieldData, conditional_on_field: conditional_on_field ? Number(conditional_on_field) : null }),
+      });
+      if (["select", "multiselect"].includes(d.field_type)) {
+        const labels = options.split("\n").map((item) => item.trim()).filter(Boolean);
+        for (const label of labels) {
+          await api(`/fields/${field.id}/options/`, { method:"POST", body:JSON.stringify({ value:label, label }) });
+        }
+      }
+      return field;
+    },
     onSuccess: () => {
       toast("Field added.", "success");
       qc.invalidateQueries({ queryKey: ["form-template", templateId] });
-      setD({ field_code:"", label:"", field_type:"text", unit:"", is_required:true, help_text:"" });
+       setD(initial);
       onDone();
     },
     onError: () => toast("Failed to add field.", "error"),
@@ -84,6 +97,25 @@ function AddFieldForm({ templateId, sectionId, onDone }: { templateId: string; s
           <input className={inp} placeholder="Guidance shown below the field" value={d.help_text}
             onChange={e => setD(p => ({ ...p, help_text: e.target.value }))} />
         </div>
+        {["select", "multiselect"].includes(d.field_type) && <div className="sm:col-span-3">
+          <label className={lbl}>Options (one per line)</label>
+          <textarea className={inp} rows={4} value={d.options} onChange={e=>setD(p=>({...p,options:e.target.value}))} />
+        </div>}
+        {d.field_type === "formula" && <div className="sm:col-span-3">
+          <label className={lbl}>Allow-listed formula expression</label>
+          <input className={inp} placeholder="e.g. total_prepaid + total_postpaid" value={d.formula} onChange={e=>setD(p=>({...p,formula:e.target.value}))} />
+        </div>}
+        <div>
+          <label className={lbl}>Conditional parent</label>
+          <select className={inp} value={d.conditional_on_field} onChange={e=>setD(p=>({...p,conditional_on_field:e.target.value}))}>
+            <option value="">Always visible</option>
+            {availableFields.map(field=><option key={field.id} value={field.id}>{field.label}</option>)}
+          </select>
+        </div>
+        {d.conditional_on_field && <div className="sm:col-span-2">
+          <label className={lbl}>Required parent value</label>
+          <input className={inp} value={d.conditional_on_value} onChange={e=>setD(p=>({...p,conditional_on_value:e.target.value}))} />
+        </div>}
       </div>
       <div className="flex gap-2">
         <button onClick={() => mut.mutate()} disabled={mut.isPending || !d.field_code || !d.label}
@@ -101,7 +133,7 @@ function AddFieldForm({ templateId, sectionId, onDone }: { templateId: string; s
 function AddGridForm({ templateId, sectionId, onDone }: { templateId: string; sectionId: number; onDone: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [d, setD] = useState({ grid_code:"", title:"", row_mode:"REPEATABLE" as "FIXED"|"REPEATABLE" });
+  const [d, setD] = useState({ grid_code:"", title:"", row_mode:"REPEATABLE" as "FIXED"|"REPEATABLE", min_rows:0, instructions:"" });
 
   const mut = useMutation({
     mutationFn: () => api(`/form-templates/${templateId}/sections/${sectionId}/grids/`, {
@@ -110,7 +142,7 @@ function AddGridForm({ templateId, sectionId, onDone }: { templateId: string; se
     onSuccess: () => {
       toast("Grid added.", "success");
       qc.invalidateQueries({ queryKey: ["form-template", templateId] });
-      setD({ grid_code:"", title:"", row_mode:"REPEATABLE" });
+      setD({ grid_code:"", title:"", row_mode:"REPEATABLE", min_rows:0, instructions:"" });
       onDone();
     },
     onError: () => toast("Failed to add grid.", "error"),
@@ -138,6 +170,16 @@ function AddGridForm({ templateId, sectionId, onDone }: { templateId: string; se
             <option value="FIXED">Fixed — pre-defined rows (e.g. regions)</option>
           </select>
         </div>
+        <div>
+          <label className={lbl}>Minimum rows</label>
+          <input className={inp} type="number" min={0} value={d.min_rows}
+            onChange={e => setD(p => ({ ...p, min_rows: Number(e.target.value) }))} />
+        </div>
+        <div className="col-span-2">
+          <label className={lbl}>Instructions</label>
+          <input className={inp} value={d.instructions}
+            onChange={e => setD(p => ({ ...p, instructions: e.target.value }))} />
+        </div>
       </div>
       <div className="flex gap-2">
         <button onClick={() => mut.mutate()} disabled={mut.isPending || !d.grid_code || !d.title}
@@ -152,7 +194,69 @@ function AddGridForm({ templateId, sectionId, onDone }: { templateId: string; se
   );
 }
 
-function SectionBlock({ section, templateId, editable }: { section: FormSection & { grids?: unknown[] }; templateId: string; editable: boolean }) {
+function GridEditor({ grid, editable, onChanged }: { grid: FormGrid; editable: boolean; onChanged: () => void }) {
+  const { toast } = useToast();
+  const [column, setColumn] = useState({ column_code:"", label:"", field_type:"text" as FieldType, unit:"", is_required:true });
+  const [rowLabel, setRowLabel] = useState("");
+  const addColumn = useMutation({
+    mutationFn: () => api(`/grids/${grid.id}/columns/`, { method:"POST", body:JSON.stringify(column) }),
+    onSuccess: () => { setColumn({column_code:"",label:"",field_type:"text",unit:"",is_required:true}); onChanged(); },
+    onError: (error:Error) => toast(error.message, "error"),
+  });
+  const addRow = useMutation({
+    mutationFn: () => api(`/grids/${grid.id}/rows/`, { method:"POST", body:JSON.stringify({row_label:rowLabel}) }),
+    onSuccess: () => { setRowLabel(""); onChanged(); },
+    onError: (error:Error) => toast(error.message, "error"),
+  });
+  async function remove(path:string) {
+    try { await api(path, {method:"DELETE"}); onChanged(); }
+    catch (error) { toast(error instanceof Error ? error.message : "Unable to remove item.", "error"); }
+  }
+  return <div className="mb-2 rounded-[8px] border border-[#c3c6d0] bg-[#f7f9fb] p-3">
+    <div className="flex items-center gap-2"><span className="flex-1 text-[12px] font-semibold">{grid.title}</span><span className="text-[10px] text-[#737780]">{grid.row_mode} · min {grid.min_rows}</span></div>
+    {grid.instructions && <p className="mt-1 text-[10px] text-[#737780]">{grid.instructions}</p>}
+    <div className="mt-2 flex flex-wrap gap-1">{grid.columns.map(item => <span key={item.id} className="inline-flex items-center gap-1 rounded border bg-white px-2 py-1 text-[10px]">{item.label} ({item.field_type}{item.unit ? `, ${item.unit}`:""}){editable && <button aria-label={`Delete ${item.label}`} onClick={() => remove(`/grids/${grid.id}/columns/${item.id}/`)}><Trash2 size={10}/></button>}</span>)}</div>
+    {grid.row_mode === "FIXED" && <div className="mt-2 flex flex-wrap gap-1">{grid.fixed_rows?.map(row => <span key={row.id} className="inline-flex items-center gap-1 rounded border bg-white px-2 py-1 text-[10px]">{row.row_label}{editable && <button aria-label={`Delete ${row.row_label}`} onClick={() => remove(`/grids/${grid.id}/rows/${row.id}/`)}><Trash2 size={10}/></button>}</span>)}</div>}
+    {editable && <div className="mt-3 space-y-2 border-t border-[#dce3e9] pt-3">
+      <div className="grid gap-2 sm:grid-cols-5">
+        <input className={inp} placeholder="Column code" value={column.column_code} onChange={e=>setColumn(p=>({...p,column_code:e.target.value}))}/>
+        <input className={inp} placeholder="Label" value={column.label} onChange={e=>setColumn(p=>({...p,label:e.target.value}))}/>
+        <select className={inp} value={column.field_type} onChange={e=>setColumn(p=>({...p,field_type:e.target.value as FieldType}))}>{FIELD_TYPES.filter(item=>!["formula","declaration"].includes(item.value)).map(item=><option key={item.value} value={item.value}>{item.label}</option>)}</select>
+        <input className={inp} placeholder="Unit" value={column.unit} onChange={e=>setColumn(p=>({...p,unit:e.target.value}))}/>
+        <button className="rounded bg-[#002d5b] px-3 text-xs font-semibold text-white disabled:opacity-50" disabled={!column.column_code||!column.label||addColumn.isPending} onClick={()=>addColumn.mutate()}>Add column</button>
+      </div>
+      {grid.row_mode === "FIXED" && <div className="flex gap-2"><input className={inp} placeholder="Fixed row label" value={rowLabel} onChange={e=>setRowLabel(e.target.value)}/><button className="shrink-0 rounded border px-3 text-xs font-semibold disabled:opacity-50" disabled={!rowLabel||addRow.isPending} onClick={()=>addRow.mutate()}>Add fixed row</button></div>}
+    </div>}
+  </div>;
+}
+
+function ValidationRuleEditor({ templateId, sections, editable }: { templateId:string; sections:FormSection[]; editable:boolean }) {
+  type Rule = {id:number;rule_type:string;severity:string;field:number|null;grid:number|null;message:string;parameters:Record<string,unknown>};
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const query = useQuery<Rule[]>({queryKey:["validation-rules",templateId],queryFn:()=>api(`/form-templates/${templateId}/validation-rules/`)});
+  const fields = sections.flatMap(section=>section.fields);
+  const grids = sections.flatMap(section=>section.grids);
+  const [rule,setRule]=useState({rule_type:"RANGE",severity:"BLOCK",target:"",message:"",parameters:'{"min": 0}'});
+  const create = useMutation({mutationFn:()=>{
+    const [kind,id]=rule.target.split(":");
+    return api(`/form-templates/${templateId}/validation-rules/`,{method:"POST",body:JSON.stringify({rule_type:rule.rule_type,severity:rule.severity,field:kind==="field"?Number(id):null,grid:kind==="grid"?Number(id):null,message:rule.message,parameters:JSON.parse(rule.parameters)})});
+  },onSuccess:()=>{toast("Validation rule added.","success");qc.invalidateQueries({queryKey:["validation-rules",templateId]});},onError:(error:Error)=>toast(error.message,"error")});
+  return <section className="rounded-[12px] border border-[#eceef0] bg-white p-4">
+    <h2 className="text-sm font-semibold">Validation rules</h2><p className="mt-1 text-xs text-[#737780]">Rules use a validated JSON parameter schema; executable code is never accepted.</p>
+    <div className="mt-3 space-y-2">{query.data?.map(item=><div key={item.id} className="rounded border bg-[#f7f9fb] px-3 py-2 text-xs"><span className="font-semibold">{item.rule_type} · {item.severity}</span> — {item.message}<pre className="mt-1 overflow-auto text-[10px]">{JSON.stringify(item.parameters)}</pre></div>)}</div>
+    {editable&&<div className="mt-4 grid gap-2 border-t pt-4 sm:grid-cols-2">
+      <select className={inp} value={rule.rule_type} onChange={e=>setRule(p=>({...p,rule_type:e.target.value}))}>{["TYPE","RANGE","OPTION","DATE","COORDINATE","CONDITIONAL","FORMULA","COMPARISON","GRID_TOTAL"].map(type=><option key={type}>{type}</option>)}</select>
+      <select className={inp} value={rule.severity} onChange={e=>setRule(p=>({...p,severity:e.target.value}))}><option value="BLOCK">Blocking</option><option value="WARN">Warning</option></select>
+      <select className={inp} value={rule.target} onChange={e=>setRule(p=>({...p,target:e.target.value}))}><option value="">Select target</option>{fields.map(field=><option key={`f${field.id}`} value={`field:${field.id}`}>Field: {field.label}</option>)}{grids.map(grid=><option key={`g${grid.id}`} value={`grid:${grid.id}`}>Grid: {grid.title}</option>)}</select>
+      <input className={inp} placeholder="User-facing message" value={rule.message} onChange={e=>setRule(p=>({...p,message:e.target.value}))}/>
+      <textarea className={`${inp} sm:col-span-2 font-mono`} rows={3} aria-label="Rule parameters JSON" value={rule.parameters} onChange={e=>setRule(p=>({...p,parameters:e.target.value}))}/>
+      <button className="rounded bg-[#002d5b] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50" disabled={!rule.target||!rule.message||create.isPending} onClick={()=>create.mutate()}>Add validated rule</button>
+    </div>}
+  </section>;
+}
+
+function SectionBlock({ section, templateId, editable }: { section: FormSection; templateId: string; editable: boolean }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -221,20 +325,8 @@ function SectionBlock({ section, templateId, editable }: { section: FormSection 
           )}
 
           {/* Grids list */}
-          {(section as { grids?: { id: number; title: string; row_mode: string; columns: { id: number; label: string }[] }[] }).grids?.map(grid => (
-            <div key={grid.id} className="rounded-[8px] border border-[#c3c6d0] bg-[#f7f9fb] px-3 py-2 mb-2">
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-[12px] font-semibold text-[#191c1e]">⊞ {grid.title}</span>
-                <span className="text-[10px] text-[#737780] bg-white border border-[#eceef0] rounded px-1.5 py-0.5">{grid.row_mode}</span>
-                <span className="text-[10px] text-[#737780] ml-auto">{grid.columns.length} column{grid.columns.length !== 1 ? "s" : ""}</span>
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {grid.columns.map(c => (
-                  <span key={c.id} className="text-[10px] bg-white border border-[#eceef0] rounded px-1.5 py-0.5 text-[#43474f]">{c.label}</span>
-                ))}
-              </div>
-            </div>
-          ))}
+          {section.grids?.map(grid => <GridEditor key={grid.id} grid={grid} editable={editable}
+            onChanged={() => qc.invalidateQueries({queryKey:["form-template", templateId]})} />)}
 
           {/* Add field / grid buttons */}
           {editable && !addingField && !addingGrid && (
@@ -250,7 +342,7 @@ function SectionBlock({ section, templateId, editable }: { section: FormSection 
             </div>
           )}
 
-          {addingField && <AddFieldForm templateId={templateId} sectionId={section.id} onDone={() => setAddingField(false)} />}
+          {addingField && <AddFieldForm templateId={templateId} sectionId={section.id} availableFields={section.fields} onDone={() => setAddingField(false)} />}
           {addingGrid && <AddGridForm templateId={templateId} sectionId={section.id} onDone={() => setAddingGrid(false)} />}
         </div>
       )}
@@ -319,10 +411,10 @@ export default function FormBuilderPage() {
   return (
     <div className="space-y-6 max-w-4xl">
       {/* Back nav */}
-      <a href="/forms"
+      <Link href="/forms"
         className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#737780] hover:text-[#0066cc] transition-colors">
         ← Back to Form Templates
-      </a>
+      </Link>
 
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
@@ -354,6 +446,7 @@ export default function FormBuilderPage() {
         <p className="mt-1 break-all font-mono text-[10px] text-[#737780]">{template.source_sha256 || "No source hash"}</p>
         <button onClick={() => { const version=window.prompt("New version number"); if(version?.trim()) cloneMut.mutate(version.trim()); }}
           className="mt-3 rounded-[8px] border border-[#c3c6d0] px-3 py-1.5 text-[11px] font-semibold">Clone as new immutable version</button>
+        <a href={`/forms/${id}/gaps`} className="ml-2 inline-flex rounded-[8px] bg-[#0066cc] px-3 py-1.5 text-[11px] font-semibold text-white">Gap Analysis</a>
       </div>
 
       {/* Section count */}
@@ -421,6 +514,7 @@ export default function FormBuilderPage() {
           ))}
         </div>
       )}
+      <ValidationRuleEditor templateId={id} sections={sections as FormSection[]} editable={template.approval_status !== "APPROVED"} />
     </div>
   );
 }

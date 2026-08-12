@@ -66,13 +66,15 @@ class KMZUploadView(APIView):
 
     def post(self, request, pk):
         submission = get_submission_for_user(request.user, pk=pk)
-        if submission.expected.workflow_status not in ("DRAFT", "CORRECTION_REQUESTED"):
+        if submission.expected.workflow_status not in ("DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"):
             return Response({"detail": "Uploads are only allowed while the submission is editable."}, status=400)
+        if submission.expected.workflow_status == "CORRECTION_REQUESTED" and not submission.supersedes_id:
+            return Response({"detail": "Upload to the linked correction version, not the official historical version."}, status=409)
 
         form_code = submission.expected.form_template.form_code
         if form_code not in KMZ_ELIGIBLE_FORMS:
             return Response(
-                {"detail": f"KMZ uploads are only accepted for fibre forms (DC-DBS05, DC-SUB03). This form is {form_code}."},
+                {"detail": f"KMZ uploads are only accepted for Domestic Fibre form DC-DBS05. This form is {form_code}."},
                 status=400,
             )
 
@@ -186,8 +188,10 @@ class ExcelBackupUploadView(APIView):
 
     def post(self, request, pk):
         submission = get_submission_for_user(request.user, pk=pk)
-        if submission.expected.workflow_status not in ("DRAFT", "CORRECTION_REQUESTED"):
+        if submission.expected.workflow_status not in ("DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"):
             return Response({"detail": "Uploads are only allowed while the submission is editable."}, status=400)
+        if submission.expected.workflow_status == "CORRECTION_REQUESTED" and not submission.supersedes_id:
+            return Response({"detail": "Upload to the linked correction version, not the official historical version."}, status=409)
 
         file = request.FILES.get("file")
         if not file:
@@ -207,6 +211,11 @@ class ExcelBackupUploadView(APIView):
         filename = f"{uuid.uuid4()}_{original_name}"
         path, digest = save_upload(file, f"excel_backup/{submission.id}", filename)
 
+        previous = SubmissionExcelBackup.objects.filter(
+            submission=submission, source_control_status="STORED"
+        )
+        superseded_ids = list(previous.values_list("id", flat=True))
+        previous.update(source_control_status="SUPERSEDED")
         backup = SubmissionExcelBackup.objects.create(
             submission=submission,
             file_name=original_name,
@@ -216,7 +225,8 @@ class ExcelBackupUploadView(APIView):
             sha256=digest,
         )
         scan_private_upload.delay("EXCEL", backup.id)
-        record_audit(user=request.user,action="EXCEL_BACKUP_UPLOADED",entity_type="SubmissionExcelBackup",entity_id=backup.id,after={"sha256":digest})
+        record_audit(user=request.user,action="EXCEL_BACKUP_UPLOADED",entity_type="SubmissionExcelBackup",entity_id=backup.id,
+            after={"sha256":digest,"superseded_backup_ids":superseded_ids})
         return Response({"id": backup.id, "file_name": backup.file_name, "note": "Stored for source control only. Not analyzed."}, status=201)
 
 

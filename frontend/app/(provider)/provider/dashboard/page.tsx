@@ -13,20 +13,20 @@ function formatDue(iso: string): string {
 }
 
 const STATUS_GROUPS = [
-  { label:"Action Required", statuses:["CORRECTION_REQUESTED"],                           color:"#ffe8e8", text:"#c0112a" },
+  { label:"Action Required", statuses:["PROVIDER_CHANGES_REQUESTED","CORRECTION_REQUESTED"], color:"#ffe8e8", text:"#c0112a" },
   { label:"In Progress",     statuses:["NOT_STARTED","DRAFT"],                            color:"#e8f1fb", text:"#004999" },
-  { label:"Pending Approval",statuses:["PENDING_APPROVAL"],                               color:"#fff3bf", text:"#7a5c00" },
+  { label:"Pending Approval",statuses:["PENDING_APPROVAL","PROVIDER_RESUBMITTED"],        color:"#fff3bf", text:"#7a5c00" },
   { label:"Submitted / Done",statuses:["SUBMITTED","UNDER_REVIEW","RESUBMITTED","APPROVED"], color:"#e5f4eb", text:"#1f7a4d" },
 ];
 
 function actionLabel(status: string): string {
   if (status === "NOT_STARTED") return "Start";
-  if (["DRAFT","CORRECTION_REQUESTED"].includes(status)) return "Continue";
+  if (["DRAFT","PROVIDER_CHANGES_REQUESTED","CORRECTION_REQUESTED"].includes(status)) return "Continue";
   return "View";
 }
 
 function actionStyle(status: string): string {
-  if (["NOT_STARTED","DRAFT","CORRECTION_REQUESTED"].includes(status))
+  if (["NOT_STARTED","DRAFT","PROVIDER_CHANGES_REQUESTED","CORRECTION_REQUESTED"].includes(status))
     return "rounded-[6px] bg-[#001836] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#002d5b]";
   return "rounded-[6px] border border-[#c3c6d0] px-3 py-1.5 text-[12px] font-medium text-[#43474f] hover:bg-[#f2f4f6]";
 }

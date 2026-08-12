@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import FormFamily, FormTemplate, FormSection, FormField, FormGrid, GridColumn, GridRow, SelectOption, KMZUploadRequirement, ValidationRule
+from .models import FormFamily, FormTemplate, FormSection, FormField, FormGrid, GridColumn, GridRow, SelectOption, KMZUploadRequirement, ValidationRule, FormRequirement, FormGapAssessment
+from .rules import validate_rule_definition
 
 
 class FormFamilySerializer(serializers.ModelSerializer):
@@ -18,37 +19,43 @@ class ValidationRuleSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         params = attrs.get("parameters", getattr(self.instance, "parameters", {}))
         rule_type = attrs.get("rule_type", getattr(self.instance, "rule_type", ""))
-        allowed = {
-            "TYPE": {"field_type"}, "RANGE": {"min", "max"}, "OPTION": {"allowed"}, "DATE": {"min", "max"},
-            "COORDINATE": set(), "CONDITIONAL": {"when_field", "equals"}, "FORMULA": {"expression"},
-            "COMPARISON": {"left_field", "right_field", "operator"}, "GRID_TOTAL": {"column_id", "equals_field"},
-        }.get(rule_type)
-        if allowed is None: raise serializers.ValidationError("Unsupported rule type.")
-        unknown = set(params) - allowed
-        if unknown: raise serializers.ValidationError({"parameters": f"Unsupported parameters: {', '.join(sorted(unknown))}"})
         form = self.context.get("form_template") or getattr(self.instance, "form_template", None)
         field = attrs.get("field", getattr(self.instance, "field", None))
         grid = attrs.get("grid", getattr(self.instance, "grid", None))
-        if field and form and field.section.form_template_id != form.id:
-            raise serializers.ValidationError({"field": "The field must belong to this form version."})
-        if grid and form and grid.section.form_template_id != form.id:
-            raise serializers.ValidationError({"grid": "The grid must belong to this form version."})
-        def check_expression(node, depth=0):
-            if depth > 12: raise serializers.ValidationError({"parameters":"Formula nesting is too deep."})
-            if isinstance(node,(int,float,str)): return
-            if not isinstance(node,dict) or set(node)-{"field","op","args"}: raise serializers.ValidationError({"parameters":"Invalid allow-listed formula structure."})
-            if "field" in node: return
-            if node.get("op") not in {"+","-","*","/","==","!=",">",">=","<","<="} or len(node.get("args",[])) != 2:
-                raise serializers.ValidationError({"parameters":"Invalid formula operator or operands."})
-            for child in node["args"]: check_expression(child,depth+1)
-        if rule_type == "FORMULA": check_expression(params.get("expression"))
+        try:
+            validate_rule_definition(rule_type, params, form, field, grid)
+        except Exception as exc:
+            detail = getattr(exc, "message_dict", None) or getattr(exc, "messages", None) or str(exc)
+            raise serializers.ValidationError(detail)
         return attrs
+
+
+class FormRequirementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FormRequirement
+        fields = "__all__"
+        read_only_fields = ["family"]
+
+
+class FormGapAssessmentSerializer(serializers.ModelSerializer):
+    requirement_key = serializers.CharField(source="requirement.requirement_key", read_only=True)
+    requirement_type = serializers.CharField(source="requirement.requirement_type", read_only=True)
+    requirement_label = serializers.CharField(source="requirement.label", read_only=True)
+    requirement_description = serializers.CharField(source="requirement.description", read_only=True)
+    severity = serializers.CharField(source="requirement.severity", read_only=True)
+    owner_name = serializers.CharField(source="owner.name", read_only=True)
+    resolved_by_name = serializers.CharField(source="resolved_by.name", read_only=True)
+
+    class Meta:
+        model = FormGapAssessment
+        fields = "__all__"
+        read_only_fields = ["form_template", "requirement", "assessed_by", "assessed_at", "resolved_by", "resolved_at"]
 
 
 class SelectOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = SelectOption
-        fields = ["value", "label", "sort_order"]
+        fields = ["id", "value", "label", "sort_order"]
 
 
 class GridRowSerializer(serializers.ModelSerializer):
@@ -69,7 +76,7 @@ class FormGridSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FormGrid
-        fields = ["id", "grid_code", "title", "row_mode", "sort_order", "instructions", "columns", "fixed_rows"]
+        fields = ["id", "grid_code", "title", "row_mode", "min_rows", "sort_order", "instructions", "columns", "fixed_rows"]
 
 
 class FormFieldSerializer(serializers.ModelSerializer):
@@ -113,7 +120,7 @@ class FormSectionSerializer(serializers.ModelSerializer):
 class FormTemplateListSerializer(serializers.ModelSerializer):
     class Meta:
         model = FormTemplate
-        fields = ["id", "family", "form_code", "name", "sector", "provider_category", "frequency", "version", "status", "kmz_required", "excel_backup_enabled", "mapping_complete", "approval_status", "source_reference", "source_sha256", "approved_by", "approved_at", "published_at"]
+        fields = ["id", "family", "form_code", "name", "sector", "provider_category", "frequency", "version", "status", "kmz_required", "excel_backup_enabled", "mapping_complete", "mapping_basis", "approval_status", "source_reference", "source_sha256", "approved_by", "approved_at", "published_at"]
         read_only_fields = ["status", "approval_status", "approved_by", "approved_at", "published_at"]
 
     def validate_source_sha256(self, value):
@@ -127,7 +134,7 @@ class FormTemplateDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FormTemplate
-        fields = ["id", "family", "form_code", "name", "sector", "provider_category", "frequency", "version", "status", "kmz_required", "excel_backup_enabled", "instructions", "source_reference", "source_sha256", "mapping_complete", "approval_status", "approved_by", "approved_at", "published_at", "sections"]
+        fields = ["id", "family", "form_code", "name", "sector", "provider_category", "frequency", "version", "status", "kmz_required", "excel_backup_enabled", "instructions", "source_reference", "source_sha256", "mapping_complete", "mapping_basis", "approval_status", "approved_by", "approved_at", "published_at", "sections"]
 
 
 class KMZRequirementSerializer(serializers.ModelSerializer):

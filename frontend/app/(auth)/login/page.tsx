@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Eye, EyeOff, AlertCircle } from "lucide-react";
-import { setAuthTokens } from "@/lib/auth";
+import { clearAuthTokens } from "@/lib/auth";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -17,9 +17,14 @@ export default function LoginPage() {
     setError(null);
 
     try {
+      clearAuthTokens();
+      const csrfResponse = await fetch("/api/v1/auth/csrf/", { credentials: "same-origin" });
+      if (!csrfResponse.ok) throw new Error("CSRF initialization failed.");
+      const { csrfToken } = await csrfResponse.json() as { csrfToken: string };
       const res = await fetch("/api/v1/auth/login/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
         body: JSON.stringify({ email, password }),
       });
 
@@ -31,10 +36,12 @@ export default function LoginPage() {
       }
 
       const data = await res.json();
-      setAuthTokens({ access: data.access, refresh: data.refresh });
-
       // Route by role
       const role: string = data.user?.role ?? "";
+      if (data.user?.must_change_password) {
+        window.location.assign("/change-password");
+        return;
+      }
       window.location.assign(
         role === "NCA_VIEWER" ? "/data-requests" : role.startsWith("NCA") ? "/dashboard" : "/provider/dashboard"
       );
@@ -124,9 +131,7 @@ export default function LoginPage() {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label className="block text-[13px] font-medium text-[#191c1e]">Password</label>
-                <button type="button" className="text-[12px] font-medium text-[#0066cc] hover:text-[#002d5b] transition-colors">
-                  Forgot password?
-                </button>
+                <span className="text-[11px] text-[#737780]">Contact your administrator for an audited reset.</span>
               </div>
               <div className="relative">
                 <input
@@ -166,7 +171,7 @@ export default function LoginPage() {
           </form>
 
           <p className="text-[11px] text-[#737780] text-center leading-relaxed">
-            Multi-factor authentication, account lockout, and session timeout are enforced per NCA security policy.
+            Account lockout and inactivity timeout protect this portal. Multi-factor authentication is planned for a later security release.
           </p>
         </div>
       </div>

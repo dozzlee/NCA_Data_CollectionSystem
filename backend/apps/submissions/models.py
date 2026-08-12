@@ -7,6 +7,8 @@ WORKFLOW_STATUSES = [
     ("NOT_STARTED", "Not Started"),
     ("DRAFT", "Draft"),
     ("PENDING_APPROVAL", "Pending Provider Approval"),
+    ("PROVIDER_CHANGES_REQUESTED", "Provider Changes Requested"),
+    ("PROVIDER_RESUBMITTED", "Resubmitted to Provider Approver"),
     ("SUBMITTED", "Submitted"),
     ("UNDER_REVIEW", "Under NCA Review"),
     ("CORRECTION_REQUESTED", "Correction Requested"),
@@ -69,18 +71,30 @@ class ReportingPeriod(models.Model):
         """Generate ExpectedSubmission records for all assigned provider-form pairs."""
         invalid = []
         for form in self.applicable_form_templates.filter(frequency=self.frequency).select_related("family"):
-            if not form.mapping_complete or form.approval_status != "APPROVED": invalid.append(f"{form.form_code}: mapping is not approved")
+            if form.status != "ACTIVE": invalid.append(f"{form.form_code} v{form.version}: only the active verified version can be assigned to a new period")
+            elif not form.mapping_complete or form.approval_status != "APPROVED": invalid.append(f"{form.form_code}: mapping is not approved")
             elif not form.family_id: invalid.append(f"{form.form_code}: form family is missing")
             elif form.family.frequency_decision_status != "APPROVED": invalid.append(f"{form.form_code}: canonical frequency decision is pending")
             elif form.family.canonical_frequency != self.frequency: invalid.append(f"{form.form_code}: canonical frequency does not match the period")
         if invalid:
             raise ValueError("Period activation blocked. " + "; ".join(invalid))
+        from apps.providers.models import ProviderFormAssignment
         for provider in self.assigned_providers.all():
-            for form in self.applicable_form_templates.filter(
-                provider_category=provider.category,
-                sector=provider.sector,
-                frequency=self.frequency,
-            ):
+            assignments = ProviderFormAssignment.objects.filter(
+                provider=provider,
+                form_family__canonical_frequency=self.frequency,
+                effective_from__lte=self.due_at.date(),
+            ).filter(models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=self.opens_at.date()))
+            if not assignments.exists():
+                raise ValueError(f"No confirmed official form assignment exists for {provider.registered_name}.")
+            required_family_ids = set(assignments.filter(obligation__in=["REQUIRED", "OPTIONAL"]).values_list("form_family_id", flat=True))
+            forms = self.applicable_form_templates.filter(family_id__in=required_family_ids, frequency=self.frequency)
+            present_family_ids = set(forms.values_list("family_id", flat=True))
+            missing = required_family_ids - present_family_ids
+            if missing:
+                codes = ", ".join(ProviderFormAssignment.objects.filter(provider=provider, form_family_id__in=missing).values_list("form_family__code", flat=True))
+                raise ValueError(f"The period is missing officially assigned form templates for {provider.registered_name}: {codes}.")
+            for form in forms:
                 ExpectedSubmission.objects.get_or_create(
                     provider=provider,
                     form_template=form,
@@ -120,6 +134,11 @@ class ExpectedSubmission(models.Model):
     )
     due_at_override = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    replacement = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="replaces_legacy_obligation",
+    )
+    migration_report = models.JSONField(default=dict, blank=True)
 
     def compute_due_state(self):
         now = timezone.now()
@@ -199,6 +218,12 @@ class Submission(models.Model):
         "users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="reviewed_submissions"
     )
     reviewed_at = models.DateTimeField(null=True, blank=True)
+    revision = models.PositiveIntegerField(default=0)
+    supersedes = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="superseded_by",
+        help_text="Previous immutable official version cloned for correction.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -246,6 +271,23 @@ class SubmissionValue(models.Model):
             models.Index(fields=["submission", "field"]),
             models.Index(fields=["submission", "grid", "grid_row_id", "grid_column"]),
         ]
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    models.Q(field__isnull=False, grid__isnull=True, grid_column__isnull=True)
+                    | models.Q(field__isnull=True, grid__isnull=False, grid_column__isnull=False)
+                ),
+                name="submission_value_exactly_one_target",
+            ),
+            models.UniqueConstraint(
+                fields=["submission", "field"], condition=models.Q(field__isnull=False),
+                name="unique_submission_scalar_value",
+            ),
+            models.UniqueConstraint(
+                fields=["submission", "grid", "grid_row_id", "grid_column"],
+                condition=models.Q(grid__isnull=False), name="unique_submission_grid_cell",
+            ),
+        ]
 
 
 class ReviewAction(models.Model):
@@ -278,12 +320,57 @@ class ReviewAction(models.Model):
 
 class CorrectionItem(models.Model):
     source_submission = models.ForeignKey(Submission, on_delete=models.CASCADE, related_name="correction_items")
+    stage = models.CharField(
+        max_length=25,
+        choices=[("PROVIDER_APPROVAL", "Provider Approval"), ("NCA_REVIEW", "NCA Review")],
+        default="NCA_REVIEW",
+    )
+    resolution_submission = models.ForeignKey(
+        Submission, null=True, blank=True, on_delete=models.PROTECT,
+        related_name="resolved_correction_items",
+    )
     target_type = models.CharField(max_length=20, choices=ReviewAction.TARGET_CHOICES)
     target_id = models.CharField(max_length=100)
     instruction = models.TextField()
     status = models.CharField(max_length=20, choices=[("OPEN", "Open"), ("ADDRESSED", "Addressed"), ("VERIFIED", "Verified")], default="OPEN")
     created_by = models.ForeignKey("users.User", on_delete=models.PROTECT)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class SubmissionEvent(models.Model):
+    AUDIENCE_CHOICES = [
+        ("PROVIDER", "Provider"), ("NCA", "NCA"), ("BOTH", "Both"), ("INTERNAL", "Internal"),
+    ]
+
+    submission = models.ForeignKey(Submission, on_delete=models.PROTECT, related_name="timeline_events")
+    event_type = models.CharField(max_length=60)
+    from_status = models.CharField(max_length=30, blank=True)
+    to_status = models.CharField(max_length=30, blank=True)
+    message = models.TextField()
+    audience = models.CharField(max_length=10, choices=AUDIENCE_CHOICES, default="BOTH")
+    metadata = models.JSONField(default=dict)
+    actor = models.ForeignKey("users.User", null=True, on_delete=models.PROTECT, related_name="submission_events")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+
+class SubmissionNotification(models.Model):
+    recipient = models.ForeignKey("users.User", on_delete=models.CASCADE, related_name="submission_notifications")
+    submission = models.ForeignKey(Submission, on_delete=models.PROTECT, related_name="notifications")
+    event = models.ForeignKey(SubmissionEvent, on_delete=models.PROTECT, related_name="notifications")
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["recipient", "event"], name="unique_submission_event_recipient")
+        ]
 
 
 class NonFilledDisposition(models.Model):

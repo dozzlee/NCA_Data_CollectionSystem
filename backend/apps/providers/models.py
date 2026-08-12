@@ -71,3 +71,23 @@ class ProviderContact(models.Model):
 
     class Meta:
         ordering = ["name"]
+
+
+class ProviderFormAssignment(models.Model):
+    OBLIGATIONS = [("REQUIRED", "Required"), ("OPTIONAL", "Optional"), ("EXEMPT", "Exempt")]
+    provider = models.ForeignKey(ProviderProfile, on_delete=models.PROTECT, related_name="form_assignments")
+    form_family = models.ForeignKey("forms_engine.FormFamily", on_delete=models.PROTECT, related_name="provider_assignments")
+    obligation = models.CharField(max_length=20, choices=OBLIGATIONS, default="REQUIRED")
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)
+    source_reference = models.CharField(max_length=500)
+    confirmed_by = models.ForeignKey("users.User", null=True, on_delete=models.SET_NULL, related_name="confirmed_provider_form_assignments")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["provider__registered_name", "form_family__code", "-effective_from"]
+        constraints = [models.UniqueConstraint(fields=["provider", "form_family", "effective_from"], name="unique_official_provider_form_effective_date")]
+
+    def __str__(self):
+        return f"{self.provider.registered_name} / {self.form_family.code}"

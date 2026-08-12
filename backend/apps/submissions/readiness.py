@@ -28,6 +28,9 @@ def _field_is_applicable(field, values_by_field):
 
 def calculate_submission_readiness(submission, validation_scope="FULL"):
     template = submission.expected.form_template
+    # Formula rules may materialize system-calculated values, so validation must
+    # run before completeness is calculated.
+    validation_run = run_validation(submission, validation_scope)
     values = list(
         submission.values.select_related(
             "field__section",
@@ -87,6 +90,11 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
             row_ids = [str(row.id) for row in grid.fixed_rows.all()]
         else:
             row_ids = sorted(rows_by_grid.get(grid.id, set()))
+            if len(row_ids) < grid.min_rows:
+                blockers.append({
+                    "code": "REQUIRED_GRID_ROWS", "type": "GRID", "id": grid.id,
+                    "section_code": grid.section.section_code, "label": f"{grid.title} requires at least {grid.min_rows} row(s)",
+                })
         for row_id in row_ids:
             for column in required_columns:
                 required_total += 1
@@ -110,7 +118,10 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
             required_total += 1
             section_code = requirement.section.section_code if requirement.section else ""
             section_required[section_code] += 1
-            if submission.kmz_uploads.filter(requirement=requirement, scan_status="CLEAN").exists():
+            clean_upload = submission.kmz_uploads.filter(requirement=requirement, scan_status="CLEAN").exists()
+            # Provider submission needs a clean file; final NCA approval separately
+            # requires the regulatory review disposition to be ACCEPTED.
+            if clean_upload:
                 completed_total += 1
                 section_completed[section_code] += 1
                 continue
@@ -122,7 +133,6 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
                 "label": requirement.get_category_display(),
             })
 
-    validation_run = run_validation(submission, validation_scope)
     for result in validation_run.results.filter(severity="BLOCK"):
         blockers.append({"code": result.code, "type": result.target_type, "id": result.target_id, "section_code": "", "label": result.message})
 

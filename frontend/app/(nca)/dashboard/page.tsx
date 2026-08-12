@@ -340,6 +340,7 @@ export default function DashboardPage() {
           </h2>
 
           <select
+            aria-label="Filter expected submissions by workflow status"
             value={workflowFilter}
             onChange={(e) => setWorkflowFilter(e.target.value as WorkflowStatus | "")}
             className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-1.5 text-[12px] text-[#191c1e] focus:outline-none focus:border-[#0066cc]"
@@ -351,6 +352,7 @@ export default function DashboardPage() {
           </select>
 
           <select
+            aria-label="Filter expected submissions by due state"
             value={dueFilter}
             onChange={(e) => setDueFilter(e.target.value as DueState | "")}
             className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-1.5 text-[12px] text-[#191c1e] focus:outline-none focus:border-[#0066cc]"

@@ -1,8 +1,18 @@
-import { clearAuthTokens, getAccessToken, getRefreshToken, setAccessToken } from "@/lib/auth";
+import { clearAuthTokens } from "@/lib/auth";
 
 // Empty string = relative URL so browser calls /api/v1/... on the same host.
 // Next.js rewrites proxy /api/* → Django internally (see next.config.js).
 const BASE = "";
+let csrfToken: string | undefined;
+
+async function getCsrfToken(): Promise<string> {
+  if (csrfToken) return csrfToken;
+  const response = await fetch(`${BASE}/api/v1/auth/csrf/`, { credentials: "same-origin" });
+  if (!response.ok) throw new ApiError(response.status, "Unable to initialize request security.");
+  const data = await response.json() as { csrfToken: string };
+  csrfToken = data.csrfToken;
+  return csrfToken;
+}
 
 class ApiError extends Error {
   constructor(public status: number, message: string, public data?: unknown) {
@@ -24,22 +34,21 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export async function authenticatedFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const token = getAccessToken();
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (typeof document !== "undefined" && !["GET", "HEAD", "OPTIONS"].includes(init.method ?? "GET")) {
+    headers.set("X-CSRFToken", await getCsrfToken());
+  }
 
-  let res = await fetch(`${BASE}/api/v1${path}`, { ...init, headers });
+  let res = await fetch(`${BASE}/api/v1${path}`, { ...init, headers, credentials: "same-origin" });
 
   if (res.status === 401) {
     // Attempt token refresh
     const refreshed = await refreshTokens();
     if (refreshed) {
-      const refreshedToken = getAccessToken();
-      if (refreshedToken) headers.set("Authorization", `Bearer ${refreshedToken}`);
-      res = await fetch(`${BASE}/api/v1${path}`, { ...init, headers });
+      res = await fetch(`${BASE}/api/v1${path}`, { ...init, headers, credentials: "same-origin" });
       return res;
     }
     clearAuthTokens();
@@ -88,17 +97,14 @@ export async function downloadAuthenticated(
 }
 
 async function refreshTokens(): Promise<boolean> {
-  const refresh = getRefreshToken();
-  if (!refresh) return false;
   try {
+    const csrf = typeof document === "undefined" ? undefined : await getCsrfToken();
     const res = await fetch(`${BASE}/api/v1/auth/refresh/`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh }),
+      credentials: "same-origin",
+      headers: csrf ? { "X-CSRFToken": csrf } : undefined,
     });
     if (!res.ok) return false;
-    const data = await res.json();
-    setAccessToken(data.access);
     return true;
   } catch {
     return false;

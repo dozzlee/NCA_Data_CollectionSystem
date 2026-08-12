@@ -11,6 +11,7 @@ DATABASES["default"] = dj_database_url.config(
 ALLOWED_HOSTS = ["*"]
 
 CORS_ALLOW_ALL_ORIGINS = True
+CSRF_TRUSTED_ORIGINS = ["http://127.0.0.1:3001", "http://localhost:3001"]
 
 INSTALLED_APPS += ["django_extensions"]
 

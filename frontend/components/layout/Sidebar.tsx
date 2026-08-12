@@ -11,7 +11,6 @@ import {
   ShieldCheck, LifeBuoy,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { clearAuthTokens } from "@/lib/auth";
 import type { User } from "@/lib/types";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -40,6 +39,12 @@ const ADMIN_NAV = [
   { href: "/support", label: "Support Queue", icon: LifeBuoy },
 ];
 
+const OFFICER_NAV = [
+  { href: "/forms",  label: "Form Builder", icon: FormInput },
+  { href: "/governance", label: "Production Readiness", icon: ShieldCheck },
+  { href: "/support", label: "Support Queue", icon: LifeBuoy },
+];
+
 const REQUESTER_NAV = [
   { href: "/industry-dashboard", label: "Industry Dashboard", icon: BarChart3 },
   { href: "/data-catalog", label: "Data Catalog", icon: Library },
@@ -58,11 +63,12 @@ export function Sidebar() {
   });
 
   const isAdmin = user?.role === "NCA_ADMIN";
+  const isOfficer = user?.role === "NCA_OFFICER";
   const isRequester = user?.role === "NCA_VIEWER";
-  const navItems = isRequester ? REQUESTER_NAV : isAdmin ? [...BASE_NAV, ...ADMIN_NAV] : BASE_NAV;
+  const navItems = isRequester ? REQUESTER_NAV : isAdmin ? [...BASE_NAV, ...ADMIN_NAV] : isOfficer ? [...BASE_NAV, ...OFFICER_NAV] : BASE_NAV;
 
-  function handleSignOut() {
-    clearAuthTokens();
+  async function handleSignOut() {
+    try { await api.post("/auth/logout/"); } catch { /* Always leave the local session. */ }
     router.push("/login");
   }
 
@@ -114,7 +120,7 @@ export function Sidebar() {
         })}
 
         {/* Admin section divider */}
-        {isAdmin && !isRequester && (
+        {(isAdmin || isOfficer) && !isRequester && (
           <p className="px-3 mt-4 mb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-white/35">
             Administration
           </p>

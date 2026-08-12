@@ -3,10 +3,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BarChart3, LayoutDashboard, Clock, CheckCircle, HelpCircle, LogOut, ShieldAlert } from "lucide-react";
+import { BarChart3, LayoutDashboard, Clock, CheckCircle, HelpCircle, LogOut, ShieldAlert, Bell } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { clearAuthTokens } from "@/lib/auth";
 import type { User } from "@/lib/types";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -19,8 +18,8 @@ const DATA_ENTRY_NAV = [
   { href: "/provider/dashboard",    label: "My Forms",    icon: LayoutDashboard },
   { href: "/industry-dashboard",    label: "Industry",    icon: BarChart3 },
   { href: "/provider/history",      label: "History",     icon: Clock },
-  { href: "/provider/compliance",   label: "Compliance",  icon: ShieldAlert },
-  { href: "/provider/inquiries",    label: "Inquiries",   icon: HelpCircle },
+  { href: "/provider/inquiries",    label: "Technical Support",   icon: HelpCircle },
+  { href: "/provider/notifications",label: "Updates",      icon: Bell },
 ];
 
 const APPROVER_NAV = [
@@ -30,6 +29,7 @@ const APPROVER_NAV = [
   { href: "/provider/history",           label: "History",          icon: Clock },
   { href: "/provider/compliance",        label: "Compliance",       icon: ShieldAlert },
   { href: "/provider/inquiries",         label: "Inquiries",        icon: HelpCircle },
+  { href: "/provider/notifications",     label: "Updates",          icon: Bell },
 ];
 
 export function ProviderTopBar() {
@@ -42,8 +42,8 @@ export function ProviderTopBar() {
     staleTime: 5 * 60 * 1000,
   });
 
-  function handleSignOut() {
-    clearAuthTokens();
+  async function handleSignOut() {
+    try { await api.post("/auth/logout/"); } catch { /* Always leave the local session. */ }
     router.push("/login");
   }
 

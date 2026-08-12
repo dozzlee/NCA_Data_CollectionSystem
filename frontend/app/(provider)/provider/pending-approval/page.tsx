@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import type { ExpectedSubmission } from "@/lib/types";
+import type { ExpectedSubmission, User } from "@/lib/types";
 
 function formatDue(iso: string) {
   return new Date(iso).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" });
@@ -15,10 +15,17 @@ function formatDue(iso: string) {
 export default function PendingApprovalPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const { data: user } = useQuery<User>({ queryKey:["me"], queryFn:()=>api("/auth/me/") });
 
   const { data, isLoading } = useQuery<{ results: ExpectedSubmission[] }>({
     queryKey: ["provider-pending-approval"],
-    queryFn: () => api("/expected-submissions/?workflow_status=PENDING_APPROVAL&ordering=period__due_at"),
+    queryFn: async () => {
+      const [pending, resubmitted] = await Promise.all([
+        api<any>("/expected-submissions/?workflow_status=PENDING_APPROVAL&ordering=period__due_at"),
+        api<any>("/expected-submissions/?workflow_status=PROVIDER_RESUBMITTED&ordering=period__due_at"),
+      ]);
+      return { ...pending, results: [...pending.results, ...resubmitted.results] };
+    },
   });
 
   const submissions = data?.results ?? [];
@@ -33,15 +40,9 @@ export default function PendingApprovalPage() {
     onError: () => toast("Failed to submit. Please try again.", "error"),
   });
 
-  const returnToDraft = useMutation({
-    mutationFn: (submissionId: number) =>
-      api(`/submissions/${submissionId}/return-to-draft/`, { method: "POST" }),
-    onSuccess: () => {
-      toast("Returned to data entry.", "info");
-      qc.invalidateQueries({ queryKey: ["provider-pending-approval"] });
-    },
-    onError: () => toast("Failed to return. Please try again.", "error"),
-  });
+  if (user && user.role !== "PROVIDER_APPROVER") {
+    return <div className="rounded-[16px] border bg-white p-8"><h1 className="text-xl font-semibold">Provider Approver access required</h1><p className="mt-2 text-sm text-[#737780]">Data Entry users submit forms to an Approver from My Forms and cannot access the approval queue.</p></div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -83,14 +84,6 @@ export default function PendingApprovalPage() {
                     className="rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] font-medium text-[#43474f] hover:bg-[#f2f4f6]">
                     Review Form
                   </Link>
-                  <button
-                    onClick={() => {
-                      if (s.latest_submission_id) returnToDraft.mutate(s.latest_submission_id);
-                    }}
-                    disabled={returnToDraft.isPending}
-                    className="rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] font-medium text-[#43474f] hover:bg-[#f2f4f6] disabled:opacity-50">
-                    Return to Data Entry
-                  </button>
                   <button
                     onClick={() => {
                       if (s.latest_submission_id && confirm(`Officially submit "${s.form_name}" to NCA? This cannot be undone.`)) {

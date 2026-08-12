@@ -1,22 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { clearAuthTokens, getAccessToken } from "@/lib/auth";
+import { api } from "@/lib/api";
 
-const WARNING_BEFORE_MS = 2 * 60 * 1000; // warn 2 min before expiry
-
-function getTokenExpiry(): number | null {
-  if (typeof window === "undefined") return null;
-  const token = getAccessToken();
-  if (!token) return null;
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    return payload.exp ? payload.exp * 1000 : null;
-  } catch {
-    return null;
-  }
-}
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const WARNING_BEFORE_MS = 2 * 60 * 1000;
 
 export function useSessionTimeout(onRefresh: () => Promise<boolean>) {
   const [showWarning, setShowWarning] = useState(false);
@@ -24,51 +13,35 @@ export function useSessionTimeout(onRefresh: () => Promise<boolean>) {
   const warningTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  function clearTimers() {
+  const clearTimers = useCallback(() => {
     if (warningTimer.current) clearTimeout(warningTimer.current);
     if (logoutTimer.current) clearTimeout(logoutTimer.current);
-  }
+  }, []);
 
-  function scheduleTimers() {
+  const logout = useCallback(async () => {
     clearTimers();
-    const expiry = getTokenExpiry();
-    if (!expiry) return;
-    const now = Date.now();
-    const msUntilExpiry = expiry - now;
-    if (msUntilExpiry <= 0) {
-      logout();
-      return;
-    }
-    const msUntilWarning = msUntilExpiry - WARNING_BEFORE_MS;
-    if (msUntilWarning > 0) {
-      warningTimer.current = setTimeout(() => setShowWarning(true), msUntilWarning);
-    } else {
-      setShowWarning(true);
-    }
-    logoutTimer.current = setTimeout(logout, msUntilExpiry);
-  }
-
-  function logout() {
-    clearTimers();
-    clearAuthTokens();
+    try { await api.post("/auth/logout/"); } catch { /* Session may already be expired. */ }
     router.push("/login");
-  }
+  }, [clearTimers, router]);
+
+  const scheduleTimers = useCallback(() => {
+    clearTimers(); setShowWarning(false);
+    warningTimer.current = setTimeout(() => setShowWarning(true), IDLE_TIMEOUT_MS - WARNING_BEFORE_MS);
+    logoutTimer.current = setTimeout(logout, IDLE_TIMEOUT_MS);
+  }, [clearTimers, logout]);
 
   async function handleStaySignedIn() {
     const ok = await onRefresh();
-    if (ok) {
-      setShowWarning(false);
-      scheduleTimers();
-    } else {
-      logout();
-    }
+    if (ok) scheduleTimers(); else await logout();
   }
 
   useEffect(() => {
+    const activity = () => scheduleTimers();
+    const events = ["mousedown", "keydown", "touchstart", "scroll"] as const;
+    events.forEach((event) => window.addEventListener(event, activity, { passive: true }));
     scheduleTimers();
-    return clearTimers;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => { clearTimers(); events.forEach((event) => window.removeEventListener(event, activity)); };
+  }, [clearTimers, scheduleTimers]);
 
   return { showWarning, handleStaySignedIn, handleSignOut: logout };
 }

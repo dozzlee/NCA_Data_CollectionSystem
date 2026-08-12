@@ -3,7 +3,7 @@ from django.db import models
 
 class SubmissionKMZUpload(models.Model):
     """
-    KMZ uploads are ONLY permitted for DC-DBS05 (Domestic Fibre) and DC-SUB03 (Submarine Fibre).
+    KMZ uploads are only permitted for DC-DBS05 (Domestic Fibre) under PRD Section 11.
     This is enforced at the API level via KMZUploadRequirement.
     """
     REVIEW_STATUS_CHOICES = [

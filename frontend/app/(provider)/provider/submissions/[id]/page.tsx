@@ -28,7 +28,8 @@ import type { ExpectedSubmission, FormSection, FieldStatus } from "@/lib/types";
 // ─── Local value state for one section ───────────────────────────────────────
 
 type FieldValues = Record<string, { value: string; status: FieldStatus | ""; explanation: string }>;
-type GridCellValue = { grid_row_id: string; grid_column_id: number; value: string; value_status: FieldStatus | "" };
+type GridCellValue = { grid_row_id: string; grid_column_id: number; value: string; value_status: FieldStatus | ""; explanation?: string };
+type TimelineEvent = { id:number; event_type:string; message:string; from_status:string; to_status:string; actor_name:string|null; created_at:string };
 
 function useSectionFieldState(
   sectionFields: FormSection["fields"],
@@ -60,11 +61,13 @@ function SectionContent({
   submissionId,
   isEditable,
   kmzRequired,
+  submissionRevision,
 }: {
   section: FormSection;
   submissionId: number;
   isEditable: boolean;
   kmzRequired: boolean;
+  submissionRevision: number;
 }) {
   const serverValues = useSectionValues(submissionId, section.section_code);
   const saveMutation = useSaveSectionValues(submissionId);
@@ -98,6 +101,7 @@ function SectionContent({
         grid_column_id: value.grid_column,
         value: value.value,
         value_status: value.value_status as FieldStatus,
+        explanation: value.explanation ?? "",
       });
     }
     setGridValues(grouped);
@@ -126,9 +130,9 @@ function SectionContent({
         explanation: v.explanation,
       }));
       const gridPayload = Object.entries(gridValues).flatMap(([gid, rows]) =>
-        rows.map((r) => ({ grid: Number(gid), grid_row_id: r.grid_row_id, grid_column: r.grid_column_id, value: r.value, value_status: r.value_status }))
+        rows.map((r) => ({ grid: Number(gid), grid_row_id: r.grid_row_id, grid_column: r.grid_column_id, value: r.value, value_status: r.value_status, explanation: r.explanation ?? "" }))
       );
-      await saveMutation.mutateAsync({ sectionCode: section.section_code, values: [...fieldPayload, ...gridPayload] });
+      await saveMutation.mutateAsync({ sectionCode: section.section_code, values: [...fieldPayload, ...gridPayload], revision: submissionRevision });
       setDirty(false);
       setSaveMsg("saved");
       setTimeout(() => setSaveMsg(null), 2000);
@@ -302,6 +306,11 @@ export default function FormEntryPage() {
   const latestSubmissionId = expected ? (expected as { latest_submission_id?: number }).latest_submission_id ?? null : null;
   const submissionQ = useSubmission(latestSubmissionId);
   const submission = submissionQ.data;
+  const timelineQ = useQuery<TimelineEvent[]>({
+    queryKey: ["submission-timeline", latestSubmissionId],
+    queryFn: () => api(`/submissions/${latestSubmissionId}/timeline/`),
+    enabled: Boolean(latestSubmissionId),
+  });
 
   const formQ = useFormTemplate(expected?.form_template ?? 0);
   const form = formQ.data;
@@ -312,6 +321,9 @@ export default function FormEntryPage() {
   const startMutation = useStartSubmission();
   const submitMutation = useSubmitForApproval(submission?.id ?? 0);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [correctionSection, setCorrectionSection] = useState("");
 
   const sections = useMemo(() => form?.sections ?? [], [form?.sections]);
   const [activeSection, setActiveSection] = useState<string>("");
@@ -328,7 +340,7 @@ export default function FormEntryPage() {
 
   const isEditable = Boolean(
     isDataEntry
-    && (expected?.workflow_status === "DRAFT" || expected?.workflow_status === "CORRECTION_REQUESTED")
+    && ["DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"].includes(expected?.workflow_status ?? "")
   );
 
   async function handleStart() {
@@ -425,7 +437,7 @@ export default function FormEntryPage() {
 
         <div className="flex gap-2 shrink-0">
           {/* DATA ENTRY: can submit draft to approver */}
-          {isDataEntry && ["DRAFT", "CORRECTION_REQUESTED"].includes(expected.workflow_status) && (
+          {isDataEntry && ["DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"].includes(expected.workflow_status) && (
             <button
               onClick={handleSubmitForApproval}
               disabled={submitMutation.isPending || !completion?.can_submit}
@@ -437,12 +449,12 @@ export default function FormEntryPage() {
             </button>
           )}
           {/* APPROVER: can return to data entry or officially submit to NCA */}
-          {isApprover && expected.workflow_status === "PENDING_APPROVAL" && (
+          {isApprover && ["PENDING_APPROVAL", "PROVIDER_RESUBMITTED"].includes(expected.workflow_status) && (
             <>
               <button
-                onClick={async () => {
-                  await api(`/submissions/${submission?.id}/return-to-draft/`, { method: "POST" });
-                  expectedQ.refetch();
+                onClick={() => {
+                  setCorrectionSection(activeSection || sections[0]?.section_code || "");
+                  setCorrectionOpen(true);
                 }}
                 className="flex items-center gap-2 rounded-[8px] border border-[#c3c6d0] px-4 py-2.5 text-[13px] font-medium text-[#43474f] hover:bg-[#f2f4f6] transition-colors"
               >
@@ -468,7 +480,46 @@ export default function FormEntryPage() {
         </div>
       )}
 
-      {isDataEntry && ["DRAFT", "CORRECTION_REQUESTED"].includes(expected.workflow_status) && completion && !completion.can_submit && (
+      {correctionOpen && (
+        <div className="rounded-[12px] border border-[#ffd100] bg-[#fffdf5] p-4">
+          <h2 className="text-[14px] font-semibold text-[#191c1e]">Return for correction</h2>
+          <p className="mt-1 text-[12px] text-[#737780]">Choose the affected section and explain exactly what Data Entry must correct.</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-[220px_1fr]">
+            <select value={correctionSection} onChange={(event) => setCorrectionSection(event.target.value)}
+              className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px]">
+              {sections.map((section) => <option key={section.section_code} value={section.section_code}>{section.title}</option>)}
+            </select>
+            <textarea value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} rows={2}
+              className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px]" placeholder="Required correction instructions" />
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <button type="button" onClick={() => setCorrectionOpen(false)} className="rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[12px]">Cancel</button>
+            <button type="button" disabled={!correctionReason.trim() || !correctionSection}
+              onClick={async () => {
+                await api.post(`/submissions/${submission?.id}/provider-review/request-correction/`, {
+                  reason: correctionReason,
+                  targets: [{ type: "SECTION", id: correctionSection, instruction: correctionReason }],
+                });
+                setCorrectionOpen(false); setCorrectionReason(""); await expectedQ.refetch();
+              }}
+              className="rounded-[8px] bg-[#002d5b] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">Send correction request</button>
+          </div>
+        </div>
+      )}
+
+      {timelineQ.data && timelineQ.data.length > 0 && (
+        <section className="rounded-[12px] border border-[#e6e8ea] bg-white p-4">
+          <h2 className="text-[13px] font-semibold text-[#191c1e]">Submission timeline</h2>
+          <div className="mt-3 space-y-3 border-l-2 border-[#dce3e9] pl-4">
+            {timelineQ.data.map(event => <div key={event.id}>
+              <p className="text-[12px] font-medium text-[#191c1e]">{event.message}</p>
+              <p className="mt-0.5 text-[10px] text-[#737780]">{event.actor_name || "System"} · {new Date(event.created_at).toLocaleString()}</p>
+            </div>)}
+          </div>
+        </section>
+      )}
+
+      {isDataEntry && ["DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"].includes(expected.workflow_status) && completion && !completion.can_submit && (
         <div className="rounded-[8px] border border-[#ffd100] bg-[#fff3bf]/50 px-4 py-3 text-[12px] text-[#7a5c00]">
           Complete {completion.missing_required_count} required item{completion.missing_required_count === 1 ? "" : "s"} before submitting.
           {completion.blocking_issues.slice(0, 3).map((issue) => (
@@ -536,6 +587,7 @@ export default function FormEntryPage() {
               submissionId={submission.id}
               isEditable={isEditable}
               kmzRequired={!!form.kmz_required}
+              submissionRevision={submission.revision}
             />
           )}
 

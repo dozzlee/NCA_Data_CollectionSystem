@@ -1,7 +1,7 @@
 from django.utils import timezone
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
-from apps.users.permissions import IsNCAEditor, IsNCAUser, IsSystemAdmin
+from apps.users.permissions import IsNCAEditor, IsNCAUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -55,7 +55,7 @@ class EmailTemplateListView(generics.ListCreateAPIView):
     serializer_class = EmailTemplateSerializer
 
     def get_permissions(self):
-        return [(IsSystemAdmin if self.request.method == "POST" else IsNCAUser)()]
+        return [(IsNCAEditor if self.request.method == "POST" else IsNCAUser)()]
 
     def perform_create(self, serializer):
         template_type = serializer.validated_data["template_type"]
@@ -64,7 +64,7 @@ class EmailTemplateListView(generics.ListCreateAPIView):
 
 
 class ApproveEmailTemplateView(APIView):
-    permission_classes = [IsSystemAdmin]
+    permission_classes = [IsNCAEditor]
 
     def post(self, request, pk):
         template = generics.get_object_or_404(EmailTemplate, pk=pk, status="DRAFT")
@@ -198,17 +198,6 @@ class EmailLogListView(generics.ListAPIView):
     filterset_fields = ["status", "provider", "compliance_stage"]
 
 
-class MarkEmailSentView(APIView):
-    permission_classes = [IsNCAEditor]
-
-    def patch(self, request, pk):
-        try:
-            log = EmailLog.objects.get(pk=pk)
-        except EmailLog.DoesNotExist:
-            return Response({"detail": "Not found."}, status=404)
-        return Response({"detail": "Manual Sent status is disabled. Queue the message through a configured delivery provider."}, status=410)
-
-
 class QueueEmailView(APIView):
     permission_classes = [IsNCAEditor]
 
@@ -242,7 +231,7 @@ class DeliveryEventList(generics.ListCreateAPIView):
         return EmailDeliveryEvent.objects.filter(email_id=self.kwargs["pk"]).order_by("occurred_at")
 
     def get_permissions(self):
-        permission_class = IsNCAUser if self.request.method == "GET" else IsSystemAdmin
+        permission_class = IsNCAUser if self.request.method == "GET" else IsNCAEditor
         return [permission_class()]
 
     def perform_create(self, serializer):

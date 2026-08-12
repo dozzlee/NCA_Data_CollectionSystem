@@ -1,5 +1,7 @@
 from django.contrib import admin
-from .models import ProviderProfile, ProviderContact
+from .models import ProviderProfile, ProviderContact, ProviderFormAssignment
+
+admin.site.register(ProviderFormAssignment)
 
 
 class ProviderContactInline(admin.TabularInline):

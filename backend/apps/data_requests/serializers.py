@@ -28,7 +28,7 @@ class DataRequestSerializer(serializers.ModelSerializer):
         model = DataRequest
         fields = "__all__"
         read_only_fields = [
-            "requester", "requester_name", "requester_email", "status", "reviewer",
+            "requester", "requester_name", "requester_email", "requesting_division", "requester_grade_snapshot", "status", "reviewer",
             "approval_manifest", "projected_row_count", "decision_note", "submitted_at",
             "updated_at", "approved_at", "completed_at", "expected_delivery_at", "events", "artifact",
         ]
@@ -79,10 +79,13 @@ class DataRequestSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         user = self.context["request"].user
+        if not user.division_id or not user.grade.strip():
+            raise serializers.ValidationError({"profile": "Ask an Administrator to assign your division and grade before creating a request."})
         from .services import eligible_submissions
         projected = sum(submission.values.count() for submission in eligible_submissions(validated_data["scope"]))
         item = DataRequest.objects.create(
             requester=user, requester_name=user.name, requester_email=user.email,
+            requesting_division=user.division.name, requester_grade_snapshot=user.grade.strip(),
             projected_row_count=projected, **validated_data
         )
         add_event(item, user, "SUBMITTED", "", "SUBMITTED", "Request submitted for review.")

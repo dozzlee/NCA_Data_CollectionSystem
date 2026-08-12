@@ -13,14 +13,25 @@ export interface Organization {
   org_type: "NCA" | "PROVIDER";
 }
 
+export interface NCADivision {
+  id: number;
+  code: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface User {
   id: string;
   email: string;
   name: string;
   role: UserRole;
   organization: Organization | null;
+  division: NCADivision | null;
+  grade: string;
   is_active: boolean;
-  mfa_enabled: boolean;
+  must_change_password: boolean;
   created_at: string;
   capabilities: {
     can_view_nca_operations: boolean;
@@ -81,6 +92,7 @@ export interface DataRequestItem {
   requester_name: string;
   requester_email: string;
   requesting_division: string;
+  requester_grade_snapshot: string;
   title: string;
   purpose: string;
   requested_format: "CSV" | "XLSX" | "PDF";
@@ -193,11 +205,40 @@ export interface FormTemplate {
   kmz_required: boolean;
   excel_backup_enabled: boolean;
   mapping_complete: boolean;
+  mapping_basis: "LEGACY" | "PRD_SECTION_11" | "SOURCE_FORM";
   approval_status: "DRAFT" | "PENDING_APPROVAL" | "APPROVED";
   source_reference: string;
   source_sha256: string;
   approved_at: string | null;
   published_at: string | null;
+}
+
+export interface FormGapAssessment {
+  id: number;
+  requirement: number;
+  requirement_key: string;
+  requirement_label: string;
+  requirement_type: "SECTION" | "FIELD" | "GRID" | "GRID_COLUMN" | "FIXED_ROWS" | "OPTION" | "UNIT" | "VALIDATION" | "CONDITIONAL" | "FORMULA" | "DECLARATION" | "KMZ" | "SOURCE_DECISION" | "SPECIAL_HANDLING";
+  severity: "BLOCKER" | "HIGH" | "MEDIUM" | "LOW";
+  status: "MISSING" | "PARTIAL" | "MATCHED" | "NOT_APPLICABLE";
+  evidence: string;
+  resolution_note: string;
+  owner_name: string | null;
+  assessed_at: string | null;
+}
+
+export interface ProviderFormAssignment {
+  id: number;
+  provider: number;
+  provider_name: string;
+  provider_public_id: string;
+  form_family: number;
+  form_code: FormCode;
+  form_name: string;
+  obligation: "REQUIRED" | "OPTIONAL" | "EXEMPT";
+  effective_from: string;
+  effective_to: string | null;
+  source_reference: string;
 }
 
 export interface FormSection {
@@ -246,6 +287,7 @@ export interface FormGrid {
   title: string;
   instructions?: string;
   row_mode: "FIXED" | "REPEATABLE";
+  min_rows: number;
   sort_order: number;
   columns: GridColumn[];
   fixed_rows?: GridRow[];
@@ -269,7 +311,7 @@ export interface GridRow {
 // ─── Submissions ─────────────────────────────────────────────────────────────
 
 export type WorkflowStatus =
-  | "NOT_STARTED" | "DRAFT" | "PENDING_APPROVAL" | "SUBMITTED"
+  | "NOT_STARTED" | "DRAFT" | "PENDING_APPROVAL" | "PROVIDER_CHANGES_REQUESTED" | "PROVIDER_RESUBMITTED" | "SUBMITTED"
   | "UNDER_REVIEW" | "CORRECTION_REQUESTED" | "RESUBMITTED"
   | "APPROVED" | "REJECTED" | "ARCHIVED";
 

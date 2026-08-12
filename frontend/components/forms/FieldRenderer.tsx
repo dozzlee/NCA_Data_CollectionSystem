@@ -42,7 +42,7 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
   }
 
   function handleStatusChange(newStatus: FieldStatus | "") {
-    onChange(value, newStatus || "MISSING", explanation);
+    onChange(newStatus ? "" : value, newStatus || (value ? "PROVIDED" : "MISSING"), newStatus ? explanation : "");
   }
 
   return (
@@ -184,7 +184,8 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
           disabled={disabled}
           rows={2}
           className={cn(inputBase, "resize-none border-[#ffd100] bg-[#fff3bf]/40")}
-          placeholder="Provide a brief explanation (optional but recommended)"
+          placeholder="Provide the required explanation"
+          aria-required="true"
         />
       )}
     </div>

@@ -13,6 +13,14 @@ import hashlib
 
 class Command(BaseCommand):
     help = 'Seed the database with realistic test data'
+    demo_password = 'testpass123'
+
+    def restore_demo_login(self, user):
+        user.set_password(self.demo_password)
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        user.must_change_password = False
+        user.save()
 
     def handle(self, *args, **options):
         self.stdout.write("Seeding database with test data...")
@@ -29,9 +37,8 @@ class Command(BaseCommand):
                 'is_superuser': True,
             }
         )
+        self.restore_demo_login(admin)
         if _:
-            admin.set_password('testpass123')
-            admin.save()
             self.stdout.write("  Created NCA Admin user")
 
         # Create NCA Officer
@@ -43,9 +50,8 @@ class Command(BaseCommand):
                 'is_active': True,
             }
         )
+        self.restore_demo_login(officer)
         if _:
-            officer.set_password('testpass123')
-            officer.save()
             self.stdout.write("  Created NCA Officer user")
 
         # Create providers
@@ -102,9 +108,8 @@ class Command(BaseCommand):
                 'is_active': True,
             }
         )
+        self.restore_demo_login(data_entry)
         if _:
-            data_entry.set_password('testpass123')
-            data_entry.save()
             self.stdout.write("  Created Provider Data Entry user")
 
         approver, _ = User.objects.get_or_create(
@@ -116,9 +121,8 @@ class Command(BaseCommand):
                 'is_active': True,
             }
         )
+        self.restore_demo_login(approver)
         if _:
-            approver.set_password('testpass123')
-            approver.save()
             self.stdout.write("  Created Provider Approver user")
 
         # Ensure there are active form templates. Migrations create the schema
@@ -265,9 +269,7 @@ class Command(BaseCommand):
                 'is_active': True,
             }
         )
-        if created:
-            data_entry.set_password('testpass123')
-            data_entry.save()
+        self.restore_demo_login(data_entry)
 
         approver, created = User.objects.get_or_create(
             email=f'approver@{email_prefix}.com.gh',
@@ -278,9 +280,7 @@ class Command(BaseCommand):
                 'is_active': True,
             }
         )
-        if created:
-            approver.set_password('testpass123')
-            approver.save()
+        self.restore_demo_login(approver)
 
     def get_due_state(self, period, now, provider_idx):
         if period.status == 'CLOSED':

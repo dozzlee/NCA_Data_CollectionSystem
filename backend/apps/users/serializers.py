@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import User, Organization
+from .models import User, Organization, NCADivision
 
 
 class OrganizationSerializer(serializers.ModelSerializer):
@@ -8,11 +8,29 @@ class OrganizationSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "org_type"]
 
 
+class NCADivisionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NCADivision
+        fields = ["id", "code", "name", "is_active", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_code(self, value):
+        return value.strip().lower()
+
+
 class UserSerializer(serializers.ModelSerializer):
     organization = OrganizationSerializer(read_only=True)
     organization_id = serializers.PrimaryKeyRelatedField(
         source="organization",
         queryset=Organization.objects.filter(org_type="PROVIDER"),
+        write_only=True,
+        required=False,
+        allow_null=True,
+    )
+    division = NCADivisionSerializer(read_only=True)
+    division_id = serializers.PrimaryKeyRelatedField(
+        source="division",
+        queryset=NCADivision.objects.filter(is_active=True),
         write_only=True,
         required=False,
         allow_null=True,
@@ -29,8 +47,8 @@ class UserSerializer(serializers.ModelSerializer):
             "can_view_nca_operations": is_nca_operations,
             "can_review_submissions": is_editor,
             "can_manage_compliance": is_editor,
-            "can_manage_periods": is_admin,
-            "can_manage_forms": is_admin,
+            "can_manage_periods": is_editor,
+            "can_manage_forms": is_editor,
             "can_manage_users": is_admin,
             "can_export": is_nca_operations,
             "can_request_data": is_requester,
@@ -49,6 +67,16 @@ class UserSerializer(serializers.ModelSerializer):
             })
         if role in {"NCA_ADMIN", "NCA_OFFICER", "NCA_VIEWER"}:
             attrs["organization"] = None
+        if role == "NCA_VIEWER":
+            division = attrs.get("division", getattr(self.instance, "division", None))
+            grade = attrs.get("grade", getattr(self.instance, "grade", ""))
+            if not division:
+                raise serializers.ValidationError({"division_id": "Choose an active NCA division for this requester."})
+            if not str(grade).strip():
+                raise serializers.ValidationError({"grade": "Grade is required for requester accounts."})
+        else:
+            attrs["division"] = None
+            attrs["grade"] = ""
         return attrs
 
     def create(self, validated_data):
@@ -73,10 +101,11 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "id", "email", "name", "password", "role", "organization",
-            "organization_id", "is_active",
-            "mfa_enabled", "created_at", "capabilities",
+            "organization_id", "division", "division_id", "grade", "is_active",
+            "created_at", "capabilities",
+            "must_change_password",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "created_at", "must_change_password"]
 
 
 class LoginSerializer(serializers.Serializer):
@@ -85,14 +114,27 @@ class LoginSerializer(serializers.Serializer):
 
     def validate(self, data):
         from django.contrib.auth import authenticate
+        from django.conf import settings
+        from datetime import timedelta
         from django.utils import timezone
 
+        try:
+            candidate = User.objects.get(email__iexact=data["email"])
+        except User.DoesNotExist:
+            candidate = None
+        if candidate and candidate.locked_until and candidate.locked_until > timezone.now():
+            raise serializers.ValidationError("Account is temporarily locked. Try again later.")
         user = authenticate(email=data["email"], password=data["password"])
         if not user:
+            if candidate:
+                candidate.failed_login_attempts += 1
+                fields = ["failed_login_attempts"]
+                if candidate.failed_login_attempts >= settings.LOGIN_MAX_FAILURES:
+                    candidate.locked_until = timezone.now() + timedelta(minutes=settings.LOGIN_LOCKOUT_MINUTES)
+                    fields.append("locked_until")
+                candidate.save(update_fields=fields)
             raise serializers.ValidationError("Invalid email or password.")
         if not user.is_active:
             raise serializers.ValidationError("Account is inactive.")
-        if user.locked_until and user.locked_until > timezone.now():
-            raise serializers.ValidationError("Account is temporarily locked. Try again later.")
         data["user"] = user
         return data

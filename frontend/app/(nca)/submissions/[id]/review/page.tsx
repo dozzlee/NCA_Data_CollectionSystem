@@ -1,560 +1,110 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
-import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Clock, FileWarning, MessageSquare, ShieldCheck, XCircle } from "lucide-react";
+import { api, ApiError } from "@/lib/api";
+import { WorkflowBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { formatDateTime, WORKFLOW_LABELS } from "@/lib/utils";
-import {
-  CheckCircle2, XCircle, AlertTriangle, MessageSquare,
-  Clock, ChevronDown, ChevronUp, ChevronRight,
-} from "lucide-react";
-import type { WorkflowStatus, FormSection, FieldStatus, User } from "@/lib/types";
+import { formatDateTime } from "@/lib/utils";
+import type { FieldStatus, FormSection, FormTemplate, User, WorkflowStatus } from "@/lib/types";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
-interface ReviewAction {
-  id: number; action: string; target_type: string; target_id: string;
-  comment: string; is_provider_visible: boolean;
-  created_by: number; created_by_name: string; created_at: string;
-}
-
-interface Submission {
-  id: number; version: number; completion_pct: string;
-  workflow_status: WorkflowStatus; form_code: string; form_name: string;
-  period_name: string; provider_name: string;
+interface SubmissionSummary {
+  id: number; version: number; completion_pct: string; workflow_status: WorkflowStatus;
+  form_code: string; form_name: string; period_name: string; provider_name: string;
   submitted_at: string | null; reviewed_at: string | null; kmz_required: boolean;
+  form_template_id: number; form_version: string; mapping_basis: string; source_reference: string;
 }
-
-interface SectionValue {
-  id: number; field: number | null; grid: number | null;
-  grid_row_id: string; grid_column: number | null;
+interface ValueItem {
+  id: number; field: number | null; grid: number | null; grid_row_id: string; grid_column: number | null;
   value: string; value_status: FieldStatus; explanation: string;
-  non_filled_disposition: "ACCEPTED" | "REJECTED" | null;
-  disposition_note: string;
+  non_filled_disposition: "ACCEPTED" | "REJECTED" | null; disposition_note: string;
+}
+interface RequirementItem {
+  id: number; requirement_key: string; requirement_label: string; requirement_description: string;
+  requirement_type: string; severity: string; status: "MATCHED" | "MISSING" | "PARTIAL" | "NOT_APPLICABLE"; evidence: string;
+}
+interface ReviewData {
+  submission: SubmissionSummary;
+  template: FormTemplate & { sections: FormSection[] };
+  values: ValueItem[];
+  requirements: RequirementItem[];
+  uploads: Array<{ id:number; requirement:number; category:string; file_name:string; file_size:number; sha256:string; scan_status:string; review_status:string; review_note:string; uploaded_at:string }>;
+  validation: null | { id:number; status:string; scope:string; completed_at:string; results:Array<{id:number;severity:string;target_type:string;target_id:string;code:string;message:string}> };
+  approval_blockers: Array<{code:string;type:string;id:string|number;section_code:string;label:string}>;
+  correction_items: Array<{id:number;target_type:string;target_id:string;instruction:string;status:string}>;
+  legacy_warning: null | { title:string; message:string; missing_requirement_count:number };
+}
+interface ReviewAction { id:number; action:string; comment:string; target_type:string; target_id:string; is_provider_visible:boolean; created_by_name:string; created_at:string }
+
+const nonFilled = new Set(["NOT_APPLICABLE", "NOT_AVAILABLE", "NOT_REQUIRED"]);
+const badge:Record<string,string> = {
+  MATCHED:"bg-green-100 text-green-800", MISSING:"bg-red-100 text-red-800", PARTIAL:"bg-amber-100 text-amber-800",
+  BLOCK:"bg-red-100 text-red-800", WARN:"bg-amber-100 text-amber-800", PASS:"bg-green-100 text-green-800", FAIL:"bg-red-100 text-red-800",
+};
+
+function ValueDisplay({ value, unit }: { value?:ValueItem; unit?:string }) {
+  if (!value) return <span className="text-red-700">Missing</span>;
+  const shown = value.value_status === "PROVIDED" || value.value_status === "SYSTEM_CALCULATED" ? value.value || "—" : value.value_status.replaceAll("_", " ");
+  return <div><p className={value.value_status === "MISSING" ? "font-semibold text-red-700" : "font-medium text-[#191c1e]"}>{shown}{unit && value.value ? ` ${unit}` : ""}</p>{value.explanation&&<p className="mt-1 text-xs italic text-[#737780]">{value.explanation}</p>}{value.non_filled_disposition&&<p className="mt-1 text-xs text-[#737780]">Disposition: {value.non_filled_disposition}{value.disposition_note?` — ${value.disposition_note}`:""}</p>}</div>;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const ACTION_ICONS: Record<string, React.ElementType> = {
-  APPROVE: CheckCircle2, REJECT: XCircle,
-  REQUEST_CORRECTION: AlertTriangle,
-  ADD_NOTE: MessageSquare, ADD_PROVIDER_COMMENT: MessageSquare,
-};
-const ACTION_COLORS: Record<string, string> = {
-  APPROVE: "text-[#1f7a4d]", REJECT: "text-[#e31937]",
-  REQUEST_CORRECTION: "text-[#7a5c00]",
-  ADD_NOTE: "text-[#0066cc]", ADD_PROVIDER_COMMENT: "text-[#275fa5]",
-};
-
-const STATUS_LABELS: Partial<Record<FieldStatus, string>> = {
-  NOT_APPLICABLE:        "N/A",
-  NOT_AVAILABLE:         "Not Available",
-  NOT_REQUIRED:          "Not Required",
-  PENDING_CLARIFICATION: "Pending Clarification",
-  WAITING_CORRECTION:    "Needs Correction",
-  SYSTEM_CALCULATED:     "Auto-calculated",
-};
-
-const STATUS_COLORS: Partial<Record<FieldStatus, string>> = {
-  PROVIDED:              "text-[#191c1e]",
-  NOT_APPLICABLE:        "text-[#737780] italic",
-  NOT_AVAILABLE:         "text-[#737780] italic",
-  NOT_REQUIRED:          "text-[#737780] italic",
-  PENDING_CLARIFICATION: "text-[#7a5c00]",
-  WAITING_CORRECTION:    "text-[#c0112a] font-semibold",
-  MISSING:               "text-[#c0112a]",
-  SYSTEM_CALCULATED:     "text-[#0066cc]",
-};
-
-// ─── Section Data Panel ───────────────────────────────────────────────────────
-
-function SectionDataPanel({
-  section, submissionId, canReview,
-}: { section: FormSection; submissionId: number; canReview: boolean }) {
-  const [open, setOpen] = useState(false);
-  const qc = useQueryClient();
-  const [decisionPending, setDecisionPending] = useState<number | null>(null);
-
-  const { data: values, isLoading } = useQuery<SectionValue[]>({
-    queryKey: ["section-values", submissionId, section.section_code],
-    queryFn: () => api(`/submissions/${submissionId}/sections/${section.section_code}/values/`),
-    enabled: open,
-  });
-
-  const valueMap = new Map((values ?? []).map(v => [v.field, v]));
-
-  async function setDisposition(valueId: number, decision: "ACCEPTED" | "REJECTED") {
-    const note = decision === "REJECTED" ? window.prompt("Why is this explanation rejected?") : "Accepted during regulatory review.";
-    if (decision === "REJECTED" && !note?.trim()) return;
-    setDecisionPending(valueId);
-    try {
-      await api.post(`/submissions/${submissionId}/values/${valueId}/non-filled-disposition/`, { decision, note });
-      await qc.invalidateQueries({ queryKey: ["section-values", submissionId, section.section_code] });
-    } finally { setDecisionPending(null); }
+function SectionPanel({ section, data, canReview, selected, toggle, refresh }: { section:FormSection; data:ReviewData; canReview:boolean; selected:Set<string>; toggle:(key:string)=>void; refresh:()=>void }) {
+  const [open,setOpen]=useState(true);
+  const valuesByField = useMemo(()=>new Map(data.values.filter(v=>v.field).map(v=>[v.field!,v])),[data.values]);
+  const gridValues = data.values.filter(v=>v.grid);
+  const requirements = data.requirements.filter(r=>r.requirement_key.includes(`:${section.section_code}`));
+  const missing = requirements.filter(r=>r.status!=="MATCHED").length;
+  async function disposition(value:ValueItem, decision:"ACCEPTED"|"REJECTED") {
+    const note=decision==="REJECTED"?window.prompt("Why is this explanation rejected?"):"Accepted during regulatory review.";
+    if(decision==="REJECTED"&&!note?.trim()) return;
+    await api.post(`/submissions/${data.submission.id}/values/${value.id}/non-filled-disposition/`,{decision,note});refresh();
   }
-
-  const hasIssues = (values ?? []).some(v =>
-    v.value_status === "MISSING" || v.value_status === "WAITING_CORRECTION"
-  );
-  const allProvided = section.fields.length > 0 &&
-    section.fields.filter(f => f.is_required).every(f => {
-      const v = valueMap.get(f.id);
-      return v && v.value_status !== "MISSING";
-    });
-
-  return (
-    <div className={`rounded-[10px] border overflow-hidden ${
-      hasIssues ? "border-[#e31937]/30" : allProvided ? "border-[#c3c6d0]" : "border-[#c3c6d0]"
-    }`}>
-      {/* Section header */}
-      <button onClick={() => setOpen(v => !v)}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-[#f7f9fb] transition-colors">
-        <div className={`h-2.5 w-2.5 rounded-full shrink-0 ${
-          hasIssues ? "bg-[#e31937]" : allProvided ? "bg-[#1f7a4d]" : "bg-[#c3c6d0]"
-        }`} />
-        <p className="flex-1 text-[13px] font-semibold text-[#191c1e]">{section.title}</p>
-        <span className="text-[11px] text-[#737780] mr-2">
-          {section.fields.filter(f => f.is_required).length} required field{section.fields.filter(f => f.is_required).length !== 1 ? "s" : ""}
-          {section.grids.length > 0 && ` · ${section.grids.length} table${section.grids.length !== 1 ? "s" : ""}`}
-        </span>
-        {hasIssues && (
-          <span className="mr-2 rounded-full bg-[#ffe8e8] px-2 py-0.5 text-[10px] font-bold text-[#c0112a]">Issues</span>
-        )}
-        {open ? <ChevronUp size={14} className="text-[#737780] shrink-0" /> : <ChevronRight size={14} className="text-[#737780] shrink-0" />}
-      </button>
-
-      {/* Section values */}
-      {open && (
-        <div className="border-t border-[#eceef0] bg-white">
-          {isLoading ? (
-            <div className="p-4 space-y-2">
-              {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-8 w-full" />)}
-            </div>
-          ) : section.fields.length === 0 && section.grids.length === 0 ? (
-            <p className="px-4 py-3 text-[12px] text-[#737780]">No fields in this section.</p>
-          ) : (
-            <div>
-              {/* Scalar fields */}
-              {section.fields.length > 0 && (
-                <table className="w-full text-left">
-                  <thead className="bg-[#f7f9fb] border-b border-[#eceef0]">
-                    <tr>
-                      <th className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-[#737780] w-1/2">Field</th>
-                      <th className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-[#737780]">Value</th>
-                      <th className="px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-[#737780] w-24">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#f2f4f6]">
-                    {section.fields.map(field => {
-                      const v = valueMap.get(field.id);
-                      const status = v?.value_status ?? "MISSING";
-                      const displayValue = v?.value || STATUS_LABELS[status as FieldStatus] || "—";
-                      const isIssue = status === "MISSING" || status === "WAITING_CORRECTION";
-                      return (
-                        <tr key={field.id} className={isIssue ? "bg-[#fff8f8]" : ""}>
-                          <td className="px-4 py-2.5">
-                            <p className="text-[12px] text-[#43474f]">{field.label}</p>
-                            {field.unit && <p className="text-[10px] text-[#737780]">{field.unit}</p>}
-                            {!field.is_required && (
-                              <span className="text-[10px] text-[#737780]">Optional</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            <p className={`text-[13px] font-medium ${STATUS_COLORS[status as FieldStatus] ?? "text-[#191c1e]"}`}>
-                              {status === "PROVIDED" || status === "SYSTEM_CALCULATED"
-                                ? (displayValue || "—")
-                                : <span className="italic">{STATUS_LABELS[status as FieldStatus] ?? displayValue}</span>
-                              }
-                            </p>
-                            {v?.explanation && (
-                              <p className="text-[11px] text-[#737780] mt-0.5 italic">{v.explanation}</p>
-                            )}
-                            {v && ["NOT_APPLICABLE", "NOT_AVAILABLE", "NOT_REQUIRED"].includes(v.value_status) && (
-                              <div className="mt-2 flex items-center gap-1.5">
-                                <span className="text-[10px] text-[#737780]">Disposition: {v.non_filled_disposition ?? "Pending"}</span>
-                                {canReview && <>
-                                  <button disabled={decisionPending === v.id} onClick={() => setDisposition(v.id, "ACCEPTED")}
-                                    className="rounded border border-[#1f7a4d] px-2 py-0.5 text-[10px] text-[#1f7a4d]">Accept</button>
-                                  <button disabled={decisionPending === v.id} onClick={() => setDisposition(v.id, "REJECTED")}
-                                    className="rounded border border-[#e31937] px-2 py-0.5 text-[10px] text-[#e31937]">Reject</button>
-                                </>}
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            {isIssue && (
-                              <span className="text-[10px] font-bold text-[#c0112a]">
-                                {status === "WAITING_CORRECTION" ? "⚑ Fix needed" : "⚑ Missing"}
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
-              {/* Note for grids */}
-              {section.grids.length > 0 && (
-                <div className="px-4 py-3 border-t border-[#eceef0] bg-[#f7f9fb]">
-                  <p className="text-[11px] text-[#737780]">
-                    This section also contains {section.grids.length} table{section.grids.length !== 1 ? "s" : ""} —
-                    grid data is stored at field level. Review the individual values above.
-                  </p>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  return <section className="overflow-hidden rounded-2xl border bg-white">
+    <button onClick={()=>setOpen(x=>!x)} className="flex w-full items-center gap-3 px-5 py-4 text-left hover:bg-[#f7f9fb]">
+      {open?<ChevronDown size={16}/>:<ChevronRight size={16}/>}<div className="flex-1"><h3 className="font-semibold">{section.title}</h3><p className="text-xs text-[#737780]">{section.instructions}</p></div>
+      {missing>0&&<span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-800">{missing} PRD gap{missing===1?"":"s"}</span>}
+      {canReview&&<label onClick={e=>e.stopPropagation()} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={selected.has(`SECTION:${section.section_code}`)} onChange={()=>toggle(`SECTION:${section.section_code}`)}/> Correct section</label>}
+    </button>
+    {open&&<div className="space-y-5 border-t p-5">
+      {section.fields.length>0&&<div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-[#f7f9fb] text-xs uppercase text-[#737780]"><tr><th className="p-3">Field</th><th className="p-3">Reported value</th>{canReview&&<th className="p-3">Correction</th>}</tr></thead><tbody className="divide-y">{section.fields.map(field=>{const value=valuesByField.get(field.id);return <tr key={field.id}><td className="p-3"><p className="font-medium">{field.label}</p><p className="text-xs text-[#737780]">{field.field_type}{field.unit?` · ${field.unit}`:""}{field.is_required?" · Required":" · Optional"}</p>{field.help_text&&<p className="mt-1 max-w-xl text-xs text-[#737780]">{field.help_text}</p>}</td><td className="p-3"><ValueDisplay value={value} unit={field.unit}/>{value&&nonFilled.has(value.value_status)&&canReview&&<div className="mt-2 flex gap-2"><button onClick={()=>disposition(value,"ACCEPTED")} className="rounded border border-green-700 px-2 py-1 text-xs text-green-700">Accept</button><button onClick={()=>disposition(value,"REJECTED")} className="rounded border border-red-700 px-2 py-1 text-xs text-red-700">Reject</button></div>}</td>{canReview&&<td className="p-3"><input aria-label={`Request correction for ${field.label}`} type="checkbox" checked={selected.has(`FIELD:${field.id}`)} onChange={()=>toggle(`FIELD:${field.id}`)}/></td>}</tr>})}</tbody></table></div>}
+      {section.grids.map(grid=>{
+        const cells=gridValues.filter(v=>v.grid===grid.id);const rowIds=grid.row_mode==="FIXED"?(grid.fixed_rows??[]).map(r=>String(r.id)):Array.from(new Set(cells.map(v=>v.grid_row_id)));
+        const rowLabel=(id:string)=>grid.row_mode==="FIXED"?(grid.fixed_rows??[]).find(r=>String(r.id)===id)?.row_label??id:id;
+        return <div key={grid.id}><div className="mb-2 flex items-end justify-between"><div><h4 className="font-semibold">{grid.title}</h4><p className="text-xs text-[#737780]">{grid.row_mode==="FIXED"?`${rowIds.length} prescribed rows`:`${rowIds.length} reported row(s); minimum ${grid.min_rows}`}</p></div></div>
+          <div className="overflow-x-auto rounded-xl border"><table className="w-full text-left text-sm"><thead className="bg-[#f7f9fb] text-xs uppercase text-[#737780]"><tr><th className="p-3">Row</th>{grid.columns.map(c=><th key={c.id} className="p-3">{c.label}{c.unit&&<span className="block normal-case">{c.unit}</span>}</th>)}</tr></thead><tbody className="divide-y">{rowIds.length===0?<tr><td colSpan={grid.columns.length+1} className="p-5 text-center text-sm text-red-700">No rows were provided.</td></tr>:rowIds.map(row=><tr key={row}><td className="p-3 font-medium">{rowLabel(row)}</td>{grid.columns.map(column=>{const value=cells.find(v=>v.grid_row_id===row&&v.grid_column===column.id);const key=`GRID_CELL:${grid.id}:${row}:${column.id}`;return <td key={column.id} className="p-3"><ValueDisplay value={value} unit={column.unit}/>{canReview&&<label className="mt-2 flex items-center gap-1 text-xs text-[#737780]"><input type="checkbox" checked={selected.has(key)} onChange={()=>toggle(key)}/> Correct</label>}</td>})}</tr>)}</tbody></table></div>
+        </div>})}
+      {section.kmz_requirements.length>0&&<div><h4 className="font-semibold">Required uploads</h4>{section.kmz_requirements.map(req=>{const upload=data.uploads.find(x=>x.requirement===req.id);return <div key={req.id} className="mt-2 rounded-xl border p-4 text-sm"><p className="font-medium">{req.category}: {req.description}</p><p className="mt-1 text-[#737780]">{upload?`${upload.file_name} · Scan ${upload.scan_status} · Review ${upload.review_status}`:"No file uploaded"}</p></div>})}</div>}
+    </div>}
+  </section>;
 }
 
-// ─── Main Review Page ─────────────────────────────────────────────────────────
-
-export default function ReviewPage() {
-  const params = useParams();
-  const submissionId = Number(params.id);
-  const qc = useQueryClient();
-
-  const [comment, setComment]           = useState("");
-  const [action, setAction]             = useState<"approve" | "reject" | "correction" | "note" | null>(null);
-  const [showHistory, setShowHistory]   = useState(true);
-  const [activeTab, setActiveTab]       = useState<"data" | "review">("data");
-  const [submitting, setSubmitting]     = useState(false);
-  const [error, setError]               = useState<string | null>(null);
-  const { data: me } = useQuery<User>({
-    queryKey: ["me"],
-    queryFn: () => api.get<User>("/auth/me/"),
-  });
-  const canReview = me?.capabilities.can_review_submissions ?? false;
-
-  const submissionQ = useQuery({
-    queryKey: ["submission", submissionId],
-    queryFn: () => api.get<Submission>(`/submissions/${submissionId}/`),
-  });
-
-  const historyQ = useQuery({
-    queryKey: ["review-history", submissionId],
-    queryFn: () => api.get<ReviewAction[]>(`/submissions/${submissionId}/review/history/`),
-  });
-
-  const completionQ = useQuery({
-    queryKey: ["submission-completion", submissionId],
-    queryFn: () => api.get<{
-      completion_pct: number;
-      sections: { section_code: string; title: string; required: number; provided: number; complete: boolean }[]
-    }>(`/submissions/${submissionId}/completion/`),
-  });
-
-  // Fetch the full form template to get sections + fields for the data viewer
-  const sub = submissionQ.data;
-  const formTemplateQ = useQuery({
-    queryKey: ["form-template-for-review", sub?.form_code],
-    queryFn: () => api.get<{ results: { id: number; form_code: string }[] }>(`/form-templates/?form_code=${sub?.form_code}`).then(d => {
-      const tmpl = (d as unknown as { results: { id: number }[] }).results?.[0];
-      if (!tmpl) return null;
-      return api.get<{ sections: FormSection[] }>(`/form-templates/${tmpl.id}/`);
-    }),
-    enabled: !!sub?.form_code,
-  });
-
-  const completion = completionQ.data;
-  const formSections: FormSection[] = (formTemplateQ.data as { sections: FormSection[] } | null)?.sections ?? [];
-
-  async function submitAction() {
-    if (!action) return;
-    if (action !== "approve" && !comment.trim()) { setError("Comment is required."); return; }
-    setSubmitting(true); setError(null);
-    try {
-      const endpoints: Record<string, string> = {
-        approve:    `/submissions/${submissionId}/review/approve/`,
-        reject:     `/submissions/${submissionId}/review/reject/`,
-        correction: `/submissions/${submissionId}/review/request-correction/`,
-        note:       `/submissions/${submissionId}/review/add-note/`,
-      };
-      await api.post(endpoints[action], { comment, targets: [] });
-      setComment(""); setAction(null);
-      qc.invalidateQueries({ queryKey: ["submission", submissionId] });
-      qc.invalidateQueries({ queryKey: ["review-history", submissionId] });
-    } catch {
-      setError("Action failed. Please try again.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function startReview() {
-    setSubmitting(true); setError(null);
-    try {
-      await api.post(`/submissions/${submissionId}/review/start/`, {});
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: ["submission", submissionId] }),
-        qc.invalidateQueries({ queryKey: ["review-history", submissionId] }),
-      ]);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Review could not be started.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  if (submissionQ.isLoading) {
-    return <div className="space-y-4">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}</div>;
-  }
-  if (!sub) return <p className="text-[13px] text-[#737780]">Submission not found.</p>;
-
-  const reviewable = sub.workflow_status === "UNDER_REVIEW";
-  const canStartReview = ["SUBMITTED", "RESUBMITTED"].includes(sub.workflow_status);
-  const missingCount = (completion?.sections ?? []).filter(s => !s.complete).length;
-
-  return (
-    <div className="space-y-5 max-w-[1080px]">
-      {/* Back nav */}
-      <a href="/submissions"
-        className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#737780] hover:text-[#0066cc] transition-colors">
-        ← Back to Submissions
-      </a>
-
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-[#737780]">{sub.form_code}</p>
-            <WorkflowBadge status={sub.workflow_status} />
-            {missingCount > 0 && (
-              <span className="rounded-full bg-[#ffe8e8] px-2.5 py-0.5 text-[11px] font-semibold text-[#c0112a]">
-                {missingCount} incomplete section{missingCount !== 1 ? "s" : ""}
-              </span>
-            )}
-          </div>
-          <h1 className="text-[20px] font-semibold text-[#191c1e]">{sub.form_name}</h1>
-          <p className="text-[13px] text-[#737780] mt-0.5">{sub.provider_name} · {sub.period_name}</p>
-        </div>
-        <div className="text-right shrink-0 space-y-1">
-          {sub.submitted_at && (
-            <div>
-              <p className="text-[11px] text-[#737780]">Submitted</p>
-              <p className="text-[12px] font-medium text-[#43474f]">{formatDateTime(sub.submitted_at)}</p>
-            </div>
-          )}
-          <div>
-            <p className="text-[11px] text-[#737780]">Completion</p>
-            <p className="text-[14px] font-bold text-[#0066cc]">{Number(sub.completion_pct).toFixed(0)}%</p>
-          </div>
-        </div>
-      </div>
-
-      {/* Completion bar */}
-      <div className="h-2 w-full rounded-full bg-[#eceef0] overflow-hidden">
-        <div className="h-full rounded-full transition-all"
-          style={{
-            width: `${sub.completion_pct}%`,
-            background: Number(sub.completion_pct) < 50
-              ? "#e31937" : Number(sub.completion_pct) < 80
-              ? "#ffd100" : "#1f7a4d"
-          }} />
-      </div>
-
-      {/* Tabs */}
-      <div className="flex border-b border-[#eceef0]">
-        {([["data","Form Data"], ["review","Review & Actions"]] as const).map(([t, label]) => (
-          <button key={t} onClick={() => setActiveTab(t)}
-            className={`px-5 py-3 text-[13px] font-medium border-b-2 transition-colors ${
-              activeTab === t
-                ? "border-[#001836] text-[#191c1e]"
-                : "border-transparent text-[#737780] hover:text-[#43474f]"
-            }`}>
-            {label}
-            {t === "review" && historyQ.data && historyQ.data.length > 0 && (
-              <span className="ml-1.5 rounded-full bg-[#f2f4f6] px-1.5 py-0.5 text-[10px] font-bold text-[#43474f]">
-                {historyQ.data.length}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* ── Tab: Form Data ─────────────────────────────────────────── */}
-      {activeTab === "data" && (
-        <div className="grid grid-cols-4 gap-5">
-          {/* Section map — left sidebar */}
-          <div className="col-span-1">
-            <div className="rounded-[12px] border border-[#eceef0] bg-white p-4 sticky top-4">
-              <p className="text-[12px] font-semibold text-[#191c1e] mb-3">Sections</p>
-              <div className="space-y-1">
-                {(completion?.sections ?? []).map(s => (
-                  <div key={s.section_code} className="flex items-center gap-2 py-1">
-                    <div className={`h-2 w-2 rounded-full shrink-0 ${
-                      s.complete ? "bg-[#1f7a4d]" : s.provided > 0 ? "bg-[#ffd100]" : "bg-[#c3c6d0]"
-                    }`} />
-                    <p className="text-[11px] text-[#43474f] flex-1 leading-tight">{s.title}</p>
-                    <p className="text-[10px] tabular-nums text-[#737780] shrink-0">{s.provided}/{s.required}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Section data — main panel */}
-          <div className="col-span-3 space-y-3">
-            {formTemplateQ.isLoading ? (
-              Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-14 rounded-[10px]" />)
-            ) : formSections.length === 0 ? (
-              <div className="rounded-[12px] border border-[#eceef0] bg-white p-8 text-center">
-                <p className="text-[14px] text-[#737780]">Form data unavailable.</p>
-                <p className="text-[12px] text-[#737780] mt-1">The form template could not be loaded.</p>
-              </div>
-            ) : (
-              formSections.map(section => (
-                <SectionDataPanel key={section.id} section={section} submissionId={submissionId} canReview={canReview && sub.workflow_status === "UNDER_REVIEW"} />
-              ))
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ── Tab: Review & Actions ───────────────────────────────────── */}
-      {activeTab === "review" && (
-        <div className="grid grid-cols-3 gap-5">
-          {/* Left: completion + details */}
-          <div className="col-span-1 space-y-4">
-            <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-4">
-              <p className="text-[13px] font-semibold text-[#191c1e] mb-3">Section completion</p>
-              <div className="space-y-1">
-                {completion?.sections.map(s => (
-                  <div key={s.section_code} className="flex items-center gap-2 py-1 border-b border-[#f2f4f6] last:border-0">
-                    <div className={`h-2 w-2 rounded-full shrink-0 ${
-                      s.complete ? "bg-[#1f7a4d]" : s.provided > 0 ? "bg-[#ffd100]" : "bg-[#c3c6d0]"
-                    }`} />
-                    <p className="text-[11px] text-[#43474f] flex-1 truncate">{s.title}</p>
-                    <p className="text-[10px] tabular-nums text-[#737780] shrink-0">{s.provided}/{s.required}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-4 space-y-2">
-              <p className="text-[12px] font-semibold text-[#191c1e] mb-2">Details</p>
-              {[
-                { label:"Version",       value:`v${sub.version}` },
-                { label:"Form",          value:sub.form_code },
-                { label:"Period",        value:sub.period_name },
-                { label:"KMZ required",  value:sub.kmz_required ? "Yes (fibre)" : "No" },
-              ].map(({ label, value }) => (
-                <div key={label} className="flex items-center justify-between">
-                  <p className="text-[11px] text-[#737780]">{label}</p>
-                  <p className="text-[11px] font-medium text-[#43474f]">{value}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Right: action panel + history */}
-          <div className="col-span-2 space-y-4">
-            {canReview && canStartReview && (
-              <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-5">
-                <p className="text-[13px] font-semibold text-[#191c1e]">Regulatory review has not started</p>
-                <p className="mt-1 text-[12px] text-[#737780]">Start review to record the reviewer and timestamp before making a disposition.</p>
-                {error && <p className="mt-2 text-[12px] text-[#e31937]">{error}</p>}
-                <button onClick={startReview} disabled={submitting}
-                  className="mt-4 rounded-[8px] bg-[#002d5b] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">
-                  {submitting ? "Starting…" : "Start Review"}
-                </button>
-              </div>
-            )}
-            {canReview && reviewable && (
-              <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-5">
-                <p className="text-[13px] font-semibold text-[#191c1e] mb-4">Review Action</p>
-                <div className="grid grid-cols-2 gap-2 mb-4">
-                  {([
-                    { key:"approve",    label:"Approve",            icon:CheckCircle2, color:"border-[#1f7a4d] text-[#1f7a4d] hover:bg-[#e5f4eb]" },
-                    { key:"reject",     label:"Reject",             icon:XCircle,      color:"border-[#e31937] text-[#e31937] hover:bg-[#ffe8e8]" },
-                    { key:"correction", label:"Request Correction",  icon:AlertTriangle,color:"border-[#ffd100] text-[#7a5c00] hover:bg-[#fff3bf]" },
-                    { key:"note",       label:"Add Internal Note",   icon:MessageSquare,color:"border-[#c3c6d0] text-[#43474f] hover:bg-[#f2f4f6]" },
-                  ] as const).map(({ key, label, icon: Icon, color }) => (
-                    <button key={key} onClick={() => setAction(action === key ? null : key)}
-                      className={`flex items-center gap-2 rounded-[8px] border px-3 py-2.5 text-[12px] font-medium transition-colors ${color} ${action === key ? "ring-2 ring-current ring-offset-1" : ""}`}>
-                      <Icon size={14} /> {label}
-                    </button>
-                  ))}
-                </div>
-                {action && (
-                  <div className="space-y-3">
-                    <textarea value={comment} onChange={e => setComment(e.target.value)} rows={3}
-                      placeholder={
-                        action === "approve"    ? "Optional comment for the record…"
-                        : action === "reject"   ? "State the reason for rejection…"
-                        : action === "correction" ? "Describe what needs to be corrected…"
-                        : "Internal note (not visible to provider)…"
-                      }
-                      className="w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] placeholder:text-[#737780] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20 resize-none" />
-                    {error && <p className="text-[12px] text-[#e31937]">{error}</p>}
-                    <div className="flex gap-2">
-                      <button onClick={submitAction} disabled={submitting}
-                        className="rounded-[8px] bg-[#002d5b] px-4 py-2 text-[12px] font-semibold text-white hover:bg-[#001836] disabled:opacity-60 transition-colors">
-                        {submitting ? "Submitting…" : "Confirm"}
-                      </button>
-                      <button onClick={() => { setAction(null); setComment(""); setError(null); }}
-                        className="rounded-[8px] border border-[#c3c6d0] px-4 py-2 text-[12px] font-medium text-[#43474f] hover:bg-[#f2f4f6] transition-colors">
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Review history */}
-            <div className="rounded-[16px] bg-white border border-[#e6e8ea]">
-              <button onClick={() => setShowHistory(h => !h)}
-                className="flex w-full items-center justify-between px-5 py-4 border-b border-[#eceef0]">
-                <p className="text-[13px] font-semibold text-[#191c1e]">Review History</p>
-                {showHistory ? <ChevronUp size={14} className="text-[#737780]" /> : <ChevronDown size={14} className="text-[#737780]" />}
-              </button>
-              {showHistory && (
-                <div className="px-5 py-3 divide-y divide-[#f2f4f6]">
-                  {historyQ.isLoading
-                    ? Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="my-3 h-12 w-full" />)
-                    : !historyQ.data?.length
-                    ? <p className="py-6 text-center text-[13px] text-[#737780]">No review actions yet.</p>
-                    : historyQ.data.map(item => {
-                        const Icon = ACTION_ICONS[item.action] ?? Clock;
-                        const color = ACTION_COLORS[item.action] ?? "text-[#43474f]";
-                        return (
-                          <div key={item.id} className="flex gap-3 py-3">
-                            <Icon size={15} className={`shrink-0 mt-0.5 ${color}`} />
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-baseline gap-2 flex-wrap">
-                                <p className={`text-[12px] font-semibold ${color}`}>
-                                  {item.action.replace(/_/g, " ")}
-                                </p>
-                                <p className="text-[11px] text-[#737780]">by {item.created_by_name}</p>
-                                <p className="text-[11px] text-[#737780] ml-auto tabular-nums">
-                                  {formatDateTime(item.created_at)}
-                                </p>
-                              </div>
-                              {item.comment && <p className="mt-1 text-[12px] text-[#43474f] leading-snug">{item.comment}</p>}
-                              {item.is_provider_visible && (
-                                <span className="mt-1 inline-block text-[10px] font-medium text-[#275fa5] bg-[#e8f0fe] rounded-full px-2 py-0.5">
-                                  Visible to provider
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })
-                  }
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+export default function ReviewPage(){
+  const id=Number(useParams<{id:string}>().id);const qc=useQueryClient();
+  const [tab,setTab]=useState<"data"|"requirements"|"actions">("data");const [action,setAction]=useState<"approve"|"reject"|"correction"|"note"|null>(null);const [comment,setComment]=useState("");const [selected,setSelected]=useState<Set<string>>(new Set());const [error,setError]=useState("");
+  const me=useQuery<User>({queryKey:["me"],queryFn:()=>api.get("/auth/me/")});
+  const review=useQuery<ReviewData>({queryKey:["submission-review-data",id],queryFn:()=>api.get(`/submissions/${id}/review-data/`)});
+  const history=useQuery<ReviewAction[]>({queryKey:["review-history",id],queryFn:()=>api.get(`/submissions/${id}/review/history/`)});
+  const refresh=()=>{qc.invalidateQueries({queryKey:["submission-review-data",id]});qc.invalidateQueries({queryKey:["review-history",id]})};
+  const mutation=useMutation({mutationFn:async()=>{
+    if(!review.data) return;if(action!=="approve"&&!comment.trim()) throw new Error("A comment is required.");
+    const urls={approve:`/submissions/${id}/review/approve/`,reject:`/submissions/${id}/review/reject/`,correction:`/submissions/${id}/review/request-correction/`,note:`/submissions/${id}/review/add-note/`};
+    const targets=Array.from(selected).map(key=>{const [type,...parts]=key.split(":");return {type,id:parts.join(":"),comment};});
+    return api.post(urls[action!],{comment,targets});
+  },onSuccess:()=>{setAction(null);setComment("");setSelected(new Set());setError("");refresh()},onError:e=>setError(e instanceof ApiError?e.message:e instanceof Error?e.message:"Action failed.")});
+  const start=useMutation({mutationFn:()=>api.post(`/submissions/${id}/review/start/`,{}),onSuccess:refresh,onError:e=>setError(e instanceof Error?e.message:"Review could not start.")});
+  if(review.isLoading)return <div className="space-y-4">{[1,2,3].map(x=><Skeleton key={x} className="h-28 w-full"/>)}</div>;
+  if(!review.data)return <div className="rounded-xl bg-red-50 p-5 text-red-700">Submission review data could not be loaded.</div>;
+  const data=review.data,sub=data.submission,canReview=!!me.data?.capabilities.can_review_submissions,underReview=sub.workflow_status==="UNDER_REVIEW",canStart=["SUBMITTED","RESUBMITTED"].includes(sub.workflow_status);
+  const toggle=(key:string)=>setSelected(prev=>{const next=new Set(prev);next.has(key)?next.delete(key):next.add(key);return next});
+  return <div className="mx-auto max-w-[1280px] space-y-5">
+    <a href="/submissions" className="text-sm font-semibold text-[#0066cc]">← Back to submissions</a>
+    <div className="flex flex-wrap items-start justify-between gap-4"><div><div className="flex items-center gap-2"><p className="font-mono text-xs text-[#0066cc]">{sub.form_code} v{sub.form_version}</p><WorkflowBadge status={sub.workflow_status}/></div><h1 className="mt-1 text-2xl font-semibold">{sub.form_name}</h1><p className="text-sm text-[#737780]">{sub.provider_name} · {sub.period_name}</p></div><div className="grid grid-cols-2 gap-3 text-right text-xs"><div><p className="text-[#737780]">Template</p><p className="font-semibold">#{sub.form_template_id}</p></div><div><p className="text-[#737780]">Mapping basis</p><p className="font-semibold">{sub.mapping_basis.replaceAll("_"," ")}</p></div><div><p className="text-[#737780]">Completion</p><p className="font-semibold">{Number(sub.completion_pct).toFixed(0)}%</p></div><div><p className="text-[#737780]">Blockers</p><p className="font-semibold text-red-700">{data.approval_blockers.length}</p></div></div></div>
+    {data.legacy_warning&&<div className="flex gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-900"><FileWarning className="shrink-0"/><div><h2 className="font-semibold">{data.legacy_warning.title}</h2><p className="mt-1 text-sm">{data.legacy_warning.message}</p><p className="mt-2 text-xs">Historical values are preserved. Newer form-version data is never substituted here.</p></div></div>}
+    <div className="flex border-b">{[["data","Form Data"],["requirements","PRD & Validation"],["actions","Review & Actions"]].map(([key,label])=><button key={key} onClick={()=>setTab(key as typeof tab)} className={`border-b-2 px-5 py-3 text-sm font-semibold ${tab===key?"border-[#001836] text-[#001836]":"border-transparent text-[#737780]"}`}>{label}{key==="requirements"&&<span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-800">{data.requirements.filter(r=>r.status!=="MATCHED").length+data.approval_blockers.length}</span>}</button>)}</div>
+    {tab==="data"&&<div className="space-y-4">{data.template.sections.map(section=><SectionPanel key={section.id} section={section} data={data} canReview={canReview&&underReview} selected={selected} toggle={toggle} refresh={refresh}/>)}</div>}
+    {tab==="requirements"&&<div className="grid gap-5 lg:grid-cols-2"><section className="rounded-2xl border bg-white p-5"><h2 className="font-semibold">Section 11 requirements</h2><div className="mt-4 space-y-3">{data.requirements.map(item=><div key={item.id} className="rounded-xl border p-4"><div className="flex justify-between gap-3"><p className="font-medium">{item.requirement_label}</p><span className={`h-fit rounded-full px-2 py-1 text-xs font-semibold ${badge[item.status]??"bg-gray-100"}`}>{item.status}</span></div><p className="mt-1 text-xs text-[#737780]">{item.requirement_type.replaceAll("_"," ")} · {item.severity}</p><p className="mt-2 text-sm">{item.evidence}</p></div>)}</div></section><div className="space-y-5"><section className="rounded-2xl border bg-white p-5"><div className="flex justify-between"><h2 className="font-semibold">Validation</h2><span className={`rounded-full px-2 py-1 text-xs font-semibold ${badge[data.validation?.status??""]??"bg-gray-100"}`}>{data.validation?.status??"Not run"}</span></div><div className="mt-4 space-y-2">{data.validation?.results.length?data.validation.results.map(x=><div key={x.id} className="rounded-xl bg-red-50 p-3 text-sm text-red-800"><p className="font-semibold">{x.code}</p><p>{x.message}</p></div>):<p className="text-sm text-green-700">No validation failures.</p>}</div></section><section className="rounded-2xl border bg-white p-5"><h2 className="font-semibold">Approval blockers</h2><div className="mt-3 space-y-2">{data.approval_blockers.length?data.approval_blockers.map((x,i)=><div key={`${x.code}-${i}`} className="flex gap-2 rounded-xl bg-red-50 p-3 text-sm text-red-800"><AlertTriangle size={16} className="shrink-0"/><span>{x.label}</span></div>):<p className="text-sm text-green-700">No blocking issues.</p>}</div></section></div></div>}
+    {tab==="actions"&&<div className="grid gap-5 lg:grid-cols-2"><section className="rounded-2xl border bg-white p-5"><h2 className="font-semibold">Regulatory decision</h2>{canReview&&canStart&&<button onClick={()=>start.mutate()} disabled={start.isPending} className="mt-4 rounded-xl bg-[#001836] px-4 py-2.5 text-sm font-semibold text-white"><Clock size={15} className="mr-2 inline"/>Start review</button>}{canReview&&underReview&&<><p className="mt-2 text-sm text-[#737780]">{selected.size} correction target(s) selected in Form Data.</p><div className="mt-4 grid grid-cols-2 gap-2">{[["approve","Approve",CheckCircle2],["reject","Reject",XCircle],["correction","Request correction",AlertTriangle],["note","Internal note",MessageSquare]].map(([key,label,Icon])=><button key={key as string} onClick={()=>setAction(key as typeof action)} className="flex items-center gap-2 rounded-xl border p-3 text-sm font-semibold"><Icon size={16}/>{label as string}</button>)}</div>{action&&<div className="mt-4 space-y-3"><textarea value={comment} onChange={e=>setComment(e.target.value)} className="min-h-28 w-full rounded-xl border p-3 text-sm" placeholder={action==="approve"?"Optional approval note":"Required reason or instruction"}/>{error&&<p className="text-sm text-red-700">{error}</p>}<button disabled={mutation.isPending} onClick={()=>mutation.mutate()} className="rounded-xl bg-[#001836] px-4 py-2.5 text-sm font-semibold text-white">Confirm {action.replaceAll("_"," ")}</button></div>}</>}{!canStart&&!underReview&&<p className="mt-3 text-sm text-[#737780]">No regulatory action is available in the current status.</p>}</section><section className="rounded-2xl border bg-white p-5"><h2 className="font-semibold">Review history</h2><div className="mt-4 space-y-3">{history.data?.length?history.data.map(item=><div key={item.id} className="border-b pb-3"><div className="flex justify-between gap-3"><p className="text-sm font-semibold">{item.action.replaceAll("_"," ")}</p><p className="text-xs text-[#737780]">{formatDateTime(item.created_at)}</p></div><p className="text-xs text-[#737780]">{item.created_by_name}{item.target_type?` · ${item.target_type} ${item.target_id}`:""}</p>{item.comment&&<p className="mt-1 text-sm">{item.comment}</p>}</div>):<p className="text-sm text-[#737780]">No review actions yet.</p>}</div></section></div>}
+  </div>;
 }

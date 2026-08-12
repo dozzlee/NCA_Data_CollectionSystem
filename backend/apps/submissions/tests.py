@@ -2,6 +2,7 @@ from datetime import timedelta
 from tempfile import TemporaryDirectory
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
 from rest_framework.test import APITestCase
@@ -18,7 +19,10 @@ from apps.forms_engine.models import (
 from apps.providers.models import ProviderProfile
 from apps.users.models import Organization, User
 from apps.uploads.models import SubmissionKMZUpload
-from .models import ExpectedSubmission, ReportingPeriod, Submission, SubmissionValue
+from .models import (
+    CorrectionItem, ExpectedSubmission, ReportingPeriod, ReviewAction, Submission, SubmissionEvent,
+    SubmissionNotification, SubmissionValue,
+)
 
 
 class SubmissionRemediationTests(APITestCase):
@@ -84,6 +88,24 @@ class SubmissionRemediationTests(APITestCase):
 
     def authenticate(self, user):
         self.client.force_authenticate(user)
+
+    def test_review_data_uses_exact_immutable_template_and_includes_grid_cells(self):
+        grid = FormGrid.objects.create(section=self.section, grid_code="traffic", title="Traffic", row_mode="REPEATABLE", min_rows=1)
+        column = GridColumn.objects.create(grid=grid, column_code="minutes", label="Minutes", field_type="number", unit="minutes")
+        SubmissionValue.objects.create(submission=self.submission_a, grid=grid, grid_row_id="row-1", grid_column=column, value="42", value_status="PROVIDED", updated_by=self.entry_a)
+        newer = FormTemplate.objects.create(form_code="MNO-MONTHLY", name="Newer", sector="TELECOM", provider_category="MNO", frequency="MONTHLY", version="2.0", effective_from=timezone.localdate(), status="ACTIVE", mapping_basis="PRD_SECTION_11")
+        FormSection.objects.create(form_template=newer, section_code="different", title="Different")
+
+        self.authenticate(self.officer)
+        response = self.client.get(f"/api/v1/submissions/{self.submission_a.id}/review-data/")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["template"]["id"], self.form.id)
+        self.assertEqual(response.data["template"]["sections"][0]["section_code"], "main")
+        self.assertEqual(response.data["values"][0]["grid_row_id"], "row-1")
+        self.assertIsNotNone(response.data["legacy_warning"])
+
+        self.authenticate(self.viewer)
+        self.assertEqual(self.client.get(f"/api/v1/submissions/{self.submission_a.id}/review-data/").status_code, 403)
 
     def test_provider_cannot_enumerate_another_organization(self):
         self.authenticate(self.entry_a)
@@ -196,6 +218,16 @@ class SubmissionRemediationTests(APITestCase):
             format="json",
         )
         self.assertEqual(submit.status_code, 200)
+        self.expected_a.refresh_from_db()
+        self.assertEqual(self.expected_a.workflow_status, "PENDING_APPROVAL")
+        queue = self.client.get("/api/v1/expected-submissions/?workflow_status=PENDING_APPROVAL")
+        self.assertEqual(queue.status_code, 200)
+        self.assertEqual({item["id"] for item in queue.data["results"]}, {self.expected_a.id})
+        self.assertEqual(self.client.post(f"/api/v1/submissions/{self.submission_a.id}/official-submit/", {}, format="json").status_code, 403)
+
+        self.authenticate(self.entry_b)
+        other_queue = self.client.get("/api/v1/expected-submissions/?workflow_status=PENDING_APPROVAL")
+        self.assertNotIn(self.expected_a.id, {item["id"] for item in other_queue.data["results"]})
 
         self.authenticate(self.approver_a)
         official = self.client.post(
@@ -279,13 +311,15 @@ class SubmissionRemediationTests(APITestCase):
         self.authenticate(self.approver_a)
         returned = self.client.post(
             f"/api/v1/submissions/{self.submission_a.id}/return-to-draft/",
-            {},
+            {"reason": "The required section needs correction.", "targets": [{"type": "SECTION", "id": "main"}]},
             format="json",
         )
         self.assertEqual(returned.status_code, 200)
         self.expected_a.refresh_from_db()
-        self.assertEqual(self.expected_a.workflow_status, "DRAFT")
+        self.assertEqual(self.expected_a.workflow_status, "PROVIDER_CHANGES_REQUESTED")
 
+        SubmissionValue.objects.create(submission=self.submission_a, field=self.required_field, value="complete", value_status="PROVIDED", updated_by=self.entry_a)
+        CorrectionItem.objects.filter(source_submission=self.submission_a).update(status="ADDRESSED")
         self.expected_a.workflow_status = "PENDING_APPROVAL"
         self.expected_a.save(update_fields=["workflow_status"])
         submitted = self.client.post(
@@ -296,6 +330,103 @@ class SubmissionRemediationTests(APITestCase):
         self.assertEqual(submitted.status_code, 200)
         self.expected_a.refresh_from_db()
         self.assertEqual(self.expected_a.workflow_status, "SUBMITTED")
+
+    def test_provider_correction_requires_reason_and_target_and_notifies_entry(self):
+        self.expected_a.workflow_status = "PENDING_APPROVAL"
+        self.expected_a.save(update_fields=["workflow_status"])
+        self.authenticate(self.approver_a)
+        url = f"/api/v1/submissions/{self.submission_a.id}/provider-review/request-correction/"
+        self.assertEqual(self.client.post(url, {}, format="json").status_code, 400)
+        returned = self.client.post(url, {
+            "reason": "Correct the audited value.",
+            "targets": [{"type": "FIELD", "id": self.required_field.id, "instruction": "Use the approved source."}],
+        }, format="json")
+        self.assertEqual(returned.status_code, 200, returned.data)
+        self.expected_a.refresh_from_db()
+        self.assertEqual(self.expected_a.workflow_status, "PROVIDER_CHANGES_REQUESTED")
+        self.assertTrue(CorrectionItem.objects.filter(source_submission=self.submission_a, stage="PROVIDER_APPROVAL").exists())
+        self.assertTrue(SubmissionNotification.objects.filter(recipient=self.entry_a, submission=self.submission_a).exists())
+        self.assertTrue(SubmissionEvent.objects.filter(submission=self.submission_a, event_type="PROVIDER_CHANGES_REQUESTED").exists())
+
+    def test_nca_correction_clones_official_version_and_returns_through_approver(self):
+        SubmissionValue.objects.create(
+            submission=self.submission_a, field=self.required_field, value="original official value",
+            value_status="PROVIDED", updated_by=self.entry_a,
+        )
+        self.expected_a.workflow_status = "UNDER_REVIEW"
+        self.expected_a.save(update_fields=["workflow_status"])
+        self.authenticate(self.officer)
+        correction = self.client.post(
+            f"/api/v1/submissions/{self.submission_a.id}/review/request-correction/",
+            {"comment": "Correct the audited field.", "targets": [{
+                "type": "FIELD", "id": self.required_field.id, "comment": "Use the signed source."
+            }]}, format="json",
+        )
+        self.assertEqual(correction.status_code, 200, correction.data)
+        clone = Submission.objects.get(pk=correction.data["correction_submission_id"])
+        self.assertEqual(clone.supersedes, self.submission_a)
+        self.assertEqual(clone.values.get(field=self.required_field).value, "original official value")
+
+        self.authenticate(self.entry_a)
+        immutable_attempt = self.client.put(
+            f"/api/v1/submissions/{self.submission_a.id}/sections/main/values/",
+            {"revision": self.submission_a.revision, "values": [{
+                "field": self.required_field.id, "value": "must not overwrite", "value_status": "PROVIDED",
+            }]}, format="json",
+        )
+        self.assertEqual(immutable_attempt.status_code, 409)
+        saved = self.client.put(
+            f"/api/v1/submissions/{clone.id}/sections/main/values/",
+            {"revision": clone.revision, "values": [{
+                "field": self.required_field.id, "value": "corrected value", "value_status": "PROVIDED",
+            }]}, format="json",
+        )
+        self.assertEqual(saved.status_code, 200, saved.data)
+        resubmitted = self.client.post(f"/api/v1/submissions/{clone.id}/submit-for-approval/", {}, format="json")
+        self.assertEqual(resubmitted.status_code, 200, resubmitted.data)
+        self.assertEqual(resubmitted.data["workflow_status"], "PROVIDER_RESUBMITTED")
+
+        self.authenticate(self.approver_a)
+        official = self.client.post(f"/api/v1/submissions/{clone.id}/provider-review/approve/", {}, format="json")
+        self.assertEqual(official.status_code, 200, official.data)
+        self.expected_a.refresh_from_db()
+        self.assertEqual(self.expected_a.workflow_status, "RESUBMITTED")
+        self.submission_a.refresh_from_db()
+        self.assertEqual(self.submission_a.values.get(field=self.required_field).value, "original official value")
+
+    def test_official_approval_reruns_readiness(self):
+        self.expected_a.workflow_status = "PENDING_APPROVAL"
+        self.expected_a.save(update_fields=["workflow_status"])
+        self.authenticate(self.approver_a)
+        response = self.client.post(f"/api/v1/submissions/{self.submission_a.id}/provider-review/approve/", {}, format="json")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data["code"], "INCOMPLETE_SUBMISSION")
+        self.expected_a.refresh_from_db()
+        self.assertEqual(self.expected_a.workflow_status, "PENDING_APPROVAL")
+
+    def test_section_snapshot_deletes_omitted_repeatable_cells_and_rejects_stale_revision(self):
+        grid = FormGrid.objects.create(section=self.section, grid_code="rows", title="Rows", row_mode="REPEATABLE")
+        column = GridColumn.objects.create(grid=grid, column_code="value", label="Value", field_type="text")
+        SubmissionValue.objects.create(submission=self.submission_a, field=self.required_field, value="old", value_status="PROVIDED", updated_by=self.entry_a)
+        SubmissionValue.objects.create(submission=self.submission_a, grid=grid, grid_row_id="remove-me", grid_column=column, value="old", value_status="PROVIDED", updated_by=self.entry_a)
+        self.authenticate(self.entry_a)
+        url = f"/api/v1/submissions/{self.submission_a.id}/sections/main/values/"
+        saved = self.client.put(url, {"revision": 0, "values": [{
+            "field": self.required_field.id, "value": "new", "value_status": "PROVIDED",
+        }]}, format="json")
+        self.assertEqual(saved.status_code, 200, saved.data)
+        self.assertFalse(SubmissionValue.objects.filter(submission=self.submission_a, grid_row_id="remove-me").exists())
+        stale = self.client.put(url, {"revision": 0, "values": []}, format="json")
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(stale.data["code"], "STALE_REVISION")
+
+    def test_provider_history_hides_internal_nca_notes(self):
+        ReviewAction.objects.create(submission=self.submission_a, action="ADD_NOTE", comment="internal", created_by=self.officer)
+        ReviewAction.objects.create(submission=self.submission_a, action="ADD_PROVIDER_COMMENT", comment="visible", is_provider_visible=True, created_by=self.officer)
+        self.authenticate(self.entry_a)
+        history = self.client.get(f"/api/v1/submissions/{self.submission_a.id}/review/history/")
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual([item["comment"] for item in history.data["results"]], ["visible"])
 
     def test_correction_can_be_edited_reapproved_and_resubmitted(self):
         self.expected_a.workflow_status = "SUBMITTED"
@@ -443,13 +574,12 @@ class SubmissionRemediationTests(APITestCase):
         ))
         completed = self.client.put(
             f"/api/v1/submissions/{self.submission_a.id}/sections/main/values/",
-            {"values": [{
-                "grid": repeatable.id,
-                "grid_row_id": "row-1",
-                "grid_column": required_repeat.id,
-                "value": "complete",
-                "value_status": "PROVIDED",
-            }]},
+            {"values": [
+                {"field": self.required_field.id, "value": "complete", "value_status": "PROVIDED"},
+                {"grid": fixed.id, "grid_row_id": str(fixed_row.id), "grid_column": fixed_column.id, "value": "complete", "value_status": "PROVIDED"},
+                {"grid": repeatable.id, "grid_row_id": "row-1", "grid_column": optional_repeat.id, "value": "optional only", "value_status": "PROVIDED"},
+                {"grid": repeatable.id, "grid_row_id": "row-1", "grid_column": required_repeat.id, "value": "complete", "value_status": "PROVIDED"},
+            ]},
             format="json",
         )
         self.assertTrue(completed.data["can_submit"])
@@ -529,6 +659,7 @@ class SubmissionRemediationTests(APITestCase):
             self.assertTrue(after.data["can_submit"])
 
     def test_period_activation_matches_category_sector_and_frequency(self):
+        from apps.providers.models import ProviderFormAssignment
         broadcasting = FormTemplate.objects.create(
             form_code="DC-TB02",
             name="Broadcasting",
@@ -563,11 +694,40 @@ class SubmissionRemediationTests(APITestCase):
             form.mapping_complete = True
             form.approval_status = "APPROVED"
             form.save(update_fields=["mapping_complete", "approval_status"])
+        ProviderFormAssignment.objects.create(
+            provider=self.provider_a,
+            form_family=self.form.family,
+            obligation="REQUIRED",
+            effective_from=period.opens_at.date(),
+            source_reference="Official test register",
+            confirmed_by=self.officer,
+        )
         period.activate()
         created_forms = set(
             period.expected_submissions.values_list("form_template_id", flat=True)
         )
         self.assertEqual(created_forms, {self.form.id})
+
+    def test_legacy_migration_dry_run_and_commit_preserve_history(self):
+        family = self.form.family
+        self.form.status = "ARCHIVED"; self.form.save(update_fields=["status"])
+        corrected = FormTemplate.objects.create(
+            family=family, form_code=self.form.form_code, name="Corrected", sector="TELECOM",
+            provider_category="MNO", frequency="MONTHLY", version="3.0",
+            effective_from=timezone.localdate(), status="ACTIVE", mapping_basis="PRD_SECTION_11",
+        )
+        corrected_section = FormSection.objects.create(form_template=corrected, section_code="main", title="Main")
+        corrected_field = FormField.objects.create(section=corrected_section, field_code="required", label="Required", field_type="text")
+        SubmissionValue.objects.create(submission=self.submission_a, field=self.required_field, value="legacy value", value_status="PROVIDED", updated_by=self.entry_a)
+        call_command("migrate_legacy_forms", expected_id=[self.expected_a.id])
+        self.expected_a.refresh_from_db(); self.assertIsNone(self.expected_a.replacement_id)
+        call_command("migrate_legacy_forms", expected_id=[self.expected_a.id], commit=True)
+        self.expected_a.refresh_from_db()
+        self.assertEqual(self.expected_a.workflow_status, "ARCHIVED")
+        self.assertIsNotNone(self.expected_a.replacement_id)
+        migrated = self.expected_a.replacement.versions.get()
+        self.assertEqual(migrated.values.get(field=corrected_field).value, "legacy value")
+        self.assertEqual(self.submission_a.values.get(field=self.required_field).value, "legacy value")
 
     def test_data_requester_cannot_read_operations_or_review(self):
         self.authenticate(self.viewer)
@@ -588,6 +748,87 @@ class SubmissionRemediationTests(APITestCase):
             {"comment": "must not be accepted"}, format="json",
         )
         self.assertEqual(response.status_code, 403)
+
+    def test_every_authenticated_role_can_export_aggregate_dashboard_xlsx(self):
+        for user in [self.entry_a, self.approver_a, self.officer, self.viewer]:
+            with self.subTest(role=user.role):
+                self.authenticate(user)
+                response = self.client.get("/api/v1/industry-dashboard/export/?format=xlsx")
+                self.assertEqual(response.status_code, 200, getattr(response, "data", None))
+                self.assertEqual(response["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                self.assertNotIn(b"e70682e229f04e6dbb46da0b7b3004f6.xlsx", response.content)
+
+    def test_restricted_dashboard_replaces_operator_rows_with_industry_totals(self):
+        self.authenticate(self.entry_a)
+        response = self.client.get("/api/v1/industry-dashboard/data/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["operators"], [])
+        self.assertNotIn("sourceWorkbooks", response.data["metadata"])
+
+        chart = next(
+            item for item in response.data["charts"]
+            if item["id"] == "voice-subs-market-share"
+        )
+        self.assertEqual([item["name"] for item in chart["series"]], ["Industry total"])
+        self.assertEqual(chart["shareSeries"], [])
+        q4_2025 = next(
+            item["value"] for item in chart["series"][0]["values"]
+            if item["period"] == "Q4 2025"
+        )
+        self.assertEqual(q4_2025, 42871955)
+
+        operator_names = {
+            "MTN", "Telecel", "AirtelTigo", "AT", "Tigo", "Airtel", "Glo", "Expresso"
+        }
+        for item in response.data["charts"]:
+            with self.subTest(chart=item["id"]):
+                names = {series["name"] for series in item["series"]}
+                self.assertTrue(names)
+                self.assertTrue(
+                    any(
+                        observation["value"] is not None
+                        for series in item["series"]
+                        for observation in series["values"]
+                    )
+                )
+                self.assertTrue(names.isdisjoint(operator_names))
+
+    def test_restricted_dashboard_export_contains_the_calculated_industry_total(self):
+        from io import BytesIO
+
+        from openpyxl import load_workbook
+
+        self.authenticate(self.viewer)
+        response = self.client.get("/api/v1/industry-dashboard/export/?format=xlsx")
+        self.assertEqual(response.status_code, 200)
+        workbook = load_workbook(BytesIO(response.content), read_only=True, data_only=True)
+        rows = list(workbook["Aggregate Data"].iter_rows(values_only=True))
+        self.assertIn(
+            (
+                "mobile",
+                "Mobile Voice Subscriptions and Market Share per Operator",
+                "subscriptions",
+                "Q4 2025",
+                "value",
+                "Industry total",
+                42871955,
+            ),
+            rows,
+        )
+        exported_series = {row[5] for row in rows[1:]}
+        self.assertNotIn("MTN", exported_series)
+        self.assertNotIn("Telecel", exported_series)
+
+    def test_privileged_dashboard_retains_operator_series(self):
+        self.authenticate(self.officer)
+        response = self.client.get("/api/v1/industry-dashboard/data/")
+        self.assertEqual(response.status_code, 200)
+        chart = next(
+            item for item in response.data["charts"]
+            if item["id"] == "voice-subs-market-share"
+        )
+        self.assertIn("MTN", [item["name"] for item in chart["series"]])
+        self.assertNotIn("Industry total", [item["name"] for item in chart["series"]])
 
     def test_viewer_mutation_matrix_is_denied(self):
         self.authenticate(self.viewer)

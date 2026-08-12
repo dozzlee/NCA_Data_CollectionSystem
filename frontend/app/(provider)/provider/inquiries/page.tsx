@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
+import type { User } from "@/lib/types";
 
 const CATEGORIES = [
   { value:"GENERAL",    label:"General Question" },
@@ -27,7 +28,11 @@ const lbl = "block text-[12px] font-semibold text-[#43474f] mb-1";
 
 export default function InquiriesPage() {
   const { toast } = useToast();
+  const { data: user } = useQuery<User>({ queryKey: ["me"], queryFn: () => api("/auth/me/") });
+  const isDataEntry = user?.role === "PROVIDER_DATA_ENTRY";
   const [mode, setMode] = useState<Mode>("feedback");
+  const activeMode: Mode = isDataEntry ? "issue" : mode;
+  const modes: Mode[] = isDataEntry ? ["issue"] : ["feedback", "issue"];
   const [feedbackForm, setFeedbackForm] = useState({ category:"GENERAL", subject:"", message:"" });
   const [issueForm, setIssueForm] = useState({ title:"", description:"", severity:"MEDIUM", page_url: typeof window !== "undefined" ? window.location.href : "" });
 
@@ -54,16 +59,16 @@ export default function InquiriesPage() {
       <div>
         <h1 className="text-[28px] font-semibold text-[#191c1e]">Inquiries & Support</h1>
         <p className="mt-1 text-[14px] text-[#43474f]">
-          Report a technical issue or send feedback to NCA. Our team will follow up if needed.
+          {isDataEntry ? "Report technical system issues. Compliance and general inquiries must be sent by your Provider Approver." : "Report a technical issue or send an authenticated inquiry to NCA."}
         </p>
       </div>
 
       {/* Tab toggle */}
       <div className="flex rounded-[8px] border border-[#c3c6d0] overflow-hidden w-fit">
-        {(["feedback","issue"] as Mode[]).map(m => (
+        {modes.map(m => (
           <button key={m} onClick={() => setMode(m)}
             className={`px-5 py-2 text-[13px] font-medium transition-colors ${
-              mode === m
+              activeMode === m
                 ? "bg-[#001836] text-white"
                 : "bg-white text-[#43474f] hover:bg-[#f2f4f6]"
             }`}>
@@ -72,7 +77,7 @@ export default function InquiriesPage() {
         ))}
       </div>
 
-      {mode === "feedback" ? (
+      {activeMode === "feedback" ? (
         <form onSubmit={e => { e.preventDefault(); feedbackMut.mutate(); }}
           className="rounded-[16px] border border-[#eceef0] bg-white p-6 space-y-4">
           <h2 className="text-[15px] font-semibold text-[#191c1e]">Feedback</h2>

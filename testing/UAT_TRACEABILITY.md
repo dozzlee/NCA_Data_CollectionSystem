@@ -4,7 +4,7 @@
 **Implementation plan:** `NCA_Testing_and_Remediation_Plan.docx`
 **Branch:** `testing_fix`
 **Local target:** `http://127.0.0.1:3001` / `http://127.0.0.1:8001`
-**Review date:** 2026-08-05
+**Review date:** 2026-08-12
 
 ## Status legend
 
@@ -62,9 +62,16 @@
 | UAT-043 | Excel, Google Sheets, CSV, XLSX and PDF comparison | PENDING-UAT | Shared canonical row iterator implemented; external application sign-off required. |
 | UAT-044 | Data requester catalog/request/approval/download/expiry | PASS-AUTO | Requester isolation and Admin-only decision APIs covered; named business UAT remains required. |
 | UAT-045 | G-25 | NOT APPLICABLE | Explicitly excluded by the approved remediation plan. |
+| UAT-046 | Explicit provider correction/resubmission state machine and notifications | PASS-AUTO | Provider transition, targeted correction, resubmission, official submission, timeline and notification regressions. |
+| UAT-047 | Optimistic revision and authoritative scalar/grid section snapshots | PASS-AUTO | Stale-update conflict, unknown-target rejection, omitted repeatable-row deletion and fixed-row preservation regressions. |
+| UAT-048 | Exact seven-form Section 11 structural manifests | PASS-AUTO | Corrected form loader and strict gap-check regressions cover fields, options, rows, columns, units, conditions, formula/rule and KMZ requirements. |
+| UAT-049 | Five-role dashboard capability matrix | PASS-AUTO | All-role aggregate data/XLSX tests; provider/requester source/detail/update denial; NCA editor controls. |
+| UAT-050 | Cookie JWT, CSRF, rotation, lockout and mandatory password change | PASS-AUTO | Authentication regressions verify CSRF, rotating/blacklisted refresh, failed-login lockout and Admin temporary-password flow. |
+| UAT-051 | Five-role Chromium navigation and critical accessibility scan | PASS-AUTO | `pnpm exec playwright test`: 5/5 role scenarios passed, including Data Entry/Approver and Officer/Admin exclusions; axe reported no critical violations after dashboard filter labels were corrected. |
 
 ## Acceptance summary
 
 - Critical provider workflow and organization-isolation cases UAT-014 through UAT-022 and UAT-034 have repeatable regression coverage.
+- Five-role Chromium and critical axe checks are repeatable in `frontend/e2e/role-access.spec.ts`; the wider browser/device matrix still requires named UAT.
 - CSV output compatibility safeguards are repeatably verified; remaining external browser/spreadsheet checks are explicitly recorded as PENDING-UAT rather than inferred.
 - Governance sign-off, Corporate Communications approval, IT readiness, and the external compatibility matrix remain human-controlled release gates in the Word plan.

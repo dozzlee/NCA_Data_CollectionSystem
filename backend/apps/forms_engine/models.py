@@ -21,12 +21,12 @@ FORM_CODES = [
     ("DC-ISP06", "Internet Service Provider Annual"),
     ("DC-ITC04", "Infrastructure Tower Operator Annual"),
     ("TOWER-MAIN-ANNUAL", "Infrastructure Tower Main Annual"),
-    ("DC-DBS05", "Domestic/Inland Fibre Semi-Annual"),
+    ("DC-DBS05", "Domestic/Inland Fibre Annual"),
     ("DC-SUB03", "International Submarine Fibre Annual"),
 ]
 
-# KMZ is only allowed for these two form codes
-KMZ_ELIGIBLE_FORMS = {"DC-DBS05", "DC-SUB03"}
+# Section 11 only requires KMZ route/topology evidence for the domestic fibre form.
+KMZ_ELIGIBLE_FORMS = {"DC-DBS05"}
 
 
 class FormFamily(models.Model):
@@ -45,6 +45,11 @@ class FormFamily(models.Model):
     frequency_decision_status = models.CharField(max_length=25, choices=FREQUENCY_DECISIONS, default="APPROVED")
     frequency_decision_reference = models.CharField(max_length=255, blank=True)
     source_owner = models.CharField(max_length=255, blank=True)
+    code_status = models.CharField(
+        max_length=15,
+        choices=[("CONFIRMED", "Confirmed"), ("PROVISIONAL", "Provisional")],
+        default="CONFIRMED",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -83,6 +88,11 @@ class FormTemplate(models.Model):
     source_reference = models.CharField(max_length=500, blank=True)
     source_sha256 = models.CharField(max_length=64, blank=True)
     mapping_complete = models.BooleanField(default=False)
+    mapping_basis = models.CharField(
+        max_length=30,
+        choices=[("LEGACY", "Legacy"), ("PRD_SECTION_11", "PRD Section 11"), ("SOURCE_FORM", "Original source form")],
+        default="LEGACY",
+    )
     approval_status = models.CharField(
         max_length=20,
         choices=[("DRAFT", "Draft"), ("PENDING_APPROVAL", "Pending approval"), ("APPROVED", "Approved")],
@@ -129,7 +139,7 @@ class ValidationRule(models.Model):
     grid = models.ForeignKey("FormGrid", null=True, blank=True, on_delete=models.CASCADE, related_name="validation_rules")
     rule_type = models.CharField(max_length=20, choices=RULE_TYPES)
     severity = models.CharField(max_length=10, choices=[("BLOCK", "Blocking"), ("WARN", "Warning")], default="BLOCK")
-    parameters = models.JSONField(default=dict)
+    parameters = models.JSONField(default=dict, blank=True)
     message = models.CharField(max_length=500)
     version = models.PositiveIntegerField(default=1)
     is_active = models.BooleanField(default=True)
@@ -137,6 +147,52 @@ class ValidationRule(models.Model):
 
     class Meta:
         ordering = ["sort_order", "id"]
+
+    def clean(self):
+        from .rules import validate_rule_definition
+        validate_rule_definition(self.rule_type, self.parameters, self.form_template, self.field, self.grid)
+
+
+class FormRequirement(models.Model):
+    REQUIREMENT_TYPES = [
+        ("SECTION", "Section"), ("FIELD", "Field"), ("GRID", "Grid"),
+        ("GRID_COLUMN", "Grid column"), ("FIXED_ROWS", "Fixed rows"),
+        ("OPTION", "Option"), ("UNIT", "Unit"), ("VALIDATION", "Validation"),
+        ("CONDITIONAL", "Conditional"), ("FORMULA", "Formula"),
+        ("DECLARATION", "Declaration"), ("KMZ", "KMZ upload"),
+        ("SOURCE_DECISION", "Source decision"), ("SPECIAL_HANDLING", "Special handling"),
+    ]
+    family = models.ForeignKey(FormFamily, on_delete=models.CASCADE, related_name="requirements")
+    requirement_key = models.CharField(max_length=120)
+    requirement_type = models.CharField(max_length=30, choices=REQUIREMENT_TYPES)
+    label = models.CharField(max_length=255)
+    description = models.TextField()
+    severity = models.CharField(max_length=10, choices=[("BLOCKER", "Blocker"), ("HIGH", "High"), ("MEDIUM", "Medium"), ("LOW", "Low")], default="HIGH")
+    criteria = models.JSONField(default=dict, blank=True)
+    source_reference = models.CharField(max_length=500, default="Product Requirements Document - Development Ready.docx, Section 11")
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+        constraints = [models.UniqueConstraint(fields=["family", "requirement_key"], name="unique_family_requirement_key")]
+
+
+class FormGapAssessment(models.Model):
+    STATUSES = [("MISSING", "Missing"), ("PARTIAL", "Partial"), ("MATCHED", "Matched"), ("NOT_APPLICABLE", "Not applicable")]
+    form_template = models.ForeignKey(FormTemplate, on_delete=models.CASCADE, related_name="gap_assessments")
+    requirement = models.ForeignKey(FormRequirement, on_delete=models.PROTECT, related_name="assessments")
+    status = models.CharField(max_length=20, choices=STATUSES, default="MISSING")
+    evidence = models.TextField(blank=True)
+    owner = models.ForeignKey("users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="form_gaps_owned")
+    resolution_note = models.TextField(blank=True)
+    assessed_by = models.ForeignKey("users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="form_gaps_assessed")
+    assessed_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey("users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="form_gaps_resolved")
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["requirement__sort_order", "id"]
+        constraints = [models.UniqueConstraint(fields=["form_template", "requirement"], name="unique_form_requirement_assessment")]
 
 
 class FormSection(models.Model):
@@ -201,6 +257,7 @@ class FormGrid(models.Model):
     row_mode = models.CharField(max_length=15, choices=ROW_MODE_CHOICES)
     sort_order = models.PositiveIntegerField(default=0)
     instructions = models.TextField(blank=True)
+    min_rows = models.PositiveIntegerField(default=0)
 
     def __str__(self):
         return f"{self.section.section_code} / {self.grid_code}"
@@ -235,7 +292,7 @@ class GridRow(models.Model):
 
 
 class KMZUploadRequirement(models.Model):
-    """Only created for DC-DBS05 and DC-SUB03."""
+    """Section 11 KMZ evidence requirement for domestic fibre submissions."""
     CATEGORY_CHOICES = [
         ("ROUTE", "Route"),
         ("TOPOLOGY", "Topology"),

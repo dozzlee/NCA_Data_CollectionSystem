@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 
 from apps.audit.services import record_audit
 from apps.users.models import User
-from apps.users.permissions import IsSystemAdmin
+from apps.users.permissions import IsNCAEditor, CanSendProviderCorrespondence
 from .models import FeedbackItem, SystemIssueEvent, SystemIssueTicket
 
 
@@ -30,7 +30,7 @@ def ticket_data(ticket):
 
 
 class FeedbackView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [CanSendProviderCorrespondence]
     def post(self, request):
         data = request.data
         item = FeedbackItem.objects.create(submitted_by=request.user, category=data.get("category", "GENERAL"),
@@ -48,7 +48,7 @@ class SystemIssueView(APIView):
 
     def get(self, request):
         qs = SystemIssueTicket.objects.select_related("reported_by", "assigned_to").prefetch_related("events")
-        if request.user.role != "NCA_ADMIN": qs = qs.filter(reported_by=request.user)
+        if request.user.role not in {"NCA_ADMIN", "NCA_OFFICER"}: qs = qs.filter(reported_by=request.user)
         else:
             for key in ("status", "severity", "assigned_team", "assigned_to"):
                 if request.query_params.get(key): qs = qs.filter(**{key: request.query_params[key]})
@@ -69,12 +69,12 @@ class SystemIssueDetailView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request, pk):
         qs = SystemIssueTicket.objects.select_related("reported_by", "assigned_to").prefetch_related("events")
-        if request.user.role != "NCA_ADMIN": qs = qs.filter(reported_by=request.user)
+        if request.user.role not in {"NCA_ADMIN", "NCA_OFFICER"}: qs = qs.filter(reported_by=request.user)
         return Response(ticket_data(get_object_or_404(qs, pk=pk)))
 
 
 class SystemIssueActionView(APIView):
-    permission_classes = [IsSystemAdmin]
+    permission_classes = [IsNCAEditor]
     def post(self, request, pk):
         ticket = get_object_or_404(SystemIssueTicket.objects.select_related("reported_by", "assigned_to"), pk=pk)
         action = request.data.get("action")

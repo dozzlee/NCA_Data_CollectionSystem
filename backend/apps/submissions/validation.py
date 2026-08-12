@@ -66,6 +66,20 @@ def run_validation(submission, scope="FULL"):
                 if params.get("min") and parsed < date.fromisoformat(params["min"]): raise ValueError("Date is too early.")
                 if params.get("max") and parsed > date.fromisoformat(params["max"]): raise ValueError("Date is too late.")
             elif rule.rule_type == "COORDINATE" and value not in (None, ""): _type_valid("coordinate", value)
+            elif rule.rule_type == "COORDINATE" and rule.grid_id:
+                latitude = rule.grid.columns.filter(column_code="latitude").first()
+                longitude = rule.grid.columns.filter(column_code="longitude").first()
+                if not latitude or not longitude:
+                    raise ValueError("Coordinate grids require latitude and longitude columns.")
+                rows = {}
+                for cell in grid_values:
+                    if cell.grid_id == rule.grid_id:
+                        rows.setdefault(cell.grid_row_id, {})[cell.grid_column_id] = cell.value
+                for row_id, cells in rows.items():
+                    if cells.get(latitude.id) or cells.get(longitude.id):
+                        lat = _decimal(cells.get(latitude.id, "")); lon = _decimal(cells.get(longitude.id, ""))
+                        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                            raise ValueError(f"Coordinates in row {row_id} are outside valid bounds.")
             elif rule.rule_type == "CONDITIONAL":
                 if str(values.get(int(params["when_field"]), "")) == str(params.get("equals")) and not str(value).strip(): raise ValueError("Value is required by a conditional rule.")
             elif rule.rule_type == "FORMULA" and rule.field:

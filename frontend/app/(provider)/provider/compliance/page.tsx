@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { formatDateTime } from "@/lib/utils";
 import { ShieldAlert, CheckCircle2, AlertTriangle, Mail, ChevronRight } from "lucide-react";
 import Link from "next/link";
-import type { PaginatedResponse } from "@/lib/types";
+import type { PaginatedResponse, User } from "@/lib/types";
 
 interface ComplianceFlag {
   id: number;
@@ -39,6 +39,8 @@ const FLAG_STATUS_STYLES: Record<string, string> = {
 };
 
 export default function ProviderCompliancePage() {
+  const { data: user } = useQuery<User>({ queryKey: ["me"], queryFn: () => api("/auth/me/") });
+  const isApprover = user?.role === "PROVIDER_APPROVER";
   const flagsQ = useQuery({
     queryKey: ["my-compliance-flags"],
     queryFn: () => api.get<PaginatedResponse<ComplianceFlag>>("/compliance/my-flags/"),
@@ -67,9 +69,7 @@ export default function ProviderCompliancePage() {
               {openCount} active compliance issue{openCount !== 1 ? "s" : ""} require your attention
             </p>
             <p className="text-[12px] text-[#c0112a]/80 mt-0.5">
-              Review each flag below and update your submissions with the missing information. Contact{" "}
-              <a href="mailto:compliance@nca.org.gh" className="underline font-medium">compliance@nca.org.gh</a>
-              {" "}if you need assistance.
+              Review each flag below and update your submissions with the missing information. {isApprover ? "Use Inquiries if you need NCA assistance." : "Ask your Provider Approver to contact NCA if assistance is required."}
             </p>
           </div>
         </div>
@@ -137,10 +137,10 @@ export default function ProviderCompliancePage() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0 mt-1">
-                  <a href="mailto:compliance@nca.org.gh"
+                  {isApprover && <Link href="/provider/inquiries"
                     className="flex items-center gap-1 rounded-[6px] border border-[#c3c6d0] px-3 py-1.5 text-[11px] font-medium text-[#43474f] hover:bg-[#f2f4f6]">
-                    <Mail size={11} /> Email NCA
-                  </a>
+                    <Mail size={11} /> Contact NCA
+                  </Link>}
                   <Link href={`/provider/submissions/${flag.expected_submission}`}
                     className="flex items-center gap-1 rounded-[6px] bg-[#002d5b] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#001836]">
                     Update submission <ChevronRight size={11} />
@@ -153,10 +153,7 @@ export default function ProviderCompliancePage() {
       </div>
 
       <p className="text-[11px] text-[#737780] text-center">
-        Questions about a compliance notice? Contact{" "}
-        <a href="mailto:compliance@nca.org.gh" className="text-[#0066cc] hover:underline font-medium">
-          compliance@nca.org.gh
-        </a>
+        {isApprover ? "Questions about a compliance notice? Use the authenticated Inquiries page." : "Questions about a compliance notice? Ask your Provider Approver to contact NCA."}
       </p>
     </div>
   );
