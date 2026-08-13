@@ -67,8 +67,8 @@ cell(tables[2], 10, 1, "Five stored roles are retained: NCA Admin; NCA Officer; 
 role_rows = [
     ("NCA Admin", "Complete system access: users/divisions, providers, form versions and publication, assignments, periods, submissions, compliance, exports, governance, support, audit and Data Requests/artifacts.", "Cannot act as a provider user; high-risk actions remain audited and subject to readiness gates."),
     ("NCA Officer", "Operational Admin parity for forms, providers, assignments, periods, review, compliance, exports, dashboard configuration, governance, audit and support.", "No Users/division/account management and no Data Request queue, decisions or artifacts."),
-    ("Provider Data Entry", "Own-organization draft entry, scalar/grid snapshots, validation, allowed private uploads, provider correction/resubmission and technical support.", "Cannot officially submit to NCA, see another provider, or use compliance/general contact actions."),
-    ("Provider Approver", "Own-organization approver queue, complete review, targeted provider corrections, official submission, compliance contact and technical support.", "Cannot perform NCA review, internal exports, user administration or cross-provider access."),
+    ("Provider Data Entry", "Shared own-organization work queue, draft scalar/grid snapshots, optimistic autosave/manual save, targeted provider correction/resubmission, read-only compliance details and technical support history.", "Cannot edit Approver/NCA-owned stages, officially submit to NCA, see another provider, or use compliance/general contact actions."),
+    ("Provider Approver", "Server-calculated approval/NCA-correction queues; exact-version review; permitted field/grid/private-file editing; targeted returns; attested official submission; receipts, compliance contact and technical support.", "Cannot edit ordinary Data Entry drafts, perform NCA review, access internal exports/user administration or cross-provider records."),
     ("NCA Data Requester", "Metadata-only catalog, own requests, portal notifications and authenticated released-artifact download; named account with managed division and required grade.", "No operational submissions, providers, compliance, periods, raw exports, dashboard source/detail or another requester's records."),
 ]
 while len(tables[4].rows) > 1:
@@ -96,13 +96,14 @@ for row in tables[5].rows[1:]:
             row.cells[4].text += " This is the only corrected form that requires topology KMZ."
 
 cell(tables[6], 1, 1, "Not Started, Draft, Pending Provider Approval, Provider Changes Requested, Provider Resubmitted, Submitted, Under NCA Review, Correction Requested, Resubmitted, Approved, Rejected, Archived")
-cell(tables[6], 1, 2, "Provider and regulatory stages are explicit. Official provider and NCA versions are immutable; regulatory correction creates a cloned version and locks unaffected content.")
+cell(tables[6], 1, 2, "Provider and regulatory stages are explicit. Provider Data Entry edits DRAFT/PROVIDER_CHANGES_REQUESTED; Provider Approver edits PENDING_APPROVAL/PROVIDER_RESUBMITTED and the cloned CORRECTION_REQUESTED version. Official provider and NCA versions are immutable.")
 
 # Data entities extended without removing original entries.
 cell(tables[7], 1, 2, "user_id, organization_id, role, name, unique email, status, division_id and grade for requesters, failed_login_attempts, locked_until, must_change_password, last_login_at")
 add_row(tables[7], ("SubmissionEvent / SubmissionNotification", "Immutable provider/regulatory workflow history and own-user portal notification stream.", "submission_id, event_type, status transition, actor, audience, reason/metadata, recipient, read_at, created_at"))
 add_row(tables[7], ("DataRequest / Artifact", "Governed division request, immutable approval manifest and private released file.", "requester snapshots, division, grade, purpose, scope, status, due date, manifest, format, hash, size, rows, expiry"))
 add_row(tables[7], ("PrivateUpload / Scan", "Quarantined KMZ and Excel backup metadata outside public media.", "submission_id, requirement, storage reference, SHA-256, scan status/result, uploader, timestamps"))
+add_row(tables[7], ("ProviderEditBatch / ProviderApprovalDecision", "Immutable sensitive before/after provider edit evidence plus official approval attestation.", "submission_id, actor, stage, revision, section/target, before/after values, change hash/count, attestation, required change summary, approval note and timestamp"))
 
 cell(tables[9], 2, 2, "Declarations and applicable structured values are required before transition. General audited-financial-statement attachments remain deferred; private Excel backup is optional evidence, not a form value.")
 cell(tables[9], 9, 2, "Topology KMZ is required only for DC-DBS05 in the corrected form set and must be clean or explicitly accepted before approval.")
@@ -158,8 +159,8 @@ replace_paragraph(doc, 45, "NCA Officer is a distinct stored role with operation
 replace_paragraph(doc, 46, "Passwords use approved hashing, strong validation, timeout, failed-login counting, throttling and lockout. Authentication uses rotating/revoked JWTs in Secure, HttpOnly, SameSite cookies with CSRF protection. MFA is explicitly deferred and is not represented as enforced.")
 replace_paragraph(doc, 65, "A draft is editable only by authorized Data Entry users while its provider-stage status permits entry. Provider and regulatory correction stages reopen only targeted content; official historical versions remain immutable.")
 replace_paragraph(doc, 66, "Provider and NCA transitions rerun full validation. Approval is blocked by required content, clean required uploads, blocking rules, unresolved dispositions, open correction items and failed high/blocker Section 11 requirements unless an authorized audited exception applies.")
-replace_paragraph(doc, 68, "Provider Approvers review tenant-isolated drafts, complete values, validation, explanations and clean allowed files before official submission.")
-replace_paragraph(doc, 69, "Approvers can request a targeted provider correction with reason and section/field/grid-cell targets, or approve after a fresh readiness check. Returned drafts preserve decision history and resubmission count.")
+replace_paragraph(doc, 68, "Provider Approvers use a server-counted, paginated tenant queue. They cannot edit ordinary drafts, but may edit values/grids/uploads in Pending Provider Approval, Provider Resubmitted and the cloned NCA Correction Requested version. Every Approver save creates an immutable before/after batch and non-sensitive audit hash.")
+replace_paragraph(doc, 69, "Approvers can request multiple targeted section/field/grid-cell corrections with required instructions, or approve after a fresh readiness/upload/correction check. Official submission requires an accuracy attestation and, after any Approver edit, a required change summary.")
 replace_paragraph(doc, 70, "Official provider submission creates an immutable version. Regulatory correction clones it into a new version; the official source version is never edited.")
 replace_paragraph(doc, 71, "Provider transitions create immutable workflow events, responsible-user/timestamp evidence, audience-scoped portal notifications and audit records.")
 replace_paragraph(doc, 73, "NCA review always renders the exact stored form template/version, including scalar/calculated values, fixed and repeatable grids, statuses, explanations, uploads/scans, validation results, Section 11 results and blockers.")
@@ -232,9 +233,11 @@ doc.add_heading("20.3 Provider and regulatory state machines", level=2)
 doc.add_paragraph("Provider stage: DRAFT → PENDING_APPROVAL → PROVIDER_CHANGES_REQUESTED → PROVIDER_RESUBMITTED → SUBMITTED.")
 doc.add_paragraph("Regulatory stage: SUBMITTED → UNDER_REVIEW → CORRECTION_REQUESTED → RESUBMITTED → APPROVED or REJECTED.")
 for text in [
-    "Section saves are transactional authoritative snapshots with optimistic revision checks, exact scalar/grid targets, fixed-row preservation and omitted editable-repeatable-row deletion.",
+    "Provider workspaces use provider-scoped server summaries and paginated/filterable queues, so counts and actions are not derived from the first browser page. History records the actual submitted timestamp, latest editor/time, correction count and receipt availability.",
+    "Section saves are transactional authoritative snapshots with debounced autosave, save-on-blur/manual save, optimistic revision checks, exact scalar/grid targets, fixed-row preservation and omitted editable-repeatable-row deletion. Conflicts retain unsaved browser values and identify the latest editor/time.",
     "Non-filled status clears a prior value and requires an explanation; conditional visibility reads the complete submission; allow-listed formulas and rules are recalculated on save/transitions.",
-    "Provider and NCA correction instructions require reasons and section/field/grid-cell targets. Regulatory correction clones the official version and locks unaffected content.",
+    "Provider and NCA correction instructions require reasons and one or more section/field/grid-cell targets. Regulatory correction clones the official version, belongs initially to the Provider Approver and locks unaffected content. The Approver can correct directly or return targeted work to Data Entry.",
+    "Approver edits produce immutable sensitive before/after batches visible only to the same provider and privileged NCA staff. The general audit stores target identifiers, counts and SHA-256 digests, not duplicate raw values. Official submission stores attestation, decision, Approver and conditionally required change summary.",
 ]:
     bullet(doc, text)
 
@@ -252,6 +255,7 @@ for text in [
     "Rotating/revoked JWT sessions are stored in Secure, HttpOnly, SameSite cookies; unsafe browser requests require CSRF. Failed-login counting, throttling, lockout and Admin-mediated temporary-password reset are implemented.",
     "MFA routes/claims are removed for this release and MFA remains deferred.",
     "Submission notifications are separate from Data Request notifications and are visible only to intended users; timeline audiences prevent internal NCA notes from leaking to providers.",
+    "Provider navigation shows server-calculated unread and pending-approval counts. Notification links open the relevant provider return, and users can mark one or all read. Technical-support users can view their own ticket status, SLA, resolution and event history.",
     "Audit events are immutable and hash linked; daily signed anchors and governance readiness evidence support tamper detection and release review.",
 ]:
     bullet(doc, text)

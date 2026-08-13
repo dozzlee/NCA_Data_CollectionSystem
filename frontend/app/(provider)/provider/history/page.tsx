@@ -1,79 +1,26 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
+import { WorkflowBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
-import type { ExpectedSubmission } from "@/lib/types";
+import type { ExpectedSubmission, PaginatedResponse } from "@/lib/types";
 
 export default function ProviderHistoryPage() {
-  const { data, isLoading } = useQuery<{ results: ExpectedSubmission[] }>({
-    queryKey: ["provider-history"],
-    queryFn: () => api("/expected-submissions/?ordering=-period__due_at"),
+  const [search, setSearch] = useState("");
+  const { data, isLoading } = useQuery<PaginatedResponse<ExpectedSubmission>>({
+    queryKey: ["provider-history", search],
+    queryFn: () => api(`/provider-workspace/submissions/?queue=history&ordering=-created_at${search ? `&search=${encodeURIComponent(search)}` : ""}`),
   });
-
-  // History = submissions that have been submitted or closed
-  const history = (data?.results ?? []).filter(s =>
-    ["SUBMITTED","UNDER_REVIEW","RESUBMITTED","APPROVED","REJECTED","ARCHIVED"].includes(s.workflow_status)
-  );
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-[28px] font-semibold text-[#191c1e]">Submission History</h1>
-        <p className="mt-1 text-[14px] text-[#43474f]">
-          All past submissions for your organisation — submitted, under review, approved, and rejected.
-        </p>
-      </div>
-
-      <div className="rounded-[16px] border border-[#eceef0] bg-white overflow-hidden">
-        <table className="w-full text-left">
-          <thead className="border-b border-[#eceef0] bg-[#f7f9fb]">
-            <tr>
-              {["Form","Period","Submitted","Status","Due State",""].map(h => (
-                <th key={h} className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-[#43474f]">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#eceef0]">
-            {isLoading
-              ? Array.from({ length: 5 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 6 }).map((_, j) => (
-                    <td key={j} className="px-5 py-4"><Skeleton className="h-3.5 w-full" /></td>
-                  ))}</tr>
-                ))
-              : history.length === 0
-              ? (
-                <tr>
-                  <td colSpan={6} className="px-5 py-12 text-center text-[14px] text-[#737780]">
-                    No submission history yet.
-                  </td>
-                </tr>
-              )
-              : history.map(s => (
-                <tr key={s.id} className="hover:bg-[#f7f9fb] transition-colors">
-                  <td className="px-5 py-3.5">
-                    <p className="text-[13px] font-medium text-[#191c1e]">{s.form_name}</p>
-                    <p className="text-[11px] text-[#737780] font-mono">{s.form_code}</p>
-                  </td>
-                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{s.period_name}</td>
-                  <td className="px-5 py-3.5 text-[13px] text-[#737780]">
-                    {s.due_at ? new Date(s.due_at).toLocaleDateString("en-GB") : "—"}
-                  </td>
-                  <td className="px-5 py-3.5"><WorkflowBadge status={s.workflow_status} /></td>
-                  <td className="px-5 py-3.5"><DueStateBadge state={s.due_state} /></td>
-                  <td className="px-5 py-3.5">
-                    <Link href={`/provider/submissions/${s.id}`}
-                      className="text-[13px] font-medium text-[#0066cc] hover:underline">
-                      View →
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+  return <div className="space-y-6">
+    <div><h1 className="text-[28px] font-semibold">Submission history</h1><p className="mt-1 text-sm text-[#43474f]">Official versions, review progress, approval decisions and receipts for your provider.</p></div>
+    <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search form or period" className="w-full max-w-md rounded-lg border bg-white px-3 py-2 text-sm" />
+    <div className="overflow-x-auto rounded-2xl border bg-white"><table className="w-full min-w-[840px] text-left"><thead className="border-b bg-[#f7f9fb]"><tr>{["Form", "Period", "Submitted", "Responsible approver", "Status", "Receipt", ""].map((h) => <th key={h} className="px-5 py-3 text-xs font-semibold uppercase text-[#43474f]">{h}</th>)}</tr></thead>
+      <tbody className="divide-y">{isLoading ? Array.from({ length: 5 }).map((_, i) => <tr key={i}>{Array.from({ length: 7 }).map((__, j) => <td key={j} className="px-5 py-4"><Skeleton className="h-4" /></td>)}</tr>)
+      : !data?.results.length ? <tr><td colSpan={7} className="p-12 text-center text-sm text-[#737780]">No submission history yet.</td></tr>
+      : data.results.map((row) => <tr key={row.id}><td className="px-5 py-4"><p className="text-sm font-medium">{row.form_name}</p><p className="font-mono text-xs text-[#737780]">{row.form_code}</p></td><td className="px-5 py-4 text-sm">{row.period_name}</td><td className="px-5 py-4 text-sm text-[#737780]">{row.submitted_at ? new Date(row.submitted_at).toLocaleString() : "—"}</td><td className="px-5 py-4 text-sm">{row.last_edited_by_name || "—"}</td><td className="px-5 py-4"><WorkflowBadge status={row.workflow_status} /></td><td className="px-5 py-4 text-sm">{row.receipt_available ? row.receipt_reference : "—"}</td><td className="px-5 py-4"><Link href={`/provider/submissions/${row.id}`} className="text-sm font-medium text-[#0066cc]">View →</Link></td></tr>)}</tbody>
+    </table></div>
+  </div>;
 }

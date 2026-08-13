@@ -16,6 +16,10 @@ interface Submission {
   kmz_required: boolean;
   submitted_at: string | null;
   revision: number;
+  last_edited_by: string | null;
+  last_edited_by_name: string | null;
+  last_edited_at: string | null;
+  receipt_reference: string | null;
 }
 
 interface SectionCompletion {
@@ -39,6 +43,11 @@ interface CompletionData {
     label: string;
   }[];
   sections: SectionCompletion[];
+  transition_ready: boolean;
+  open_correction_item_count: number;
+  open_correction_items: Array<{ id:number; stage:string; target_type:string; target_id:string; instruction:string }>;
+  warning_count: number;
+  validation_issues: Array<{ id:number; severity:string; target_type:string; target_id:string; code:string; message:string; details:Record<string, unknown> }>;
 }
 
 interface SubmissionValue {
@@ -97,7 +106,7 @@ export function useSaveSectionValues(submissionId: number) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ sectionCode, values, revision }: { sectionCode: string; values: SubmissionValue[]; revision?: number }) =>
-      api.put<{ saved: number; completion_pct: number; revision: number }>(
+      api.put<{ saved: number; completion_pct: number; revision: number; last_edited_by_name:string; last_edited_at:string }>(
         `/submissions/${submissionId}/sections/${sectionCode}/values/`,
         { values, revision }
       ),
@@ -105,7 +114,7 @@ export function useSaveSectionValues(submissionId: number) {
       qc.invalidateQueries({ queryKey: ["section-values", submissionId, sectionCode] });
       qc.invalidateQueries({ queryKey: ["submission-completion", submissionId] });
       qc.setQueryData<Submission>(["submission", submissionId], (current) =>
-        current ? { ...current, revision: response.revision } : current
+        current ? { ...current, revision: response.revision, last_edited_by_name:response.last_edited_by_name, last_edited_at:response.last_edited_at } : current
       );
     },
   });

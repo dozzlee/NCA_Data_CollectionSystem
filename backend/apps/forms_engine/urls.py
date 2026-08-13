@@ -4,12 +4,17 @@ from . import views
 urlpatterns = [
     # Form Templates
     path("form-templates/",                                         views.FormTemplateListView.as_view()),
+    path("form-workbook-imports/",                                views.FormWorkbookImportListCreateView.as_view()),
+    path("form-workbook-imports/<int:pk>/",                       views.FormWorkbookImportDetailView.as_view()),
+    path("form-workbook-imports/<int:pk>/confirm/",               views.ConfirmFormWorkbookImportView.as_view()),
     path("form-templates/<int:pk>/",                                views.FormTemplateDetailView.as_view()),
     path("form-families/",                                         views.FormFamilyListCreate.as_view()),
     path("form-families/<int:pk>/approve-frequency/",             views.ApproveFrequencyDecisionView.as_view()),
     path("form-templates/<int:pk>/clone/",                         views.CloneFormVersionView.as_view()),
     path("form-templates/<int:pk>/approve/",                       views.ApproveFormVersionView.as_view()),
     path("form-templates/<int:pk>/publication-checks/",            views.PublicationChecksView.as_view()),
+    path("form-templates/<int:pk>/assignment-preview/",            views.FormAssignmentPreviewView.as_view()),
+    path("form-templates/<int:pk>/assignments/",                   views.FormAssignmentListCreateView.as_view()),
     path("form-templates/<int:pk>/validation-rules/",              views.ValidationRuleListCreate.as_view()),
     path("form-families/<int:pk>/requirements/",                  views.FormRequirementListView.as_view()),
     path("form-templates/<int:pk>/gaps/",                         views.FormGapListCreateView.as_view()),

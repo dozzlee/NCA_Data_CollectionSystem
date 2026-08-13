@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { Eye, EyeOff, AlertCircle } from "lucide-react";
 import { clearAuthTokens } from "@/lib/auth";
 
@@ -61,8 +62,8 @@ export default function LoginPage() {
         style={{ background: "linear-gradient(160deg, #002d5b 0%, #001836 100%)" }}>
 
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-[10px] bg-[#E31937] text-[10px] font-bold text-white tracking-wider">
-            NCA
+          <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full bg-white">
+            <Image src="/nca-logo.png" alt="National Communications Authority" width={56} height={56} preload className="h-full w-full object-contain" />
           </div>
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-white/50">National Communications Authority</p>
@@ -105,7 +106,7 @@ export default function LoginPage() {
 
           {/* Mobile brand */}
           <div className="flex items-center gap-2.5 lg:hidden">
-            <div className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-[#E31937] text-[9px] font-bold text-white tracking-wider">NCA</div>
+            <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-white ring-1 ring-[#dfe3e8]"><Image src="/nca-logo.png" alt="National Communications Authority" width={36} height={36} className="h-full w-full object-contain" /></div>
             <p className="text-[14px] font-semibold text-[#191c1e]">Data Collection System</p>
           </div>
 

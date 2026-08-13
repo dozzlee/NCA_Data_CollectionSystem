@@ -7,7 +7,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import type { FormTemplate, FormSection, FormField, FormGrid, FieldType } from "@/lib/types";
+import type { FormTemplate, FormSection, FormField, FormGrid, FieldType, ProviderProfile, ReportingPeriod } from "@/lib/types";
 import { ChevronDown, ChevronRight, Plus, Trash2, GripVertical } from "lucide-react";
 
 const FIELD_TYPES: { value: FieldType; label: string }[] = [
@@ -27,6 +27,35 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
 
 const inp = "w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20";
 const lbl = "block text-[11px] font-semibold uppercase tracking-wide text-[#737780] mb-1";
+
+function AssignmentPanel({ template }: { template: FormTemplate }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [mode,setMode]=useState<"RECURRING"|"MANUAL">("RECURRING");
+  const [selected,setSelected]=useState<number[]>([]);
+  const [periodId,setPeriodId]=useState("");
+  const [effectiveFrom,setEffectiveFrom]=useState(new Date().toISOString().slice(0,10));
+  const [effectiveTo,setEffectiveTo]=useState("");
+  const [overrideReason,setOverrideReason]=useState("");
+  const providers=useQuery<{results:ProviderProfile[]}>({queryKey:["providers-for-form",template.id],queryFn:()=>api(`/providers/?status=ACTIVE`)});
+  const periods=useQuery<{results:ReportingPeriod[]}>({queryKey:["periods-for-form",template.id],queryFn:()=>api(`/periods/?frequency=${template.frequency}`)});
+  const assignments=useQuery<{recurring:Array<{id:number;provider_name:string;effective_from:string;effective_to:string|null}>;manual:Array<{id:number;provider_name:string;period_name:string}>}>({queryKey:["form-assignments",template.id],queryFn:()=>api(`/form-templates/${template.id}/assignments/`),enabled:template.approval_status==="APPROVED"});
+  const preview=useQuery<{providers:Array<{provider_id:number;provider_name:string;mismatch:boolean;duplicate:boolean;can_assign:boolean}>;summary:{assignable:number;mismatches:number;duplicates:number}}>({
+    queryKey:["assignment-preview",template.id,mode,selected,periodId,overrideReason],
+    queryFn:()=>api(`/form-templates/${template.id}/assignment-preview/?mode=${mode}&provider_ids=${selected.join(",")}${periodId?`&period=${periodId}`:""}&override_reason=${encodeURIComponent(overrideReason)}`),enabled:selected.length>0,
+  });
+  const send=useMutation({mutationFn:()=>api(`/form-templates/${template.id}/assignments/`,{method:"POST",body:JSON.stringify({mode,provider_ids:selected,period_id:mode==="MANUAL"?Number(periodId):undefined,effective_from:effectiveFrom,effective_to:effectiveTo||null,override_reason:overrideReason})}),onSuccess:()=>{toast("Form assignment saved and provider users notified.","success");setSelected([]);qc.invalidateQueries({queryKey:["form-assignments",template.id]});},onError:(error:Error)=>toast(error.message,"error")});
+  if(template.approval_status!=="APPROVED")return <section className="rounded-xl border bg-white p-5"><h2 className="font-semibold">Assignments</h2><p className="mt-1 text-sm text-[#737780]">Publish this template before sending it to providers.</p></section>;
+  const providerList=providers.data?.results??[];
+  return <section className="rounded-xl border bg-white p-5"><div><h2 className="font-semibold">Assign / Send to providers</h2><p className="mt-1 text-xs text-[#737780]">Recurring assignments renew each matching period. Manual assignments apply to one period.</p></div>
+    <div className="mt-4 grid gap-3 sm:grid-cols-3"><select className={inp} value={mode} onChange={e=>setMode(e.target.value as "RECURRING"|"MANUAL")}><option value="RECURRING">Recurring assignment</option><option value="MANUAL">Manual one-period assignment</option></select>{mode==="MANUAL"?<select className={`${inp} sm:col-span-2`} value={periodId} onChange={e=>setPeriodId(e.target.value)}><option value="">Select reporting period</option>{(periods.data?.results??[]).filter(p=>p.status!=="CLOSED").map(p=><option key={p.id} value={p.id}>{p.name} · {p.status}</option>)}</select>:<><input className={inp} type="date" value={effectiveFrom} onChange={e=>setEffectiveFrom(e.target.value)}/><input className={inp} type="date" value={effectiveTo} onChange={e=>setEffectiveTo(e.target.value)} aria-label="Recurring assignment end date"/></>}</div>
+    <div className="mt-4 max-h-56 overflow-y-auto rounded-lg border p-2">{providerList.map(provider=>{const mismatch=provider.sector!==template.sector||provider.category!==template.provider_category;return <label key={provider.id} className="flex items-center gap-3 rounded px-2 py-2 hover:bg-[#f7f9fb]"><input type="checkbox" checked={selected.includes(provider.id)} onChange={()=>setSelected(items=>items.includes(provider.id)?items.filter(id=>id!==provider.id):[...items,provider.id])}/><span className="flex-1 text-sm">{provider.registered_name}</span>{mismatch&&<span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">Type mismatch</span>}</label>})}</div>
+    {(preview.data?.summary.mismatches??0)>0&&<textarea className={`${inp} mt-3`} rows={2} placeholder="Required reason for assigning across a sector or provider-type mismatch" value={overrideReason} onChange={e=>setOverrideReason(e.target.value)}/>}
+    {preview.data&&<p className="mt-3 text-xs text-[#43474f]">{preview.data.summary.assignable} assignable · {preview.data.summary.duplicates} already assigned · {preview.data.summary.mismatches} mismatches</p>}
+    <div className="mt-3 flex justify-end"><button onClick={()=>send.mutate()} disabled={!selected.length||send.isPending||(mode==="MANUAL"&&!periodId)||(Boolean(preview.data?.summary.mismatches)&&!overrideReason.trim())} className="rounded-lg bg-[#001836] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Confirm & send</button></div>
+    {(assignments.data?.recurring.length||assignments.data?.manual.length)?<div className="mt-5 border-t pt-4 text-xs text-[#43474f]"><p className="font-semibold">Current assignments</p>{assignments.data?.recurring.map(a=><p key={`r${a.id}`} className="mt-1">Recurring · {a.provider_name} · from {a.effective_from}{a.effective_to?` to ${a.effective_to}`:""}</p>)}{assignments.data?.manual.map(a=><p key={`m${a.id}`} className="mt-1">Manual · {a.provider_name} · {a.period_name}</p>)}</div>:null}
+  </section>;
+}
 
 function AddFieldForm({ templateId, sectionId, availableFields, onDone }: { templateId: string; sectionId: number; availableFields: FormField[]; onDone: () => void }) {
   const { toast } = useToast();
@@ -234,7 +263,7 @@ function ValidationRuleEditor({ templateId, sections, editable }: { templateId:s
   type Rule = {id:number;rule_type:string;severity:string;field:number|null;grid:number|null;message:string;parameters:Record<string,unknown>};
   const { toast } = useToast();
   const qc = useQueryClient();
-  const query = useQuery<Rule[]>({queryKey:["validation-rules",templateId],queryFn:()=>api(`/form-templates/${templateId}/validation-rules/`)});
+  const query = useQuery<Rule[]>({queryKey:["validation-rules",templateId],queryFn:async()=>{const response=await api<Rule[]|{results:Rule[]}>(`/form-templates/${templateId}/validation-rules/`);return Array.isArray(response)?response:response.results;}});
   const fields = sections.flatMap(section=>section.fields);
   const grids = sections.flatMap(section=>section.grids);
   const [rule,setRule]=useState({rule_type:"RANGE",severity:"BLOCK",target:"",message:"",parameters:'{"min": 0}'});
@@ -355,6 +384,7 @@ export default function FormBuilderPage() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [addingSection, setAddingSection] = useState(false);
+  const [activeTab, setActiveTab] = useState<"structure"|"workbook"|"validation"|"assignments"|"gaps"|"publication">("structure");
   const [newSection, setNewSection] = useState({ section_code:"", title:"", instructions:"" });
 
   const { data: template, isLoading } = useQuery<FormTemplate & { sections: (FormSection & { grids: unknown[] })[] }>({
@@ -441,15 +471,24 @@ export default function FormBuilderPage() {
         </div>
       </div>
 
-      <div className="rounded-[12px] border border-[#eceef0] bg-white p-4 text-[12px] text-[#43474f]">
+      <div role="tablist" aria-label="Form Builder sections" className="flex gap-1 overflow-x-auto rounded-xl border border-[#eceef0] bg-white p-1">
+        {([['structure','Structure'],['workbook','Workbook Import'],['validation','Validation'],['assignments','Assignments'],['gaps','Gap Analysis'],['publication','Publication']] as const).map(([value,label])=><button key={value} role="tab" aria-selected={activeTab===value} onClick={()=>setActiveTab(value)} className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-semibold ${activeTab===value?'bg-[#001836] text-white':'text-[#43474f] hover:bg-[#f2f4f6]'}`}>{label}</button>)}
+      </div>
+
+      {activeTab==="publication"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-4 text-[12px] text-[#43474f]">
         <p><span className="font-semibold">Source:</span> {template.source_reference || "Not recorded"}</p>
         <p className="mt-1 break-all font-mono text-[10px] text-[#737780]">{template.source_sha256 || "No source hash"}</p>
         <button onClick={() => { const version=window.prompt("New version number"); if(version?.trim()) cloneMut.mutate(version.trim()); }}
           className="mt-3 rounded-[8px] border border-[#c3c6d0] px-3 py-1.5 text-[11px] font-semibold">Clone as new immutable version</button>
         <a href={`/forms/${id}/gaps`} className="ml-2 inline-flex rounded-[8px] bg-[#0066cc] px-3 py-1.5 text-[11px] font-semibold text-white">Gap Analysis</a>
-      </div>
+      </div>}
+
+      {activeTab==="workbook"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-5 text-sm text-[#43474f]"><h2 className="font-semibold text-[#191c1e]">Workbook provenance</h2><p className="mt-2">{template.source_reference||"This version was created manually and has no workbook source."}</p><p className="mt-2 break-all font-mono text-xs text-[#737780]">{template.source_sha256||"No workbook SHA-256 recorded"}</p><Link href="/forms" className="mt-4 inline-flex rounded-lg bg-[#001836] px-4 py-2 text-xs font-semibold text-white">Import a workbook as a new draft</Link></div>}
+
+      {activeTab==="gaps"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-5"><h2 className="text-sm font-semibold">Gap Analysis</h2><p className="mt-1 text-xs text-[#737780]">Review objective structural requirements and publication blockers for this immutable version.</p><Link href={`/forms/${id}/gaps`} className="mt-4 inline-flex rounded-lg bg-[#0066cc] px-4 py-2 text-xs font-semibold text-white">Open Gap Analysis</Link></div>}
 
       {/* Section count */}
+      <div className={activeTab==="structure"?"contents":"hidden"}>
       <div className="flex items-center justify-between">
         <p className="text-[14px] text-[#43474f]">
           <span className="font-semibold text-[#191c1e]">{sections.length}</span> section{sections.length !== 1 ? "s" : ""}
@@ -514,7 +553,9 @@ export default function FormBuilderPage() {
           ))}
         </div>
       )}
-      <ValidationRuleEditor templateId={id} sections={sections as FormSection[]} editable={template.approval_status !== "APPROVED"} />
+      </div>
+      {activeTab==="validation"&&<ValidationRuleEditor templateId={id} sections={sections as FormSection[]} editable={template.approval_status !== "APPROVED"} />}
+      {activeTab==="assignments"&&<AssignmentPanel template={template} />}
     </div>
   );
 }

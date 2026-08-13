@@ -2,10 +2,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from django.core.files.uploadedfile import SimpleUploadedFile
+from rest_framework.test import APITestCase
+from openpyxl import Workbook
+from io import BytesIO
 
 from apps.users.models import User
-from .models import FormGapAssessment, FormTemplate, GridRow, ValidationRule
+from .models import FormGapAssessment, FormTemplate, GridRow, ValidationRule, FormWorkbookImport
 
 
 class PRDSection11FormTests(TestCase):
@@ -36,3 +40,40 @@ class PRDSection11FormTests(TestCase):
         self.assertFalse(active.get(form_code="DC-SUB03").kmz_requirements.exists())
         for rule in ValidationRule.objects.filter(form_template__in=active):
             rule.full_clean()
+
+
+class WorkbookFormImportTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user("workbook-admin@nca.test", "password", name="Admin", role="NCA_ADMIN")
+        self.client.force_authenticate(self.admin)
+
+    def workbook_file(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Subscriber Data"
+        sheet.append(["Indicator", "Value"])
+        sheet.append(["Total subscribers", 999999])
+        sheet.append(["Churn rate (%)", 0.12])
+        sheet.add_table(__import__("openpyxl").worksheet.table.Table(displayName="SubscriberMetrics", ref="A1:B3"))
+        out = BytesIO(); workbook.save(out)
+        return SimpleUploadedFile("source.xlsx", out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    @override_settings(MALWARE_SCANNER_REQUIRED=False)
+    def test_workbook_import_generates_schema_only_and_confirms_draft(self):
+        with TemporaryDirectory() as private_root:
+            with override_settings(PRIVATE_UPLOAD_ROOT=private_root):
+                response = self.client.post("/api/v1/form-workbook-imports/", {
+                    "form_code": "NEW-QUARTERLY", "name": "New Quarterly Return", "version": "1.0",
+                    "sector": "TELECOM", "provider_category": "ISP", "frequency": "QUARTERLY",
+                    "file": self.workbook_file(),
+                }, format="multipart")
+                self.assertEqual(response.status_code, 201, response.data)
+                item = FormWorkbookImport.objects.get(pk=response.data["id"])
+                self.assertEqual(item.parse_status, "READY")
+                self.assertNotIn("999999", str(item.detected_schema))
+                confirmed = self.client.post(f"/api/v1/form-workbook-imports/{item.id}/confirm/", {}, format="json")
+                self.assertEqual(confirmed.status_code, 201, confirmed.data)
+                form = FormTemplate.objects.get(pk=confirmed.data["id"])
+                self.assertEqual(form.form_code, "NEW-QUARTERLY")
+                self.assertEqual(form.frequency, "QUARTERLY")
+                self.assertEqual(form.mapping_basis, "SOURCE_FORM")

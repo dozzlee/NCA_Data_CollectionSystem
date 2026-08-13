@@ -16,13 +16,52 @@ from apps.forms_engine.models import (
     GridRow,
     KMZUploadRequirement,
 )
-from apps.providers.models import ProviderProfile
+from apps.providers.models import ProviderProfile, ProviderFormAssignment
 from apps.users.models import Organization, User
 from apps.uploads.models import SubmissionKMZUpload
 from .models import (
     CorrectionItem, ExpectedSubmission, ReportingPeriod, ReviewAction, Submission, SubmissionEvent,
-    SubmissionNotification, SubmissionValue,
+    SubmissionNotification, SubmissionValue, ProviderApprovalDecision, ProviderEditBatch, PeriodFormAssignment,
 )
+
+
+class FormAssignmentTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user("assign-admin@nca.test", "password", name="Admin", role="NCA_ADMIN")
+        self.org = Organization.objects.create(name="Assigned Provider", org_type="PROVIDER")
+        self.entry = User.objects.create_user("assigned-entry@example.com", "password", name="Entry", role="PROVIDER_DATA_ENTRY", organization=self.org)
+        self.provider = ProviderProfile.objects.create(organization=self.org, registered_name="Assigned Provider", sector="TELECOM", category="ISP", licence_type="ISP", licence_number="A", primary_email="a@example.com", primary_phone="1")
+        self.form = FormTemplate.objects.create(form_code="CUSTOM-ISP", name="Custom ISP", sector="TELECOM", provider_category="ISP", frequency="QUARTERLY", effective_from=timezone.localdate(), status="ACTIVE", approval_status="APPROVED", mapping_complete=True)
+        self.form.family.canonical_frequency = "QUARTERLY"; self.form.family.frequency_decision_status = "APPROVED"; self.form.family.save()
+        self.period = ReportingPeriod.objects.create(name="Q1", frequency="QUARTERLY", year=2026, quarter=1, opens_at=timezone.now()-timedelta(days=1), due_at=timezone.now()+timedelta(days=20), status="ACTIVE", created_by=self.admin)
+        self.client.force_authenticate(self.admin)
+
+    def test_manual_assignment_creates_one_obligation_and_notification_idempotently(self):
+        payload = {"mode":"MANUAL", "provider_ids":[self.provider.id], "period_id":self.period.id}
+        response = self.client.post(f"/api/v1/form-templates/{self.form.id}/assignments/", payload, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(PeriodFormAssignment.objects.count(), 1)
+        self.assertEqual(ExpectedSubmission.objects.filter(provider=self.provider, form_template=self.form, period=self.period).count(), 1)
+        self.assertTrue(SubmissionNotification.objects.filter(recipient=self.entry, title="New form assigned").exists())
+        repeat = self.client.post(f"/api/v1/form-templates/{self.form.id}/assignments/", payload, format="json")
+        self.assertEqual(repeat.status_code, 200, repeat.data)
+        self.assertEqual(ExpectedSubmission.objects.count(), 1)
+
+    def test_recurring_assignment_renews_on_period_activation(self):
+        response = self.client.post(f"/api/v1/form-templates/{self.form.id}/assignments/", {"mode":"RECURRING", "provider_ids":[self.provider.id], "effective_from":"2026-01-01"}, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        period = ReportingPeriod.objects.create(name="Q2", frequency="QUARTERLY", year=2026, quarter=2, opens_at=timezone.now()+timedelta(days=30), due_at=timezone.now()+timedelta(days=60), status="DRAFT", created_by=self.admin)
+        period.activate()
+        expected = ExpectedSubmission.objects.get(period=period, provider=self.provider, form_template=self.form)
+        self.assertIsNotNone(expected.recurring_assignment_id)
+
+    def test_mismatch_requires_audited_override_reason(self):
+        other = ProviderProfile.objects.create(registered_name="Broadcaster", sector="BROADCASTING", category="PAY_TV", licence_type="TV", licence_number="B", primary_email="b@example.com", primary_phone="2")
+        denied = self.client.post(f"/api/v1/form-templates/{self.form.id}/assignments/", {"mode":"MANUAL", "provider_ids":[other.id], "period_id":self.period.id}, format="json")
+        self.assertEqual(denied.status_code, 409)
+        allowed = self.client.post(f"/api/v1/form-templates/{self.form.id}/assignments/", {"mode":"MANUAL", "provider_ids":[other.id], "period_id":self.period.id, "override_reason":"Temporary cross-sector data collection"}, format="json")
+        self.assertEqual(allowed.status_code, 201, allowed.data)
+        self.assertEqual(PeriodFormAssignment.objects.get(provider=other).mismatch_override_reason, "Temporary cross-sector data collection")
 
 
 class SubmissionRemediationTests(APITestCase):
@@ -231,7 +270,7 @@ class SubmissionRemediationTests(APITestCase):
 
         self.authenticate(self.approver_a)
         official = self.client.post(
-            f"/api/v1/submissions/{self.submission_a.id}/official-submit/", {},
+            f"/api/v1/submissions/{self.submission_a.id}/official-submit/", {"attestation": True},
             format="json",
         )
         self.assertEqual(official.status_code, 200)
@@ -324,7 +363,7 @@ class SubmissionRemediationTests(APITestCase):
         self.expected_a.save(update_fields=["workflow_status"])
         submitted = self.client.post(
             f"/api/v1/submissions/{self.submission_a.id}/official-submit/",
-            {},
+            {"attestation": True},
             format="json",
         )
         self.assertEqual(submitted.status_code, 200)
@@ -375,6 +414,13 @@ class SubmissionRemediationTests(APITestCase):
             }]}, format="json",
         )
         self.assertEqual(immutable_attempt.status_code, 409)
+        self.assertEqual(self.client.put(
+            f"/api/v1/submissions/{clone.id}/sections/main/values/",
+            {"revision": clone.revision, "values": [{
+                "field": self.required_field.id, "value": "corrected value", "value_status": "PROVIDED",
+            }]}, format="json",
+        ).status_code, 403)
+        self.authenticate(self.approver_a)
         saved = self.client.put(
             f"/api/v1/submissions/{clone.id}/sections/main/values/",
             {"revision": clone.revision, "values": [{
@@ -382,12 +428,9 @@ class SubmissionRemediationTests(APITestCase):
             }]}, format="json",
         )
         self.assertEqual(saved.status_code, 200, saved.data)
-        resubmitted = self.client.post(f"/api/v1/submissions/{clone.id}/submit-for-approval/", {}, format="json")
-        self.assertEqual(resubmitted.status_code, 200, resubmitted.data)
-        self.assertEqual(resubmitted.data["workflow_status"], "PROVIDER_RESUBMITTED")
-
-        self.authenticate(self.approver_a)
-        official = self.client.post(f"/api/v1/submissions/{clone.id}/provider-review/approve/", {}, format="json")
+        official = self.client.post(f"/api/v1/submissions/{clone.id}/provider-review/approve/", {
+            "attestation": True, "change_summary": "Corrected the NCA-targeted field from the signed source."
+        }, format="json")
         self.assertEqual(official.status_code, 200, official.data)
         self.expected_a.refresh_from_db()
         self.assertEqual(self.expected_a.workflow_status, "RESUBMITTED")
@@ -420,6 +463,72 @@ class SubmissionRemediationTests(APITestCase):
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(stale.data["code"], "STALE_REVISION")
 
+    def test_provider_workspace_counts_every_record_beyond_first_page(self):
+        for index in range(55):
+            period = ReportingPeriod.objects.create(
+                name=f"Queue period {index}", frequency="MONTHLY", year=2027 + index, month=1,
+                opens_at=timezone.now() - timedelta(days=1), due_at=timezone.now() + timedelta(days=7),
+                status="ACTIVE", created_by=self.officer,
+            )
+            ExpectedSubmission.objects.create(
+                provider=self.provider_a, form_template=self.form, period=period,
+                workflow_status="DRAFT", due_state="OPEN",
+            )
+        self.authenticate(self.entry_a)
+        summary = self.client.get("/api/v1/provider-workspace/summary/")
+        self.assertEqual(summary.status_code, 200)
+        self.assertEqual(summary.data["drafts"], 56)
+        page = self.client.get("/api/v1/provider-workspace/submissions/?queue=drafts")
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.data["count"], 56)
+        self.assertEqual(len(page.data["results"]), 20)
+        expanded = self.client.get("/api/v1/provider-workspace/submissions/?queue=drafts&page_size=100")
+        self.assertEqual(len(expanded.data["results"]), 56)
+
+    def test_approver_edit_is_audited_and_requires_change_summary(self):
+        SubmissionValue.objects.create(
+            submission=self.submission_a, field=self.required_field, value="entry value",
+            value_status="PROVIDED", updated_by=self.entry_a,
+        )
+        self.expected_a.workflow_status = "PENDING_APPROVAL"
+        self.expected_a.save(update_fields=["workflow_status"])
+        self.authenticate(self.approver_a)
+        saved = self.client.put(
+            f"/api/v1/submissions/{self.submission_a.id}/sections/main/values/",
+            {"revision": 0, "values": [{
+                "field": self.required_field.id, "value": "approver value", "value_status": "PROVIDED",
+            }]}, format="json",
+        )
+        self.assertEqual(saved.status_code, 200, saved.data)
+        batch = ProviderEditBatch.objects.get(submission=self.submission_a)
+        self.assertEqual(batch.item_count, 1)
+        self.assertEqual(batch.items.get().before["value"], "entry value")
+        self.assertEqual(batch.items.get().after["value"], "approver value")
+        missing_summary = self.client.post(
+            f"/api/v1/submissions/{self.submission_a.id}/provider-review/approve/",
+            {"attestation": True}, format="json",
+        )
+        self.assertEqual(missing_summary.status_code, 400)
+        self.assertEqual(missing_summary.data["code"], "CHANGE_SUMMARY_REQUIRED")
+        approved = self.client.post(
+            f"/api/v1/submissions/{self.submission_a.id}/provider-review/approve/",
+            {"attestation": True, "change_summary": "Corrected the value from the signed source."}, format="json",
+        )
+        self.assertEqual(approved.status_code, 200, approved.data)
+        self.assertTrue(ProviderApprovalDecision.objects.filter(submission=self.submission_a, attestation=True).exists())
+
+    def test_completion_returns_open_corrections_without_error(self):
+        CorrectionItem.objects.create(
+            source_submission=self.submission_a, resolution_submission=self.submission_a,
+            stage="PROVIDER_APPROVAL", target_type="FIELD", target_id=str(self.required_field.id),
+            instruction="Correct this field.", created_by=self.approver_a,
+        )
+        self.authenticate(self.entry_a)
+        response = self.client.get(f"/api/v1/submissions/{self.submission_a.id}/completion/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["open_correction_item_count"], 1)
+        self.assertFalse(response.data["transition_ready"])
+
     def test_provider_history_hides_internal_nca_notes(self):
         ReviewAction.objects.create(submission=self.submission_a, action="ADD_NOTE", comment="internal", created_by=self.officer)
         ReviewAction.objects.create(submission=self.submission_a, action="ADD_PROVIDER_COMMENT", comment="visible", is_provider_visible=True, created_by=self.officer)
@@ -449,9 +558,8 @@ class SubmissionRemediationTests(APITestCase):
         self.assertEqual(correction.status_code, 200)
 
         self.authenticate(self.entry_a)
-        cloned = self.client.post(f"/api/v1/expected-submissions/{self.expected_a.id}/start/", {}, format="json")
-        self.assertEqual(cloned.status_code, 201)
-        correction_submission_id = cloned.data["id"]
+        correction_submission_id = correction.data["correction_submission_id"]
+        self.authenticate(self.approver_a)
         saved = self.client.put(
             f"/api/v1/submissions/{correction_submission_id}/sections/main/values/",
             {"values": [{
@@ -463,17 +571,9 @@ class SubmissionRemediationTests(APITestCase):
             format="json",
         )
         self.assertTrue(saved.data["can_submit"])
-        approval = self.client.post(
-            f"/api/v1/submissions/{correction_submission_id}/submit-for-approval/",
-            {},
-            format="json",
-        )
-        self.assertEqual(approval.status_code, 200)
-
-        self.authenticate(self.approver_a)
         resubmitted = self.client.post(
             f"/api/v1/submissions/{correction_submission_id}/official-submit/",
-            {},
+            {"attestation": True, "change_summary": "Corrected the required value."},
             format="json",
         )
         self.assertEqual(resubmitted.status_code, 200)

@@ -15,6 +15,7 @@ interface SubmissionNotice {
   created_at: string;
   form_code: string;
   provider_name: string;
+  event: number;
 }
 
 export default function ProviderNotificationsPage() {
@@ -27,6 +28,7 @@ export default function ProviderNotificationsPage() {
   async function markAll() {
     await api.post("/submission-notifications/mark-all-read/");
     await queryClient.invalidateQueries({ queryKey: ["submission-notifications"] });
+    await queryClient.invalidateQueries({ queryKey: ["submission-notification-summary"] });
   }
 
   const notices = query.data?.results ?? [];
@@ -54,7 +56,7 @@ export default function ProviderNotificationsPage() {
             key={item.id}
             href={`/provider/submissions/${item.expected_submission}`}
             onClick={async () => {
-              if (!item.is_read) await api.post(`/submission-notifications/${item.id}/mark-read/`);
+              if (!item.is_read) { await api.post(`/submission-notifications/${item.id}/mark-read/`); await queryClient.invalidateQueries({ queryKey:["submission-notification-summary"] }); }
             }}
             className={`block rounded-xl border p-5 ${item.is_read ? "bg-white" : "border-[#0066cc] bg-[#f4f8fd]"}`}
           >

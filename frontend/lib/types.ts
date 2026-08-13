@@ -176,16 +176,9 @@ export interface ProviderProfile {
 
 // ─── Forms Engine ────────────────────────────────────────────────────────────
 
-export type FormCode =
-  | "MNO-MONTHLY"
-  | "DC-TB02"
-  | "DC-ISP06"
-  | "DC-ITC04"
-  | "TOWER-MAIN-ANNUAL"
-  | "DC-DBS05"
-  | "DC-SUB03";
+export type FormCode = string;
 
-export type Frequency = "MONTHLY" | "SEMI_ANNUAL" | "ANNUAL";
+export type Frequency = "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL";
 
 export type FieldType =
   | "text" | "number" | "currency" | "percentage" | "date"
@@ -201,6 +194,7 @@ export interface FormTemplate {
   provider_category: ProviderCategory;
   frequency: Frequency;
   version: string;
+  effective_from: string;
   status: "DRAFT" | "ACTIVE" | "ARCHIVED";
   kmz_required: boolean;
   excel_backup_enabled: boolean;
@@ -329,6 +323,7 @@ export interface ReportingPeriod {
   frequency: Frequency;
   year: number;
   month: number | null;
+  quarter: number | null;
   opens_at: string;
   due_at: string;
   effective_due_at: string;
@@ -348,13 +343,75 @@ export interface ExpectedSubmission {
   period: number;
   period_name: string;
   due_at: string;
+  effective_due_at: string;
   due_at_override: string | null;
   workflow_status: WorkflowStatus;
   due_state: DueState;
   assigned_officer: number | null;
   assigned_officer_name: string | null;
   latest_submission_id: number | null;
+  latest_submission_version: number | null;
+  completion_pct: number;
+  last_edited_by: string | null;
+  last_edited_by_name: string | null;
+  last_edited_at: string | null;
+  submitted_at: string | null;
+  correction_count: number;
+  open_correction_count: number;
+  receipt_available: boolean;
+  receipt_reference: string | null;
+  permitted_actions: string[];
+  assignment_source: { type: "MANUAL" | "RECURRING" | "LEGACY"; id: number | null };
   created_at: string;
+}
+
+export interface FormWorkbookImport {
+  id: number;
+  form_code: string;
+  name: string;
+  version: string;
+  sector: Sector;
+  provider_category: ProviderCategory;
+  frequency: Frequency;
+  file_name: string;
+  file_size: number;
+  sha256: string;
+  scan_status: "PENDING" | "CLEAN" | "INFECTED" | "ERROR";
+  parse_status: "PENDING" | "READY" | "FAILED" | "CONFIRMED";
+  parser_version: string;
+  detected_schema: {
+    sections: Array<{
+      section_code: string;
+      title: string;
+      instructions: string;
+      fields: Array<{ field_code:string; label:string; field_type:FieldType; unit:string; is_required:boolean; help_text:string; formula:string; options:string[] }>;
+      grids: Array<{ grid_code:string; title:string; row_mode:"FIXED"|"REPEATABLE"; min_rows:number; instructions:string; columns:Array<{column_code:string;label:string;field_type:FieldType;unit:string;is_required:boolean}>; fixed_rows:string[] }>;
+    }>;
+  };
+  warnings: Array<{ code:string; severity:string; message:string }>;
+  mapping_decisions: Record<string, unknown>;
+  resulting_template_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProviderWorkspaceSummary {
+  role: "PROVIDER_DATA_ENTRY" | "PROVIDER_APPROVER";
+  action_required: number;
+  drafts: number;
+  due_soon: number;
+  overdue: number;
+  awaiting_approver: number;
+  nca_corrections: number;
+  returned_to_data_entry: number;
+  recently_submitted: number;
+}
+
+export interface SubmissionNotificationSummary {
+  unread: number;
+  total: number;
+  by_event_type: Record<string, number>;
+  pending_approval: number;
 }
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────

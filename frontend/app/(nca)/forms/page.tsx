@@ -3,15 +3,16 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import type { FormTemplate, ProviderCategory, Frequency, Sector } from "@/lib/types";
+import type { FormTemplate, FormWorkbookImport, ProviderCategory, Frequency, Sector } from "@/lib/types";
 import { PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 
 const CATEGORIES: ProviderCategory[] = ["MNO","ISP","PAY_TV","TOWER_OPERATOR","TOWER_MAIN","DOMESTIC_FIBRE","SUBMARINE_FIBRE"];
-const FREQUENCIES: Frequency[] = ["MONTHLY","SEMI_ANNUAL","ANNUAL"];
-const FREQ_LABELS: Record<Frequency, string> = { MONTHLY:"Monthly", SEMI_ANNUAL:"Semi-Annual", ANNUAL:"Annual" };
+const FREQUENCIES: Frequency[] = ["MONTHLY","QUARTERLY","ANNUAL"];
+const FREQ_LABELS: Record<Frequency, string> = { MONTHLY:"Monthly", QUARTERLY:"Quarterly", SEMI_ANNUAL:"Semi-Annual (historical)", ANNUAL:"Annual" };
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: "bg-[#e5f4eb] text-[#1f7a4d]",
   DRAFT:  "bg-[#fff3bf] text-[#7a5c00]",
@@ -27,10 +28,12 @@ const EMPTY: NewFormState = {
 };
 
 export default function FormsPage() {
+  const router = useRouter();
   const { toast } = useToast();
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<NewFormState>(EMPTY);
+  const [workbook, setWorkbook] = useState<File | null>(null);
   const [filterCat, setFilterCat] = useState("");
   const [filterSector, setFilterSector] = useState("");
 
@@ -45,14 +48,23 @@ export default function FormsPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (d: NewFormState) =>
-      api("/form-templates/", { method:"POST", body: JSON.stringify({ ...d, status:"DRAFT", effective_from: new Date().toISOString().split("T")[0], kmz_required: false }) }),
-    onSuccess: () => {
-      toast("Form template created.", "success");
-      setShowCreate(false); setForm(EMPTY);
-      qc.invalidateQueries({ queryKey: ["form-templates"] });
+    mutationFn: async (d: NewFormState) => {
+      if (workbook) {
+        const payload = new FormData();
+        Object.entries(d).forEach(([key, value]) => payload.append(key, value));
+        payload.append("file", workbook);
+        return api.upload<FormWorkbookImport>("/form-workbook-imports/", payload);
+      }
+      return api<FormTemplate>("/form-templates/", { method:"POST", body: JSON.stringify({ ...d, effective_from: new Date().toISOString().split("T")[0], kmz_required: false }) });
     },
-    onError: () => toast("Failed to create template.", "error"),
+    onSuccess: (result) => {
+      toast(workbook ? "Workbook parsed. Review the generated structure." : "Form template created.", "success");
+      setShowCreate(false); setForm(EMPTY);
+      setWorkbook(null);
+      qc.invalidateQueries({ queryKey: ["form-templates"] });
+      router.push("detected_schema" in result ? `/forms/imports/${result.id}` : `/forms/${result.id}`);
+    },
+    onError: (error: Error) => toast(error.message || "Failed to create template.", "error"),
   });
 
   const templates = data?.results ?? [];
@@ -114,10 +126,17 @@ export default function FormsPage() {
                 {FREQUENCIES.map(f => <option key={f} value={f}>{FREQ_LABELS[f]}</option>)}
               </select>
             </div>
+            <div className="sm:col-span-2 lg:col-span-3 rounded-[10px] border border-dashed border-[#9aa5b1] bg-[#f7f9fb] p-4">
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Generate from workbook (optional)</label>
+              <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={e => setWorkbook(e.target.files?.[0] ?? null)}
+                className="mt-2 block w-full text-[13px] text-[#43474f] file:mr-3 file:rounded-[8px] file:border-0 file:bg-[#e8f1fb] file:px-3 file:py-2 file:font-semibold file:text-[#004999]" />
+              <p className="mt-2 text-[11px] text-[#737780]">Up to 20 MB. Only the workbook structure is imported; cell values never become provider answers.</p>
+            </div>
           </div>
           <button type="submit" disabled={createMutation.isPending}
             className="rounded-[8px] bg-[#001836] px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-[#002d5b] disabled:opacity-50">
-            {createMutation.isPending ? "Creating…" : "Create Template"}
+            {createMutation.isPending ? "Creating…" : workbook ? "Upload & Preview" : "Create Template"}
           </button>
         </form>
       )}

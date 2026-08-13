@@ -6,8 +6,8 @@ This repository contains the NCA regulatory data-collection portal: a Django 5.2
 
 - NCA Admin: complete access, including Users and Data Requests.
 - NCA Officer: operational parity with Admin except Users, divisions and Data Requests.
-- Provider Approver: reviews provider drafts, submits official returns and may contact NCA.
-- Provider Data Entry: enters provider data and raises technical support issues only.
+- Provider Approver: works a server-calculated approval/NCA-correction queue, may edit permitted stages with immutable diffs, returns targeted corrections, attests official returns and may contact NCA.
+- Provider Data Entry: shares its provider's draft/correction queue, uses optimistic autosave/manual save, sees read-only corrective compliance information and raises/tracks technical support issues.
 - NCA Data Requester: metadata catalog, own requests, notifications and released files.
 
 ## Corrected forms
@@ -41,6 +41,8 @@ Demo records are never loaded automatically. For an explicitly local dataset onl
 cd backend
 ..\.venv\Scripts\python.exe manage.py seed_data_requests
 ```
+
+The local fixture includes representative Draft, Pending Provider Approval, Provider Changes Requested, Provider Resubmitted and NCA Correction Requested items. Production startup never invokes this command.
 
 ## Checks
 

@@ -63,6 +63,8 @@ backups/
 
 # Browser automation artifacts
 .playwright-cli/
+frontend/test-results/
+frontend/playwright-report/
 
 # Secrets
 .env.local

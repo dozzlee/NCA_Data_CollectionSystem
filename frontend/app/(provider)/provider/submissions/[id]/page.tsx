@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
@@ -30,15 +30,21 @@ import type { ExpectedSubmission, FormSection, FieldStatus } from "@/lib/types";
 type FieldValues = Record<string, { value: string; status: FieldStatus | ""; explanation: string }>;
 type GridCellValue = { grid_row_id: string; grid_column_id: number; value: string; value_status: FieldStatus | ""; explanation?: string };
 type TimelineEvent = { id:number; event_type:string; message:string; from_status:string; to_status:string; actor_name:string|null; created_at:string };
+type ProviderReviewData = {
+  correction_items:Array<{id:number;stage:string;target_type:string;target_id:string;instruction:string;status:string}>;
+  provider_edits:Array<{id:number;actor_name:string;section_code:string;item_count:number;created_at:string}>;
+  permitted_actions:string[];
+};
 
 function useSectionFieldState(
   sectionFields: FormSection["fields"],
-  serverValues: { field?: number | null; value: string; value_status: string; explanation?: string }[] | undefined
+  serverValues: { field?: number | null; value: string; value_status: string; explanation?: string }[] | undefined,
+  allowServerSync: boolean,
 ) {
   const [fieldValues, setFieldValues] = useState<FieldValues>({});
 
   useEffect(() => {
-    if (!serverValues) return;
+    if (!serverValues || !allowServerSync) return;
     const init: FieldValues = {};
     sectionFields?.forEach((f) => {
       const sv = serverValues.find((v) => v.field === f.id);
@@ -49,7 +55,7 @@ function useSectionFieldState(
       };
     });
     setFieldValues(init);
-  }, [serverValues, sectionFields]);
+  }, [serverValues, sectionFields, allowServerSync]);
 
   return [fieldValues, setFieldValues] as const;
 }
@@ -62,20 +68,27 @@ function SectionContent({
   isEditable,
   kmzRequired,
   submissionRevision,
+  validationIssues,
+  correctionItems,
 }: {
   section: FormSection;
   submissionId: number;
   isEditable: boolean;
   kmzRequired: boolean;
   submissionRevision: number;
+  validationIssues: Array<{target_type:string;target_id:string;message:string}>;
+  correctionItems: Array<{target_type:string;target_id:string;instruction:string;status:string}>;
 }) {
   const serverValues = useSectionValues(submissionId, section.section_code);
   const saveMutation = useSaveSectionValues(submissionId);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<"saved" | "error" | null>(null);
+  const [saveError, setSaveError] = useState("");
+  const [conflict, setConflict] = useState<{current_revision:number;last_edited_by_name?:string;last_edited_at?:string} | null>(null);
+  const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [fieldValues, setFieldValues] = useSectionFieldState(section.fields, serverValues.data ?? []);
+  const [fieldValues, setFieldValues] = useSectionFieldState(section.fields, serverValues.data ?? [], !dirty);
   const [gridValues, setGridValues] = useState<Record<number, GridCellValue[]>>({});
   const [excelUploads, setExcelUploads] = useState<any[]>([]);
   const [kmzUploads, setKmzUploads] = useState<any[]>([]);
@@ -122,6 +135,7 @@ function SectionContent({
   async function handleSave() {
     setSaving(true);
     setSaveMsg(null);
+    setSaveError("");
     try {
       const fieldPayload = Object.entries(fieldValues).map(([fid, v]) => ({
         field: Number(fid),
@@ -136,8 +150,13 @@ function SectionContent({
       setDirty(false);
       setSaveMsg("saved");
       setTimeout(() => setSaveMsg(null), 2000);
-    } catch {
+    } catch (error) {
       setSaveMsg("error");
+      if (error instanceof ApiError) {
+        setSaveError(error.message);
+        const data = error.data as {code?:string;current_revision?:number;last_edited_by_name?:string;last_edited_at?:string} | undefined;
+        if (data?.code === "STALE_REVISION" && data.current_revision !== undefined) setConflict({ current_revision:data.current_revision, last_edited_by_name:data.last_edited_by_name, last_edited_at:data.last_edited_at });
+      } else setSaveError("Save failed. Your local values are still on this page.");
     } finally {
       setSaving(false);
     }
@@ -151,6 +170,16 @@ function SectionContent({
     setKmzUploads(await api.get<any[]>(`/submissions/${submissionId}/kmz-uploads/`));
     queryClient.invalidateQueries({ queryKey: ["submission-completion", submissionId] });
   }
+
+  useEffect(() => () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); }, []);
+  useEffect(() => {
+    if (!dirty || saving || conflict || !isEditable) return;
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    autosaveTimer.current = setTimeout(() => { void handleSave(); }, 1200);
+    return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
+    // handleSave intentionally runs against the latest field/grid render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fieldValues, gridValues, dirty, saving, conflict, isEditable]);
 
   async function handleExcelUpload(file: File) {
     const form = new FormData();
@@ -234,6 +263,9 @@ function SectionContent({
                   allFieldValues={Object.fromEntries(
                     Object.entries(fieldValues).map(([k, v]) => [k, { value: v.value }])
                   )}
+                  issues={validationIssues.filter((issue) => issue.target_type === "FIELD" && String(issue.target_id) === String(field.id)).map((issue) => issue.message)}
+                  correctionInstructions={correctionItems.filter((item) => item.status === "OPEN" && item.target_type === "FIELD" && String(item.target_id) === String(field.id)).map((item) => item.instruction)}
+                  onBlur={() => { if (dirty && !saving && !conflict) void handleSave(); }}
                 />
               </div>
             );
@@ -252,12 +284,14 @@ function SectionContent({
               setDirty(true);
             }}
             disabled={!isEditable}
+            issues={validationIssues.filter((issue) => issue.target_type === "GRID_CELL").map((issue) => ({ targetId:String(issue.target_id), message:issue.message }))}
+            correctionInstructions={correctionItems.filter((item) => item.status === "OPEN" && item.target_type === "GRID_CELL").map((item) => ({ targetId:String(item.target_id), instruction:item.instruction }))}
           />
         </div>
       ))}
 
       {/* Excel backup panel — available for all forms */}
-      {isEditable && (
+      <div className={isEditable ? "" : "opacity-90"}>
         <ExcelBackupPanel
           submissionId={submissionId}
           uploads={excelUploads}
@@ -265,15 +299,20 @@ function SectionContent({
           disabled={!isEditable}
           description="Upload an Excel file as a backup. This is stored for source control only and not analyzed."
         />
-      )}
+      </div>
 
       {/* Auto-save prompt when dirty */}
       {dirty && isEditable && (
         <div className="flex items-center gap-2 rounded-[8px] border border-[#ffd100] bg-[#fff3bf]/60 px-3 py-2 text-[12px] text-[#7a5c00]">
           <AlertTriangle size={12} />
-          You have unsaved changes. Click &quot;Save progress&quot; to avoid losing data.
+          Changes are waiting to autosave. You can also use Save progress.
         </div>
       )}
+      {saveError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{saveError}</div>}
+      {conflict && <div role="alert" className="rounded-lg border border-[#ffd100] bg-[#fff3bf] p-3 text-xs text-[#7a5c00]">
+        A newer revision was saved by {conflict.last_edited_by_name || "another provider user"}{conflict.last_edited_at ? ` at ${new Date(conflict.last_edited_at).toLocaleString()}` : ""}. Your unsaved values remain visible. Reload the latest revision before manually reapplying them.
+        <button onClick={() => window.location.reload()} className="ml-3 font-semibold underline">Reload latest</button>
+      </div>}
     </div>
   );
 }
@@ -311,6 +350,11 @@ export default function FormEntryPage() {
     queryFn: () => api(`/submissions/${latestSubmissionId}/timeline/`),
     enabled: Boolean(latestSubmissionId),
   });
+  const providerReviewQ = useQuery<ProviderReviewData>({
+    queryKey: ["provider-review-data", latestSubmissionId],
+    queryFn: () => api(`/submissions/${latestSubmissionId}/provider-review-data/`),
+    enabled: Boolean(latestSubmissionId),
+  });
 
   const formQ = useFormTemplate(expected?.form_template ?? 0);
   const form = formQ.data;
@@ -323,7 +367,13 @@ export default function FormEntryPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [correctionReason, setCorrectionReason] = useState("");
-  const [correctionSection, setCorrectionSection] = useState("");
+  const [correctionTargets, setCorrectionTargets] = useState<string[]>([]);
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  const [attestation, setAttestation] = useState(false);
+  const [approvalNote, setApprovalNote] = useState("");
+  const [changeSummary, setChangeSummary] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [receiptReference, setReceiptReference] = useState<string | null>(null);
 
   const sections = useMemo(() => form?.sections ?? [], [form?.sections]);
   const [activeSection, setActiveSection] = useState<string>("");
@@ -338,10 +388,12 @@ export default function FormEntryPage() {
   const currentSection = sections[currentSectionIndex];
   const periodForms = periodFormsQ.data?.results ?? [];
 
-  const isEditable = Boolean(
-    isDataEntry
-    && ["DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"].includes(expected?.workflow_status ?? "")
-  );
+  const isEditable = Boolean(providerReviewQ.data?.permitted_actions.includes("EDIT"));
+  const correctionOptions = useMemo(() => sections.flatMap((section) => [
+    { key:`SECTION:${section.section_code}`, label:`Section: ${section.title}` },
+    ...section.fields.map((field) => ({ key:`FIELD:${field.id}`, label:`${section.title} · ${field.label}` })),
+    ...section.grids.map((grid) => ({ key:`SECTION:${section.section_code}`, label:`${section.title} · ${grid.title} (whole grid)` })),
+  ]).filter((option, index, all) => all.findIndex((candidate) => candidate.key === option.key) === index), [sections]);
 
   async function handleStart() {
     if (!expectedId) return;
@@ -437,10 +489,10 @@ export default function FormEntryPage() {
 
         <div className="flex gap-2 shrink-0">
           {/* DATA ENTRY: can submit draft to approver */}
-          {isDataEntry && ["DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"].includes(expected.workflow_status) && (
+          {isDataEntry && ["DRAFT", "PROVIDER_CHANGES_REQUESTED"].includes(expected.workflow_status) && (
             <button
               onClick={handleSubmitForApproval}
-              disabled={submitMutation.isPending || !completion?.can_submit}
+              disabled={submitMutation.isPending || !completion?.transition_ready}
               className="flex items-center gap-2 rounded-[8px] bg-[#1f7a4d] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#185e3b] disabled:opacity-50 transition-colors"
               title="Complete all required fields before submitting to your approver"
             >
@@ -449,11 +501,11 @@ export default function FormEntryPage() {
             </button>
           )}
           {/* APPROVER: can return to data entry or officially submit to NCA */}
-          {isApprover && ["PENDING_APPROVAL", "PROVIDER_RESUBMITTED"].includes(expected.workflow_status) && (
+          {isApprover && ["PENDING_APPROVAL", "PROVIDER_RESUBMITTED", "CORRECTION_REQUESTED"].includes(expected.workflow_status) && (
             <>
               <button
                 onClick={() => {
-                  setCorrectionSection(activeSection || sections[0]?.section_code || "");
+                  setCorrectionTargets([`SECTION:${activeSection || sections[0]?.section_code || ""}`]);
                   setCorrectionOpen(true);
                 }}
                 className="flex items-center gap-2 rounded-[8px] border border-[#c3c6d0] px-4 py-2.5 text-[13px] font-medium text-[#43474f] hover:bg-[#f2f4f6] transition-colors"
@@ -461,10 +513,7 @@ export default function FormEntryPage() {
                 Return to Data Entry
               </button>
               <button
-                onClick={async () => {
-                  await api(`/submissions/${submission?.id}/official-submit/`, { method: "POST" });
-                  expectedQ.refetch();
-                }}
+                onClick={() => setApprovalOpen(true)}
                 className="flex items-center gap-2 rounded-[8px] bg-[#001836] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#002d5b] transition-colors"
               >
                 <Send size={13} /> Submit to NCA
@@ -483,22 +532,19 @@ export default function FormEntryPage() {
       {correctionOpen && (
         <div className="rounded-[12px] border border-[#ffd100] bg-[#fffdf5] p-4">
           <h2 className="text-[14px] font-semibold text-[#191c1e]">Return for correction</h2>
-          <p className="mt-1 text-[12px] text-[#737780]">Choose the affected section and explain exactly what Data Entry must correct.</p>
-          <div className="mt-3 grid gap-3 md:grid-cols-[220px_1fr]">
-            <select value={correctionSection} onChange={(event) => setCorrectionSection(event.target.value)}
-              className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px]">
-              {sections.map((section) => <option key={section.section_code} value={section.section_code}>{section.title}</option>)}
-            </select>
+          <p className="mt-1 text-[12px] text-[#737780]">Select one or more exact sections or fields and provide instructions. Data Entry can edit only those targets.</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr]">
+            <div className="max-h-48 overflow-y-auto rounded-lg border bg-white p-2">{correctionOptions.map((option) => <label key={option.key} className="flex items-start gap-2 px-2 py-1.5 text-xs"><input type="checkbox" checked={correctionTargets.includes(option.key)} onChange={(e) => setCorrectionTargets((current) => e.target.checked ? [...current, option.key] : current.filter((key) => key !== option.key))} /><span>{option.label}</span></label>)}</div>
             <textarea value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} rows={2}
               className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px]" placeholder="Required correction instructions" />
           </div>
           <div className="mt-3 flex justify-end gap-2">
             <button type="button" onClick={() => setCorrectionOpen(false)} className="rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[12px]">Cancel</button>
-            <button type="button" disabled={!correctionReason.trim() || !correctionSection}
+            <button type="button" disabled={!correctionReason.trim() || correctionTargets.length === 0}
               onClick={async () => {
                 await api.post(`/submissions/${submission?.id}/provider-review/request-correction/`, {
                   reason: correctionReason,
-                  targets: [{ type: "SECTION", id: correctionSection, instruction: correctionReason }],
+                  targets: correctionTargets.map((target) => { const [type, id] = target.split(":", 2); return { type, id, instruction: correctionReason }; }),
                 });
                 setCorrectionOpen(false); setCorrectionReason(""); await expectedQ.refetch();
               }}
@@ -506,6 +552,18 @@ export default function FormEntryPage() {
           </div>
         </div>
       )}
+
+      {approvalOpen && <div className="rounded-xl border border-[#0066cc] bg-[#f7fbff] p-5">
+        <h2 className="font-semibold">Final provider approval</h2><p className="mt-1 text-xs text-[#43474f]">A fresh readiness check is performed before NCA receives the official version.</p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2"><div className="rounded-lg bg-white p-3 text-xs"><strong>Readiness</strong><p className="mt-1">{completion?.missing_required_count ?? 0} blockers · {completion?.warning_count ?? 0} warnings · {completion?.open_correction_item_count ?? 0} open corrections</p></div><div className="rounded-lg bg-white p-3 text-xs"><strong>Approver edits</strong><p className="mt-1">{providerReviewQ.data?.provider_edits.length ?? 0} edit batches are recorded for this version.</p></div></div>
+        <label className="mt-4 block text-xs font-medium">Approval note (optional)<textarea value={approvalNote} onChange={(e) => setApprovalNote(e.target.value)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2" rows={2} /></label>
+        {(providerReviewQ.data?.provider_edits.length ?? 0) > 0 && <label className="mt-3 block text-xs font-medium">Required change summary<textarea value={changeSummary} onChange={(e) => setChangeSummary(e.target.value)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2" rows={3} placeholder="Summarize what you changed and why." /></label>}
+        <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={attestation} onChange={(e) => setAttestation(e.target.checked)} className="mt-1" /><span>I attest that I reviewed this return and that it is accurate and complete to the best of my knowledge.</span></label>
+        {actionError && <p role="alert" className="mt-3 text-xs text-red-700">{actionError}</p>}
+        <div className="mt-4 flex justify-end gap-2"><button onClick={() => setApprovalOpen(false)} className="rounded-lg border px-4 py-2 text-xs">Cancel</button><button disabled={!attestation || ((providerReviewQ.data?.provider_edits.length ?? 0) > 0 && !changeSummary.trim()) || !completion?.transition_ready} onClick={async () => { try { setActionError(""); const response = await api.post<{receipt_reference:string}>(`/submissions/${submission?.id}/provider-review/approve/`, { attestation, approval_note:approvalNote, change_summary:changeSummary }); setReceiptReference(response.receipt_reference); setApprovalOpen(false); await Promise.all([expectedQ.refetch(), providerReviewQ.refetch(), completionQ.refetch()]); } catch (error) { setActionError(error instanceof ApiError ? error.message : "Official submission failed."); } }} className="rounded-lg bg-[#001836] px-5 py-2 text-xs font-semibold text-white disabled:opacity-50">Submit officially to NCA</button></div>
+      </div>}
+
+      {(receiptReference || submission?.receipt_reference) && <div className="flex items-center justify-between rounded-xl border border-green-200 bg-green-50 p-4 text-sm"><span>Official receipt: <strong>{receiptReference || submission?.receipt_reference}</strong></span><button onClick={() => import("@/lib/api").then(({downloadAuthenticated}) => downloadAuthenticated(`/submissions/${submission?.id}/receipt/`, {}, `submission-receipt-${submission?.id}.pdf`))} className="font-semibold text-[#0066cc]">Download receipt</button></div>}
 
       {timelineQ.data && timelineQ.data.length > 0 && (
         <section className="rounded-[12px] border border-[#e6e8ea] bg-white p-4">
@@ -519,7 +577,7 @@ export default function FormEntryPage() {
         </section>
       )}
 
-      {isDataEntry && ["DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"].includes(expected.workflow_status) && completion && !completion.can_submit && (
+      {isEditable && completion && !completion.transition_ready && (
         <div className="rounded-[8px] border border-[#ffd100] bg-[#fff3bf]/50 px-4 py-3 text-[12px] text-[#7a5c00]">
           Complete {completion.missing_required_count} required item{completion.missing_required_count === 1 ? "" : "s"} before submitting.
           {completion.blocking_issues.slice(0, 3).map((issue) => (
@@ -588,6 +646,8 @@ export default function FormEntryPage() {
               isEditable={isEditable}
               kmzRequired={!!form.kmz_required}
               submissionRevision={submission.revision}
+              validationIssues={completion?.validation_issues ?? []}
+              correctionItems={providerReviewQ.data?.correction_items ?? []}
             />
           )}
 

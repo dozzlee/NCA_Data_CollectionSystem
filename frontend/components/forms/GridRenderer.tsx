@@ -18,6 +18,8 @@ interface GridRendererProps {
   values: CellValue[];
   onChange: (values: CellValue[]) => void;
   disabled?: boolean;
+  issues?: Array<{ targetId:string; message:string }>;
+  correctionInstructions?: Array<{ targetId:string; instruction:string }>;
 }
 
 const cellInput =
@@ -25,7 +27,7 @@ const cellInput =
 
 const nonFilled = ["NOT_APPLICABLE", "NOT_AVAILABLE", "NOT_REQUIRED"];
 
-export function GridRenderer({ grid, values, onChange, disabled }: GridRendererProps) {
+export function GridRenderer({ grid, values, onChange, disabled, issues = [], correctionInstructions = [] }: GridRendererProps) {
   const [repeatableRows, setRepeatableRows] = useState<string[]>(() => {
     if (grid.row_mode === "FIXED") return [];
     const ids = [...new Set(values.map((value) => value.grid_row_id).filter(Boolean))];
@@ -112,6 +114,9 @@ export function GridRenderer({ grid, values, onChange, disabled }: GridRendererP
                 {grid.columns.map((column) => {
                   const current = cell(row.id, column.id);
                   const hasNonFilledStatus = nonFilled.includes(current?.value_status ?? "");
+                  const targetId = `${grid.id}:${row.id}:${column.id}`;
+                  const cellIssues = issues.filter((item) => item.targetId === targetId);
+                  const cellCorrections = correctionInstructions.filter((item) => item.targetId === targetId);
                   return (
                     <td key={column.id} className="px-1 py-0.5 text-right">
                       {hasNonFilledStatus ? (
@@ -135,6 +140,8 @@ export function GridRenderer({ grid, values, onChange, disabled }: GridRendererP
                           <option value="NOT_REQUIRED">Not required</option>
                         </select>
                       )}
+                      {cellCorrections.map((item, correctionIndex) => <p key={correctionIndex} className="px-1 text-left text-[10px] text-[#7a5c00]">Correction: {item.instruction}</p>)}
+                      {cellIssues.map((item, issueIndex) => <p key={issueIndex} role="alert" className="px-1 text-left text-[10px] font-medium text-[#c0112a]">{item.message}</p>)}
                     </td>
                   );
                 })}

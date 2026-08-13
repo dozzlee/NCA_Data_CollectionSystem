@@ -10,6 +10,8 @@ from apps.data_requests.models import DataRequest
 from apps.data_requests.serializers import add_event
 from apps.data_requests.services import build_manifest, eligible_submissions, generate_artifact
 from apps.uploads.models import SubmissionKMZUpload
+from apps.submissions.models import CorrectionItem
+from apps.submissions.workflow import emit_submission_event
 
 
 class Command(BaseCommand):
@@ -39,6 +41,7 @@ class Command(BaseCommand):
                 self._restore_demo_login(existing)
         if options["reset"]: DataRequest.objects.filter(requester=viewer).delete()
         self._seed_form_review_examples(admin)
+        self._seed_provider_workspace_examples(admin)
         # Local/UAT fixtures only: mirror observed historical provider/form pairs
         # onto the newly published PRD versions so request approval and artifact
         # generation can be exercised. These are deliberately not official
@@ -173,3 +176,52 @@ class Command(BaseCommand):
                     first = form.sections.values_list("fields__id", flat=True).exclude(fields__id=None).first()
                     if first:
                         SubmissionValue.objects.create(submission=submission, field_id=first, value="Incomplete demo", value_status="PROVIDED", updated_by=admin)
+
+    def _seed_provider_workspace_examples(self, admin):
+        """Representative local-only queues for the documented Vodafone logins."""
+        provider = ProviderProfile.objects.filter(primary_email="admin@vodafone.com.gh").first()
+        if not provider or not provider.organization_id:
+            return
+        entry = User.objects.filter(email="dataentry@vodafone.com.gh").first()
+        approver = User.objects.filter(email="admin@vodafone.com.gh").first()
+        forms = list(FormTemplate.objects.filter(status="ACTIVE", mapping_basis="PRD_SECTION_11")[:5])
+        if not forms or not entry or not approver:
+            return
+        states = ["DRAFT", "PENDING_APPROVAL", "PROVIDER_CHANGES_REQUESTED", "PROVIDER_RESUBMITTED", "CORRECTION_REQUESTED"]
+        for index, state in enumerate(states):
+            form = forms[index % len(forms)]
+            period, _ = ReportingPeriod.objects.get_or_create(
+                name=f"Provider workspace demo {index + 1}",
+                defaults={"frequency": form.frequency, "year": timezone.localdate().year,
+                    "month": timezone.localdate().month if form.frequency == "MONTHLY" else None,
+                    "opens_at": timezone.now() - timedelta(days=7), "due_at": timezone.now() + timedelta(days=10-index*2),
+                    "status": "ACTIVE", "created_by": admin},
+            )
+            expected, _ = ExpectedSubmission.objects.get_or_create(
+                provider=provider, form_template=form, period=period,
+                defaults={"workflow_status": state, "due_state": "DUE_SOON" if index > 1 else "OPEN"},
+            )
+            expected.workflow_status = state
+            expected.save(update_fields=["workflow_status"])
+            submission, _ = Submission.objects.get_or_create(expected=expected, version=1)
+            submission.last_edited_by = approver if state in {"PROVIDER_RESUBMITTED", "CORRECTION_REQUESTED"} else entry
+            submission.last_edited_at = timezone.now() - timedelta(hours=index)
+            submission.save(update_fields=["last_edited_by", "last_edited_at"])
+            if state in {"PENDING_APPROVAL", "PROVIDER_RESUBMITTED", "CORRECTION_REQUESTED"}:
+                self._fill_complete_submission(submission)
+                submission.completion_pct = 100
+                submission.save(update_fields=["completion_pct"])
+            if state in {"PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"} and not CorrectionItem.objects.filter(resolution_submission=submission, status="OPEN").exists():
+                section = form.sections.first()
+                CorrectionItem.objects.create(
+                    source_submission=submission, resolution_submission=submission,
+                    stage="NCA_REVIEW" if state == "CORRECTION_REQUESTED" else "PROVIDER_APPROVAL",
+                    target_type="SECTION", target_id=section.section_code if section else "submission",
+                    instruction="Demo correction: verify this section against the approved source.", created_by=admin if state == "CORRECTION_REQUESTED" else approver,
+                )
+            if not submission.timeline_events.exists():
+                emit_submission_event(
+                    submission=submission, actor=submission.last_edited_by, event_type=f"DEMO_{state}",
+                    message=f"Local demo item entered {state.replace('_', ' ').title()}.",
+                    to_status=state, audience="PROVIDER", notify=("PROVIDER_APPROVER", "PROVIDER_DATA_ENTRY"),
+                )

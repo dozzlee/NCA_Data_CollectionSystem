@@ -140,9 +140,14 @@ def mark_matching_corrections_addressed(submission, *, section_code, target_keys
             item.save(update_fields=["status", "resolution_submission"])
 
 
-def complete_submission_revision(submission):
+def complete_submission_revision(submission, actor=None):
     submission.revision += 1
-    submission.save(update_fields=["revision"])
+    update_fields = ["revision"]
+    if actor is not None:
+        submission.last_edited_by = actor
+        submission.last_edited_at = timezone.now()
+        update_fields.extend(["last_edited_by", "last_edited_at"])
+    submission.save(update_fields=update_fields)
     return submission.revision
 
 

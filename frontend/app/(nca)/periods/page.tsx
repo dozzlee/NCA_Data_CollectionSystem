@@ -14,10 +14,11 @@ const STATUS_COLORS: Record<string, string> = {
   CLOSED: "bg-[#ffe8e8] text-[#c0112a]",
 };
 
-const FREQUENCIES: Frequency[] = ["MONTHLY", "SEMI_ANNUAL", "ANNUAL"];
+const FREQUENCIES: Frequency[] = ["MONTHLY", "QUARTERLY", "ANNUAL"];
 const FREQ_LABELS: Record<Frequency, string> = {
   MONTHLY: "Monthly",
-  SEMI_ANNUAL: "Semi-Annual",
+  QUARTERLY: "Quarterly",
+  SEMI_ANNUAL: "Semi-Annual (historical)",
   ANNUAL: "Annual",
 };
 
@@ -26,6 +27,7 @@ interface CreatePeriodForm {
   frequency: Frequency;
   year: string;
   month: string;
+  quarter: string;
   opens_at: string;
   due_at: string;
 }
@@ -46,7 +48,7 @@ const CREATE_PERIOD_FIELDS: Array<{
 
 const EMPTY_FORM: CreatePeriodForm = {
   name: "", frequency: "ANNUAL", year: String(new Date().getFullYear()),
-  month: "", opens_at: "", due_at: "",
+  month: "", quarter: "", opens_at: "", due_at: "",
 };
 
 export default function PeriodsPage() {
@@ -84,6 +86,7 @@ export default function PeriodsPage() {
       frequency: form.frequency,
       year: Number(form.year),
       month: form.month ? Number(form.month) : null,
+      quarter: form.quarter ? Number(form.quarter) : null,
       opens_at: form.opens_at,
       due_at: form.due_at,
       status: "DRAFT",
@@ -153,6 +156,14 @@ export default function PeriodsPage() {
                 />
               </div>
             )}
+            {form.frequency === "QUARTERLY" && (
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Quarter (1–4)</label>
+                <input type="number" min={1} max={4} required value={form.quarter}
+                  onChange={(e) => setForm((f) => ({ ...f, quarter: e.target.value }))}
+                  className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none" />
+              </div>
+            )}
           </div>
           <button
             type="submit"
@@ -195,7 +206,7 @@ export default function PeriodsPage() {
                 <tr key={p.id} className="hover:bg-[#f7f9fb] transition-colors">
                   <td className="px-5 py-3.5">
                     <p className="text-[13px] font-medium text-[#191c1e]">{p.name}</p>
-                    <p className="text-[11px] text-[#737780]">{p.year}{p.month ? ` / M${p.month}` : ""}</p>
+                    <p className="text-[11px] text-[#737780]">{p.year}{p.month ? ` / M${p.month}` : p.quarter ? ` / Q${p.quarter}` : ""}</p>
                   </td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{FREQ_LABELS[p.frequency]}</td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">

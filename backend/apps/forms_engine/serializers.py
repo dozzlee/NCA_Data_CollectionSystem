@@ -1,5 +1,6 @@
 from rest_framework import serializers
-from .models import FormFamily, FormTemplate, FormSection, FormField, FormGrid, GridColumn, GridRow, SelectOption, KMZUploadRequirement, ValidationRule, FormRequirement, FormGapAssessment
+from .models import FormFamily, FormTemplate, FormSection, FormField, FormGrid, GridColumn, GridRow, SelectOption, KMZUploadRequirement, ValidationRule, FormRequirement, FormGapAssessment, FormWorkbookImport
+from .workbook_import import normalize_form_code
 from .rules import validate_rule_definition
 
 
@@ -120,8 +121,39 @@ class FormSectionSerializer(serializers.ModelSerializer):
 class FormTemplateListSerializer(serializers.ModelSerializer):
     class Meta:
         model = FormTemplate
-        fields = ["id", "family", "form_code", "name", "sector", "provider_category", "frequency", "version", "status", "kmz_required", "excel_backup_enabled", "mapping_complete", "mapping_basis", "approval_status", "source_reference", "source_sha256", "approved_by", "approved_at", "published_at"]
-        read_only_fields = ["status", "approval_status", "approved_by", "approved_at", "published_at"]
+        fields = ["id", "family", "form_code", "name", "sector", "provider_category", "frequency", "version", "effective_from", "status", "kmz_required", "excel_backup_enabled", "mapping_complete", "mapping_basis", "approval_status", "source_reference", "source_sha256", "approved_by", "approved_at", "published_at"]
+        read_only_fields = ["family", "status", "approval_status", "approved_by", "approved_at", "published_at"]
+
+    def validate_form_code(self, value):
+        try:
+            return normalize_form_code(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
+
+    def validate(self, attrs):
+        code = attrs.get("form_code", getattr(self.instance, "form_code", ""))
+        version = attrs.get("version", getattr(self.instance, "version", ""))
+        frequency = attrs.get("frequency", getattr(self.instance, "frequency", ""))
+        if frequency not in {"MONTHLY", "QUARTERLY", "ANNUAL", "SEMI_ANNUAL"}:
+            raise serializers.ValidationError({"frequency": "Unsupported reporting frequency."})
+        family = FormFamily.objects.filter(code=code).first()
+        if family and FormTemplate.objects.filter(family=family, version=version).exclude(pk=getattr(self.instance, "pk", None)).exists():
+            raise serializers.ValidationError({"version": "This form family and version already exist."})
+        return attrs
+
+    def create(self, validated_data):
+        code = validated_data["form_code"]
+        family, created = FormFamily.objects.get_or_create(
+            code=code,
+            defaults={
+                "name": validated_data["name"], "canonical_frequency": validated_data["frequency"],
+                "frequency_decision_status": "APPROVED",
+            },
+        )
+        if not created and family.canonical_frequency and family.canonical_frequency != validated_data["frequency"]:
+            raise serializers.ValidationError({"frequency": "This form family already uses a different frequency."})
+        validated_data["family"] = family
+        return super().create(validated_data)
 
     def validate_source_sha256(self, value):
         if value and (len(value) != 64 or any(char not in "0123456789abcdefABCDEF" for char in value)):
@@ -134,7 +166,31 @@ class FormTemplateDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FormTemplate
-        fields = ["id", "family", "form_code", "name", "sector", "provider_category", "frequency", "version", "status", "kmz_required", "excel_backup_enabled", "instructions", "source_reference", "source_sha256", "mapping_complete", "mapping_basis", "approval_status", "approved_by", "approved_at", "published_at", "sections"]
+        fields = ["id", "family", "form_code", "name", "sector", "provider_category", "frequency", "version", "effective_from", "status", "kmz_required", "excel_backup_enabled", "instructions", "source_reference", "source_sha256", "mapping_complete", "mapping_basis", "approval_status", "approved_by", "approved_at", "published_at", "sections"]
+
+
+class FormWorkbookImportSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source="created_by.name", read_only=True)
+    resulting_template_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = FormWorkbookImport
+        fields = [
+            "id", "form_code", "name", "version", "sector", "provider_category", "frequency",
+            "file_name", "file_size", "sha256", "scan_status", "scan_engine", "scan_details",
+            "parse_status", "parser_version", "detected_schema", "warnings", "mapping_decisions",
+            "created_by", "created_by_name", "resulting_template_id", "created_at", "updated_at",
+        ]
+        read_only_fields = [
+            "file_name", "file_size", "sha256", "scan_status", "scan_engine", "scan_details",
+            "parse_status", "parser_version", "warnings", "created_by", "created_at", "updated_at",
+        ]
+
+    def validate_form_code(self, value):
+        try:
+            return normalize_form_code(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc))
 
 
 class KMZRequirementSerializer(serializers.ModelSerializer):

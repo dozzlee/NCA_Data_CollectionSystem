@@ -36,10 +36,10 @@ class FormFamily(models.Model):
         ("APPROVED", "Approved"),
     ]
 
-    code = models.CharField(max_length=20, choices=FORM_CODES, unique=True)
+    code = models.CharField(max_length=50, unique=True)
     name = models.CharField(max_length=255)
     canonical_frequency = models.CharField(
-        max_length=15, choices=[("MONTHLY", "Monthly"), ("SEMI_ANNUAL", "Semi-Annual"), ("ANNUAL", "Annual")],
+        max_length=15, choices=[("MONTHLY", "Monthly"), ("QUARTERLY", "Quarterly"), ("SEMI_ANNUAL", "Semi-Annual"), ("ANNUAL", "Annual")],
         blank=True,
     )
     frequency_decision_status = models.CharField(max_length=25, choices=FREQUENCY_DECISIONS, default="APPROVED")
@@ -63,6 +63,7 @@ class FormTemplate(models.Model):
     ]
     FREQUENCY_CHOICES = [
         ("MONTHLY", "Monthly"),
+        ("QUARTERLY", "Quarterly"),
         ("SEMI_ANNUAL", "Semi-Annual"),
         ("ANNUAL", "Annual"),
     ]
@@ -74,7 +75,7 @@ class FormTemplate(models.Model):
 
     family = models.ForeignKey(FormFamily, null=True, blank=True, on_delete=models.PROTECT, related_name="versions")
     # Compatibility mirror. FormFamily.code is the source of truth for new versions.
-    form_code = models.CharField(max_length=20, choices=FORM_CODES)
+    form_code = models.CharField(max_length=50)
     name = models.CharField(max_length=255)
     sector = models.CharField(max_length=20, choices=SECTOR_CHOICES, default="TELECOM")
     provider_category = models.CharField(max_length=30)
@@ -106,6 +107,7 @@ class FormTemplate(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
+        self.form_code = (self.form_code or "").strip().upper()
         # Enforce KMZ restriction — only fibre forms
         if self.form_code not in KMZ_ELIGIBLE_FORMS:
             self.kmz_required = False
@@ -309,3 +311,35 @@ class KMZUploadRequirement(models.Model):
 
     def __str__(self):
         return f"{self.form_template.form_code} / KMZ / {self.category}"
+
+
+class FormWorkbookImport(models.Model):
+    """Private workbook and editable, schema-only interpretation used to build a draft form."""
+    SCAN_STATUSES = [("PENDING", "Pending"), ("CLEAN", "Clean"), ("INFECTED", "Infected"), ("ERROR", "Error")]
+    PARSE_STATUSES = [("PENDING", "Pending"), ("READY", "Ready"), ("FAILED", "Failed"), ("CONFIRMED", "Confirmed")]
+
+    form_code = models.CharField(max_length=50)
+    name = models.CharField(max_length=255)
+    version = models.CharField(max_length=20)
+    sector = models.CharField(max_length=20, choices=FormTemplate.SECTOR_CHOICES)
+    provider_category = models.CharField(max_length=30)
+    frequency = models.CharField(max_length=15, choices=FormTemplate.FREQUENCY_CHOICES)
+    file_name = models.CharField(max_length=255)
+    file_size = models.PositiveIntegerField()
+    storage_path = models.CharField(max_length=500)
+    sha256 = models.CharField(max_length=64)
+    scan_status = models.CharField(max_length=20, choices=SCAN_STATUSES, default="PENDING")
+    scan_engine = models.CharField(max_length=100, blank=True)
+    scan_details = models.TextField(blank=True)
+    parse_status = models.CharField(max_length=20, choices=PARSE_STATUSES, default="PENDING")
+    parser_version = models.CharField(max_length=30, default="xlsx-schema-v1")
+    detected_schema = models.JSONField(default=dict, blank=True)
+    warnings = models.JSONField(default=list, blank=True)
+    mapping_decisions = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey("users.User", on_delete=models.PROTECT, related_name="form_workbook_imports")
+    resulting_template = models.OneToOneField(FormTemplate, null=True, blank=True, on_delete=models.PROTECT, related_name="workbook_import")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]

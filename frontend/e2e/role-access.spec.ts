@@ -28,7 +28,7 @@ test("Data Requester sees the governed requester portal only", async ({ page }) 
 test("Provider Data Entry cannot contact NCA or open the Approver queue", async ({ page }) => {
   await signIn(page, "dataentry@vodafone.com.gh");
   await expect(page.getByRole("link", { name: "Technical Support" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Compliance" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Corrections" })).toBeVisible();
   await page.goto("/provider/pending-approval");
   await expect(page.getByRole("heading", { name: "Provider Approver access required" })).toBeVisible();
   await expectNoCriticalAccessibilityIssues(page);
@@ -39,7 +39,7 @@ test("Provider Approver receives review and compliance controls", async ({ page 
   await expect(page.getByRole("link", { name: "Pending Approval" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Compliance" })).toBeVisible();
   await page.goto("/provider/pending-approval");
-  await expect(page.getByRole("heading", { name: "Pending Your Approval" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Approval work queue" })).toBeVisible();
   await expectNoCriticalAccessibilityIssues(page);
 });
 

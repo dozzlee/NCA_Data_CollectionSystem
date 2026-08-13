@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ui/Toast";
 import type { User } from "@/lib/types";
@@ -28,6 +28,7 @@ const lbl = "block text-[12px] font-semibold text-[#43474f] mb-1";
 
 export default function InquiriesPage() {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const { data: user } = useQuery<User>({ queryKey: ["me"], queryFn: () => api("/auth/me/") });
   const isDataEntry = user?.role === "PROVIDER_DATA_ENTRY";
   const [mode, setMode] = useState<Mode>("feedback");
@@ -35,6 +36,7 @@ export default function InquiriesPage() {
   const modes: Mode[] = isDataEntry ? ["issue"] : ["feedback", "issue"];
   const [feedbackForm, setFeedbackForm] = useState({ category:"GENERAL", subject:"", message:"" });
   const [issueForm, setIssueForm] = useState({ title:"", description:"", severity:"MEDIUM", page_url: typeof window !== "undefined" ? window.location.href : "" });
+  const { data: issues } = useQuery<Array<{id:number;title:string;severity:string;status:string;reported_at:string;assigned_team:string;acknowledged_at:string|null;sla_due_at:string|null;resolution_note:string;history:Array<{id:number;event_type:string;note:string;actor:string;created_at:string}>}>>({ queryKey:["my-technical-issues"], queryFn:() => api("/issues/") });
 
   const feedbackMut = useMutation({
     mutationFn: () => api("/feedback/", { method:"POST", body: JSON.stringify(feedbackForm) }),
@@ -50,6 +52,7 @@ export default function InquiriesPage() {
     onSuccess: () => {
       toast("Issue reported. The NCA technical team has been notified.", "success");
       setIssueForm({ title:"", description:"", severity:"MEDIUM", page_url:"" });
+      queryClient.invalidateQueries({ queryKey:["my-technical-issues"] });
     },
     onError: () => toast("Failed to submit. Please try again.", "error"),
   });
@@ -145,6 +148,11 @@ export default function InquiriesPage() {
           </button>
         </form>
       )}
+
+      <section className="rounded-2xl border bg-white p-6">
+        <h2 className="font-semibold">My technical issues</h2><p className="mt-1 text-xs text-[#737780]">Status and updates from the existing support process.</p>
+        <div className="mt-4 space-y-3">{!issues?.length ? <p className="rounded-lg bg-[#f7f9fb] p-4 text-sm text-[#737780]">No technical issues reported yet.</p> : issues.map((issue) => <details key={issue.id} className="rounded-lg border p-4"><summary className="cursor-pointer list-none"><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-medium">#{issue.id} · {issue.title}</p><p className="mt-1 text-xs text-[#737780]">Reported {new Date(issue.reported_at).toLocaleString()} · {issue.severity}</p></div><span className="rounded-full bg-[#e8f1fb] px-2 py-1 text-xs font-semibold text-[#004999]">{issue.status.replaceAll("_", " ")}</span></div></summary><div className="mt-4 border-t pt-3 text-xs text-[#43474f]"><p>Assigned team: {issue.assigned_team || "Awaiting assignment"}</p>{issue.sla_due_at && <p>SLA target: {new Date(issue.sla_due_at).toLocaleString()}</p>}{issue.resolution_note && <p className="mt-2 rounded bg-green-50 p-2">Resolution: {issue.resolution_note}</p>}<div className="mt-3 space-y-2">{issue.history.map((event) => <div key={event.id}><strong>{event.event_type.replaceAll("_", " ")}</strong> · {event.actor} · {new Date(event.created_at).toLocaleString()}<p>{event.note}</p></div>)}</div></div></details>)}</div>
+      </section>
     </div>
   );
 }

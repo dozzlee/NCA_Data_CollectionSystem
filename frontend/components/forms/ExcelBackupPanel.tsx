@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Upload, AlertCircle, Check } from "lucide-react";
+import { Upload, AlertCircle, Check, Download } from "lucide-react";
+import { downloadAuthenticated } from "@/lib/api";
 
 interface ExcelBackupFile {
   id: number;
@@ -9,6 +10,9 @@ interface ExcelBackupFile {
   file_size: number;
   uploaded_at: string;
   source_control_status: string;
+  scan_status: string;
+  download_ready: boolean;
+  sha256: string;
 }
 
 interface ExcelBackupPanelProps {
@@ -69,6 +73,7 @@ export function ExcelBackupPanel({
       </div>
 
       {/* Upload area */}
+      {!disabled && (
       <div
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
@@ -92,6 +97,7 @@ export function ExcelBackupPanel({
           />
         </label>
       </div>
+      )}
 
       {/* Status messages */}
       {uploadMsg === "uploading" && (
@@ -126,12 +132,13 @@ export function ExcelBackupPanel({
                     {(u.file_size / 1024 / 1024).toFixed(2)}MB • {new Date(u.uploaded_at).toLocaleDateString()}
                   </p>
                 </div>
-                <span className="ml-2 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold bg-[#e5f4eb] text-[#1f7a4d]">
-                  Stored
-                </span>
+                <div className="ml-2 flex shrink-0 items-center gap-2"><span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${u.scan_status === "CLEAN" ? "bg-[#e5f4eb] text-[#1f7a4d]" : u.scan_status === "FAILED" ? "bg-[#ffe8e8] text-[#c0112a]" : "bg-[#fff3bf] text-[#7a5c00]"}`}>
+                  {u.source_control_status === "SUPERSEDED" ? "Superseded" : u.scan_status === "CLEAN" ? "Clean" : u.scan_status === "FAILED" ? "Scan failed" : u.scan_status === "SCANNING" ? "Scanning" : "Quarantined"}
+                </span>{u.download_ready && <button type="button" aria-label={`Download ${u.file_name}`} onClick={() => downloadAuthenticated(`/submissions/${submissionId}/excel-backups/${u.id}/download/`, {}, u.file_name)} className="text-[#0066cc]"><Download size={14} /></button>}</div>
               </div>
             ))}
           </div>
+          {uploads.some((upload) => upload.scan_status === "FAILED") && <p className="text-[11px] text-[#c0112a]">A scan failed. Replace the file or contact technical support; failed files cannot be downloaded or submitted as required evidence.</p>}
         </div>
       )}
     </div>

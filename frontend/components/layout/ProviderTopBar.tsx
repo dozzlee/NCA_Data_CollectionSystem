@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { BarChart3, LayoutDashboard, Clock, CheckCircle, HelpCircle, LogOut, ShieldAlert, Bell } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { User } from "@/lib/types";
+import type { SubmissionNotificationSummary, User } from "@/lib/types";
 
 const ROLE_LABELS: Record<string, string> = {
   PROVIDER_DATA_ENTRY: "Data Entry",
@@ -18,6 +19,7 @@ const DATA_ENTRY_NAV = [
   { href: "/provider/dashboard",    label: "My Forms",    icon: LayoutDashboard },
   { href: "/industry-dashboard",    label: "Industry",    icon: BarChart3 },
   { href: "/provider/history",      label: "History",     icon: Clock },
+  { href: "/provider/compliance",   label: "Corrections", icon: ShieldAlert },
   { href: "/provider/inquiries",    label: "Technical Support",   icon: HelpCircle },
   { href: "/provider/notifications",label: "Updates",      icon: Bell },
 ];
@@ -49,19 +51,25 @@ export function ProviderTopBar() {
 
   const isApprover = user?.role === "PROVIDER_APPROVER";
   const nav = isApprover ? APPROVER_NAV : DATA_ENTRY_NAV;
+  const { data: notificationSummary } = useQuery<SubmissionNotificationSummary>({
+    queryKey: ["submission-notification-summary"],
+    queryFn: () => api("/submission-notifications/summary/"),
+    enabled: Boolean(user?.role?.startsWith("PROVIDER_")),
+    refetchInterval: 30_000,
+  });
 
   return (
     <header className="sticky top-0 z-40 border-b border-[#e6e8ea] bg-white">
-      <div className="mx-auto flex h-14 max-w-[1200px] items-center gap-6 px-6">
+      <div className="mx-auto flex min-h-14 max-w-[1200px] flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2 sm:px-6">
         {/* Brand */}
         <div className="flex items-center gap-2.5 shrink-0">
-          <div className="flex h-7 w-7 items-center justify-center rounded-[6px] bg-[#E31937] text-[9px] font-bold text-white tracking-wider">
-            NCA
+          <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-white ring-1 ring-[#e6e8ea]">
+            <Image src="/nca-logo.png" alt="National Communications Authority" width={32} height={32} className="h-full w-full object-contain" />
           </div>
           <span className="text-[13px] font-semibold text-[#191c1e]">Data Collection</span>
         </div>
 
-        <nav className="flex items-center gap-1">
+        <nav className="order-3 flex w-full items-center gap-1 overflow-x-auto pb-1 lg:order-none lg:w-auto lg:pb-0">
           {nav.map(({ href, label, icon: Icon }) => {
             const active = pathname === href || pathname.startsWith(href + "/");
             return (
@@ -74,6 +82,8 @@ export function ProviderTopBar() {
                 )}>
                 <Icon size={14} />
                 {label}
+                {href === "/provider/notifications" && Boolean(notificationSummary?.unread) && <span className="rounded-full bg-[#e31937] px-1.5 text-[10px] text-white">{notificationSummary!.unread}</span>}
+                {href === "/provider/pending-approval" && Boolean(notificationSummary?.pending_approval) && <span className="rounded-full bg-[#ffd100] px-1.5 text-[10px] text-[#191c1e]">{notificationSummary!.pending_approval}</span>}
               </Link>
             );
           })}

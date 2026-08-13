@@ -14,11 +14,23 @@ Record tester, date, release identifier and environment. A failed mandatory item
 
 - [ ] Correct active versions are MNO 3.0, ISP06 3.0, ITC04 3.0, TB02 3.0, Tower 2.0, DBS05 2.0 and SUB03 2.0.
 - [ ] Tower code is visibly provisional; topology KMZ appears only on DBS05.
-- [ ] Data Entry saves scalar and grid snapshots, sees precise validation, and stale revisions return a conflict.
+- [ ] Data Entry sees server-calculated shared-queue counts, saves scalar/grid snapshots through autosave/manual save, sees precise validation, and stale revisions preserve local values with latest-editor details.
 - [ ] `DRAFT → PENDING_APPROVAL`; only the same provider's Approver sees the item.
-- [ ] A targeted correction returns it to Data Entry; resubmission retains history and targets.
-- [ ] Approver readiness check creates the official `SUBMITTED` version; Data Entry cannot do this.
+- [ ] A correction can target multiple sections/fields/grid cells, returns only permitted work to Data Entry, and resubmission retains history and targets.
+- [ ] Approver can edit only approval/NCA-correction stages; each save has immutable before/after evidence and a non-sensitive audit hash.
+- [ ] Approver readiness/upload/correction check plus accuracy attestation creates the official `SUBMITTED`/`RESUBMITTED` version; an Approver edit requires a change summary and Data Entry cannot do this.
+- [ ] Navigation notification/pending counts, direct links, mark-one/all-read, history submitted timestamps, receipt links and own technical-ticket history are correct.
 - [ ] NCA review uses the exact stored template, clones regulatory corrections, locks unaffected content and preserves official history.
+
+## Form Builder and assignment
+
+- [ ] Admin/Officer can create a manual draft with an arbitrary normalized code, name, version, sector, provider type and monthly/quarterly/annual frequency.
+- [ ] A private `.xlsx` larger than 20 MB, unreadable/encrypted file, unsafe scan result or unresolved blocking mapping warning cannot be confirmed.
+- [ ] Import preview contains sections/fields/grids/formulas/provenance but no workbook answer values; the reviewed mapping creates a draft, never a published form.
+- [ ] Only an Admin can publish; an Officer-created form remains pending Admin publication approval.
+- [ ] Assignment preview lists exact pairs, duplicates, exclusions and provider mismatches; mismatch override requires a reason.
+- [ ] Recurring assignments renew in matching periods using the latest approved version; manual assignments bind an exact version to one non-closed period and remain idempotent.
+- [ ] Quarterly periods require quarter 1–4, and activation creates only exact recurring/manual obligations plus provider notifications.
 
 ## Roles and features
 

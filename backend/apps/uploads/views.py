@@ -13,7 +13,8 @@ from apps.audit.services import record_audit
 from apps.forms_engine.models import KMZUploadRequirement, KMZ_ELIGIBLE_FORMS
 from apps.submissions.access import get_submission_for_user
 from apps.submissions.readiness import refresh_submission_completion
-from apps.users.permissions import IsNCAEditor, IsProviderDataEntry
+from apps.users.permissions import IsNCAEditor, IsProviderUser
+from apps.submissions.provider_workspace import provider_can_edit
 from .models import SubmissionKMZUpload, SubmissionExcelBackup
 from .tasks import scan_private_upload
 
@@ -42,7 +43,7 @@ class KMZUploadView(APIView):
 
     def get_permissions(self):
         if self.request.method == "POST":
-            return [IsProviderDataEntry()]
+            return [IsProviderUser()]
         return [IsAuthenticated()]
 
     def get(self, request, pk):
@@ -66,8 +67,8 @@ class KMZUploadView(APIView):
 
     def post(self, request, pk):
         submission = get_submission_for_user(request.user, pk=pk)
-        if submission.expected.workflow_status not in ("DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"):
-            return Response({"detail": "Uploads are only allowed while the submission is editable."}, status=400)
+        if not provider_can_edit(request.user, submission):
+            return Response({"detail": "Your provider role cannot upload files at this workflow stage."}, status=403)
         if submission.expected.workflow_status == "CORRECTION_REQUESTED" and not submission.supersedes_id:
             return Response({"detail": "Upload to the linked correction version, not the official historical version."}, status=409)
 
@@ -183,13 +184,13 @@ class ExcelBackupListView(APIView):
 
 
 class ExcelBackupUploadView(APIView):
-    permission_classes = [IsProviderDataEntry]
+    permission_classes = [IsProviderUser]
     parser_classes = [MultiPartParser]
 
     def post(self, request, pk):
         submission = get_submission_for_user(request.user, pk=pk)
-        if submission.expected.workflow_status not in ("DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"):
-            return Response({"detail": "Uploads are only allowed while the submission is editable."}, status=400)
+        if not provider_can_edit(request.user, submission):
+            return Response({"detail": "Your provider role cannot upload files at this workflow stage."}, status=403)
         if submission.expected.workflow_status == "CORRECTION_REQUESTED" and not submission.supersedes_id:
             return Response({"detail": "Upload to the linked correction version, not the official historical version."}, status=409)
 

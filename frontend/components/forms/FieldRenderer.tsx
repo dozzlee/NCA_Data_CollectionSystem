@@ -19,12 +19,15 @@ interface FieldRendererProps {
   disabled?: boolean;
   /** Current values for all fields in the section — used to resolve conditional visibility */
   allFieldValues?: Record<number, { value: string }>;
+  issues?: string[];
+  correctionInstructions?: string[];
+  onBlur?: () => void;
 }
 
 const inputBase =
   "w-full rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] placeholder:text-[#737780] transition-colors focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20 disabled:bg-[#f2f4f6] disabled:text-[#737780]";
 
-export function FieldRenderer({ field, value, valueStatus, explanation, onChange, disabled, allFieldValues }: FieldRendererProps) {
+export function FieldRenderer({ field, value, valueStatus, explanation, onChange, disabled, allFieldValues, issues = [], correctionInstructions = [], onBlur }: FieldRendererProps) {
   // Conditional visibility — hide if parent field's value doesn't match the required value
   if (
     field.conditional_on_field !== null &&
@@ -46,7 +49,7 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
   }
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1.5" onBlur={onBlur}>
       {/* Label */}
       <div className="flex items-start justify-between gap-2">
         <label className="text-[13px] font-medium text-[#191c1e] leading-snug">
@@ -79,6 +82,8 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
       {field.help_text && (
         <p className="text-[11px] text-[#737780] leading-snug">{field.help_text}</p>
       )}
+      {correctionInstructions.map((instruction, index) => <p key={index} className="rounded-md bg-[#fff3bf] px-2 py-1.5 text-[11px] text-[#7a5c00]">Correction: {instruction}</p>)}
+      {issues.map((issue, index) => <p key={index} role="alert" className="text-[11px] font-medium text-[#c0112a]">{issue}</p>)}
 
       {/* Input — hidden if non-filled status is set */}
       {!isNonFilled && (

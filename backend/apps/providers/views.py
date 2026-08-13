@@ -133,6 +133,22 @@ class ProviderFormAssignmentListCreateView(generics.ListCreateAPIView):
             after={"provider": str(assignment.provider.provider_id), "form_code": assignment.form_family.code, "obligation": assignment.obligation})
 
 
+class ProviderFormAssignmentDetailView(generics.RetrieveUpdateAPIView):
+    permission_classes = [IsNCAEditor]
+    serializer_class = ProviderFormAssignmentSerializer
+    queryset = ProviderFormAssignment.objects.select_related("provider", "form_family", "confirmed_by")
+    http_method_names = ["get", "patch", "head", "options"]
+
+    def patch(self, request, *args, **kwargs):
+        unsupported = set(request.data) - {"effective_to"}
+        if unsupported:
+            return Response({"detail": "Only effective_to can be changed. Create a new assignment for other changes."}, status=400)
+        before = self.get_object().effective_to
+        response = super().patch(request, *args, **kwargs)
+        record_audit(user=request.user, action="PROVIDER_FORM_ASSIGNMENT_ENDED", entity_type="ProviderFormAssignment", entity_id=self.get_object().id, before={"effective_to": before}, after={"effective_to": response.data.get("effective_to")})
+        return response
+
+
 class ProviderFormAssignmentImportTemplateView(APIView):
     permission_classes = [IsNCAEditor]
 

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
@@ -83,9 +84,8 @@ export function Sidebar() {
     >
       {/* Brand */}
       <div className="flex items-center gap-3 px-6 py-6 border-b border-white/10">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[8px] text-xs font-bold tracking-wider text-white"
-          style={{ background: "#E31937" }}>
-          NCA
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white">
+          <Image src="/nca-logo.png" alt="National Communications Authority" width={44} height={44} className="h-full w-full object-contain" />
         </div>
         <div className="min-w-0">
           <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-white/50 leading-none mb-0.5">

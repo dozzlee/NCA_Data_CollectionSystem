@@ -6,16 +6,19 @@ from django.utils.dateparse import parse_datetime
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
 from datetime import timedelta
+import hashlib
+import json
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.pagination import PageNumberPagination
 
 from apps.audit.services import record_audit
 from apps.compliance.models import TransactionalOutbox
 from apps.users.permissions import (
     IsNCAUser, IsNCAEditor,
-    IsProviderDataEntry, IsProviderApprover,
+    IsProviderDataEntry, IsProviderApprover, IsProviderUser,
 )
 from .access import (
     expected_submissions_for_user,
@@ -29,6 +32,7 @@ from .models import (
     SubmissionValue, ReviewAction, CorrectionItem, NonFilledDisposition,
     DeadlineChangeRequest, SubmissionOverride, ReminderPolicy,
     SubmissionEvent, SubmissionNotification,
+    ProviderEditBatch, ProviderEditItem, ProviderApprovalDecision,
 )
 from .serializers import (
     ReportingPeriodSerializer, ExpectedSubmissionSerializer,
@@ -39,11 +43,35 @@ from .workflow import (
     audit_transition, clone_for_nca_correction, complete_submission_revision,
     lock_submission, mark_matching_corrections_addressed, mark_notification_read,
 )
+from .provider_workspace import (
+    apply_workspace_queue, filter_workspace_queryset, provider_can_edit,
+    permitted_actions, summary_for_user, workspace_queryset,
+)
 
 
 def write_audit(request, action, entity_type, entity_id, before=None, after=None):
     return record_audit(user=request.user, action=action, entity_type=entity_type, entity_id=entity_id,
         before=before, after=after, ip_address=request.META.get("REMOTE_ADDR"))
+
+
+def validate_correction_targets(template, targets):
+    valid_types = {"SECTION", "FIELD", "GRID_CELL"}
+    for target in targets:
+        target_type = target.get("type")
+        target_id = str(target.get("id", "")).strip()
+        if target_type not in valid_types or not target_id:
+            return "Every correction target requires a valid type and id."
+        if target_type == "SECTION" and not template.sections.filter(section_code=target_id).exists():
+            return f"Unknown section correction target: {target_id}."
+        if target_type == "FIELD" and not template.sections.filter(fields__id=target_id).exists():
+            return f"Unknown field correction target: {target_id}."
+        if target_type == "GRID_CELL":
+            parts = target_id.split(":")
+            if len(parts) != 3 or not parts[1] or not template.sections.filter(
+                grids__id=parts[0], grids__columns__id=parts[2]
+            ).exists():
+                return f"Unknown grid-cell correction target: {target_id}."
+    return None
 
 
 def dashboard_queryset(request):
@@ -56,6 +84,12 @@ def dashboard_queryset(request):
     for parameter, lookup in filters.items():
         if value := request.query_params.get(parameter): qs = qs.filter(**{lookup: value})
     return qs
+
+
+class ProviderWorkspacePagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = "page_size"
+    max_page_size = 100
 
 
 # ── Dashboard ────────────────────────────────────────────────────────────────
@@ -204,6 +238,35 @@ class ActivatePeriodView(APIView):
         return Response({"detail": "Activated.", "expected_count": period.expected_submissions.count()})
 
 
+class PeriodAssignmentPreviewView(APIView):
+    permission_classes = [IsNCAEditor]
+
+    def get(self, request, pk):
+        from apps.providers.models import ProviderFormAssignment
+        period = generics.get_object_or_404(ReportingPeriod, pk=pk)
+        provider_ids = set(period.assigned_providers.values_list("id", flat=True))
+        template_ids = set(period.applicable_form_templates.values_list("id", flat=True))
+        recurring = ProviderFormAssignment.objects.filter(
+            form_family__canonical_frequency=period.frequency,
+            obligation__in=["REQUIRED", "OPTIONAL"], effective_from__lte=period.due_at.date(),
+        ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=period.opens_at.date())).select_related("provider", "form_family")
+        if provider_ids:
+            recurring = recurring.filter(provider_id__in=provider_ids)
+        rows, blockers = [], []
+        for assignment in recurring:
+            form = assignment.form_family.versions.filter(status="ACTIVE", approval_status="APPROVED", frequency=period.frequency).order_by("-published_at", "-id").first()
+            if not form:
+                blockers.append(f"No active approved {assignment.form_family.code} version is available.")
+                continue
+            if template_ids and form.id not in template_ids:
+                continue
+            rows.append({"source": "RECURRING", "provider_id": assignment.provider_id, "provider_name": assignment.provider.registered_name, "form_template": form.id, "form_code": form.form_code})
+        for manual in period.manual_form_assignments.select_related("provider", "form_template"):
+            rows.append({"source": "MANUAL", "provider_id": manual.provider_id, "provider_name": manual.provider.registered_name, "form_template": manual.form_template_id, "form_code": manual.form_template.form_code})
+        unique = {(row["provider_id"], row["form_template"]): row for row in rows}
+        return Response({"period": period.id, "pairs": list(unique.values()), "count": len(unique), "blockers": blockers, "can_activate": not blockers and bool(unique)})
+
+
 # ── Expected Submissions ──────────────────────────────────────────────────────
 
 class ExpectedSubmissionListView(generics.ListAPIView):
@@ -236,6 +299,30 @@ class ExpectedSubmissionDetailView(generics.RetrieveUpdateAPIView):
         return expected_submissions_for_user(self.request.user)
 
 
+class ProviderWorkspaceSummaryView(APIView):
+    permission_classes = [IsProviderUser]
+
+    def get(self, request):
+        return Response(summary_for_user(request.user))
+
+
+class ProviderWorkspaceSubmissionListView(generics.ListAPIView):
+    permission_classes = [IsProviderUser]
+    serializer_class = ExpectedSubmissionSerializer
+    pagination_class = ProviderWorkspacePagination
+
+    def get_queryset(self):
+        queryset = workspace_queryset(self.request.user)
+        queryset = apply_workspace_queue(queryset, self.request.user, self.request.query_params.get("queue"))
+        queryset = filter_workspace_queryset(queryset, self.request.query_params)
+        ordering = self.request.query_params.get("ordering", "period__due_at")
+        allowed = {
+            "period__due_at", "-period__due_at", "workflow_status", "-workflow_status",
+            "form_template__form_code", "-form_template__form_code", "created_at", "-created_at",
+        }
+        return queryset.order_by(ordering if ordering in allowed else "period__due_at", "id")
+
+
 # ── Submissions ───────────────────────────────────────────────────────────────
 
 class StartSubmissionView(APIView):
@@ -245,10 +332,10 @@ class StartSubmissionView(APIView):
     def post(self, request, pk):
         visible = get_expected_submission_for_user(request.user, pk=pk)
         expected = ExpectedSubmission.objects.select_for_update().get(pk=visible.pk)
-        if expected.workflow_status not in ("NOT_STARTED", "CORRECTION_REQUESTED"):
+        if expected.workflow_status != "NOT_STARTED":
             return Response({"detail": "Cannot start in current state."}, status=400)
         last = expected.versions.order_by("-version").first()
-        correcting = expected.workflow_status == "CORRECTION_REQUESTED" and last is not None
+        correcting = False
         if correcting:
             if last.supersedes_id and last.submitted_at is None:
                 submission = last
@@ -256,7 +343,7 @@ class StartSubmissionView(APIView):
                 submission = clone_for_nca_correction(last)
                 last.correction_items.filter(stage="NCA_REVIEW", status="OPEN").update(resolution_submission=submission)
         else:
-            submission = Submission.objects.create(expected=expected, version=1)
+            submission = last if last and last.submitted_at is None else Submission.objects.create(expected=expected, version=1)
         prior_status = expected.workflow_status
         expected.workflow_status = "DRAFT"
         expected.save(update_fields=["workflow_status"])
@@ -326,10 +413,78 @@ class SubmissionReviewDataView(APIView):
         })
 
 
+class ProviderReviewDataView(APIView):
+    """Provider-tenant review payload bound to the submission's immutable template."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from apps.forms_engine.serializers import FormTemplateDetailSerializer
+        from apps.uploads.models import SubmissionKMZUpload, SubmissionExcelBackup
+
+        submission = get_submission_for_user(request.user, pk=pk)
+        readiness = refresh_submission_completion(submission)
+        corrections = CorrectionItem.objects.filter(
+            Q(source_submission=submission) | Q(resolution_submission=submission)
+        ).select_related("created_by").distinct()
+        kmz = SubmissionKMZUpload.objects.filter(submission=submission).select_related("requirement")
+        backups = SubmissionExcelBackup.objects.filter(submission=submission).order_by("-uploaded_at")
+        events = submission.timeline_events.filter(audience__in=["PROVIDER", "BOTH"]).select_related("actor")
+        versions = submission.expected.versions.select_related("receipt", "provider_approval__approver").order_by("-version")
+        edit_batches = submission.provider_edit_batches.select_related("actor").prefetch_related("items")
+        return Response({
+            "submission": SubmissionSerializer(submission).data,
+            "template": FormTemplateDetailSerializer(submission.expected.form_template).data,
+            "values": SubmissionValueSerializer(
+                submission.values.select_related("field", "grid", "grid_column", "non_filled_disposition"),
+                many=True,
+            ).data,
+            "readiness": {
+                **readiness,
+                "transition_ready": readiness["can_submit"] and not corrections.filter(status="OPEN").exists(),
+            },
+            "correction_items": [{
+                "id": item.id, "stage": item.stage, "target_type": item.target_type,
+                "target_id": item.target_id, "instruction": item.instruction,
+                "status": item.status, "created_by_name": item.created_by.name,
+                "created_at": item.created_at,
+            } for item in corrections],
+            "uploads": {
+                "kmz": [{
+                    "id": item.id, "requirement_id": item.requirement_id,
+                    "category": item.requirement.get_category_display(), "file_name": item.file_name,
+                    "file_size": item.file_size, "sha256": item.sha256,
+                    "scan_status": item.scan_status, "review_status": item.review_status,
+                    "review_note": item.review_note, "uploaded_at": item.uploaded_at,
+                    "download_ready": item.scan_status == "CLEAN",
+                } for item in kmz],
+                "excel": [{
+                    "id": item.id, "file_name": item.file_name, "file_size": item.file_size,
+                    "sha256": item.sha256, "scan_status": item.scan_status,
+                    "source_control_status": item.source_control_status, "uploaded_at": item.uploaded_at,
+                    "download_ready": item.scan_status == "CLEAN",
+                } for item in backups],
+            },
+            "timeline": SubmissionEventSerializer(events, many=True).data,
+            "versions": [SubmissionSerializer(version).data for version in versions],
+            "provider_edits": [{
+                "id": batch.id, "actor": batch.actor_id, "actor_name": batch.actor.name,
+                "stage": batch.stage, "section_code": batch.section_code,
+                "base_revision": batch.base_revision, "resulting_revision": batch.resulting_revision,
+                "item_count": batch.item_count, "changes_sha256": batch.changes_sha256,
+                "created_at": batch.created_at,
+                "items": [{
+                    "id": item.id, "target_type": item.target_type, "target_id": item.target_id,
+                    "before": item.before, "after": item.after,
+                } for item in batch.items.all()],
+            } for batch in edit_batches],
+            "permitted_actions": permitted_actions(request.user, submission.expected, submission),
+        })
+
+
 class SectionValuesView(APIView):
     def get_permissions(self):
         if self.request.method == "PUT":
-            return [IsProviderDataEntry()]
+            return [IsProviderUser()]
         return [IsAuthenticated()]
 
     def get(self, request, pk, section_code):
@@ -345,16 +500,22 @@ class SectionValuesView(APIView):
     def put(self, request, pk, section_code):
         visible = get_submission_for_user(request.user, pk=pk)
         submission = lock_submission(visible.pk)
-        if submission.expected.workflow_status not in ("DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"):
-            return Response({"detail": "Not editable."}, status=400)
         if submission.expected.workflow_status == "CORRECTION_REQUESTED" and not submission.supersedes_id:
             return Response({"detail": "Official historical versions are immutable. Edit the linked correction version."}, status=409)
+        if not provider_can_edit(request.user, submission):
+            return Response({
+                "code": "EDIT_NOT_PERMITTED",
+                "detail": "Your provider role cannot edit this submission at its current workflow stage.",
+            }, status=403)
         supplied_revision = request.data.get("revision")
         if supplied_revision is not None and int(supplied_revision) != submission.revision:
             return Response({
                 "code": "STALE_REVISION",
-                "detail": "This section changed after it was opened. Reload before saving.",
+                "detail": "A newer version was saved. Your unsaved values were not overwritten; reload before reapplying them.",
                 "current_revision": submission.revision,
+                "last_edited_by": submission.last_edited_by_id,
+                "last_edited_by_name": submission.last_edited_by.name if submission.last_edited_by else None,
+                "last_edited_at": submission.last_edited_at,
             }, status=409)
 
         template = submission.expected.form_template
@@ -369,6 +530,26 @@ class SectionValuesView(APIView):
                 status__in=["OPEN", "ADDRESSED"],
             )
         )
+        restrict_to_corrections = submission.expected.workflow_status in {
+            "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED",
+        }
+        existing_before = list(SubmissionValue.objects.filter(
+            Q(field__section=section) | Q(grid__section=section), submission=submission,
+        ))
+
+        def value_snapshot(item):
+            return {
+                "value": item.value,
+                "value_status": item.value_status,
+                "explanation": item.explanation,
+            }
+
+        def value_key(item):
+            if item.field_id:
+                return ("FIELD", str(item.field_id))
+            return ("GRID_CELL", f"{item.grid_id}:{item.grid_row_id}:{item.grid_column_id}")
+
+        before = {value_key(item): value_snapshot(item) for item in existing_before}
         saved = []
         keep_scalar_ids = set()
         keep_grid_keys = set()
@@ -391,7 +572,7 @@ class SectionValuesView(APIView):
             explanation = str(v.get("explanation", ""))
             if grid_id and not str(v.get("grid_row_id", "")).strip():
                 return Response({"detail": "Every grid cell requires a row identifier."}, status=400)
-            if correction_items:
+            if restrict_to_corrections and correction_items:
                 target = str(field_id or f"{grid_id}:{v.get('grid_row_id','')}:{v.get('grid_column','')}")
                 allowed = any(
                     item.target_type == "SUBMISSION"
@@ -429,18 +610,69 @@ class SectionValuesView(APIView):
             key = (current.grid_id, current.grid_row_id, current.grid_column_id)
             keep = current.field_id in keep_scalar_ids if current.field_id else key in keep_grid_keys
             if not keep:
+                if restrict_to_corrections and correction_items:
+                    target = str(current.field_id or f"{current.grid_id}:{current.grid_row_id}:{current.grid_column_id}")
+                    allowed = any(
+                        item.target_type == "SUBMISSION"
+                        or (item.target_type == "SECTION" and item.target_id == section_code)
+                        or (item.target_type == "FIELD" and item.target_id == str(current.field_id))
+                        or (item.target_type == "GRID_CELL" and item.target_id == target)
+                        for item in correction_items
+                    )
+                    if not allowed:
+                        continue
                 current.delete()
 
-        if correction_items:
+        if restrict_to_corrections and correction_items:
             mark_matching_corrections_addressed(
                 submission, section_code=section_code, target_keys=target_keys,
             )
-        revision = complete_submission_revision(submission)
+        base_revision = submission.revision
+        revision = complete_submission_revision(submission, request.user)
+
+        after_values = list(SubmissionValue.objects.filter(
+            Q(field__section=section) | Q(grid__section=section), submission=submission,
+        ))
+        after = {value_key(item): value_snapshot(item) for item in after_values}
+        changes = []
+        for key in sorted(set(before) | set(after)):
+            previous = before.get(key, {})
+            current = after.get(key, {})
+            if previous != current:
+                changes.append({
+                    "target_type": key[0], "target_id": key[1],
+                    "before": previous, "after": current,
+                })
+        edit_batch = None
+        if request.user.role == "PROVIDER_APPROVER" and changes:
+            canonical = json.dumps(changes, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            edit_batch = ProviderEditBatch.objects.create(
+                submission=submission, actor=request.user,
+                stage=submission.expected.workflow_status, section_code=section_code,
+                base_revision=base_revision, resulting_revision=revision,
+                item_count=len(changes), changes_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            )
+            ProviderEditItem.objects.bulk_create([
+                ProviderEditItem(batch=edit_batch, **change) for change in changes
+            ])
 
         readiness = refresh_submission_completion(submission, section_code)
-        write_audit(request, "SECTION_VALUES_SAVED", "Submission", submission.id,
-                    after={"section": section_code, "count": len(saved)})
-        return Response({"saved": len(saved), "revision": revision, **readiness})
+        audit_metadata = {"section": section_code, "count": len(saved), "revision": revision}
+        if edit_batch:
+            audit_metadata.update({
+                "provider_edit_batch_id": edit_batch.id,
+                "changed_target_count": edit_batch.item_count,
+                "changed_target_ids": [item["target_id"] for item in changes],
+                "changes_sha256": edit_batch.changes_sha256,
+            })
+        write_audit(request, "SECTION_VALUES_SAVED", "Submission", submission.id, after=audit_metadata)
+        return Response({
+            "saved": len(saved), "revision": revision,
+            "last_edited_by": request.user.id, "last_edited_by_name": request.user.name,
+            "last_edited_at": submission.last_edited_at,
+            "provider_edit_batch_id": edit_batch.id if edit_batch else None,
+            **readiness,
+        })
 
 
 class SubmissionCompletionView(APIView):
@@ -453,10 +685,16 @@ class SubmissionCompletionView(APIView):
             Q(source_submission=submission, stage="PROVIDER_APPROVAL")
             | Q(resolution_submission=submission, stage="NCA_REVIEW"), status="OPEN"
         )
-        if open_items.exists():
-            return Response({"detail": "Address every correction item before submitting for approval.",
-                "open_correction_item_ids": list(open_items.values_list("id", flat=True))}, status=409)
-        return Response(readiness)
+        open_data = [{
+            "id": item.id, "stage": item.stage, "target_type": item.target_type,
+            "target_id": item.target_id, "instruction": item.instruction,
+        } for item in open_items]
+        return Response({
+            **readiness,
+            "transition_ready": readiness["can_submit"] and not open_data,
+            "open_correction_item_count": len(open_data),
+            "open_correction_items": open_data,
+        })
 
 
 class SubmitForApprovalView(APIView):
@@ -466,7 +704,7 @@ class SubmitForApprovalView(APIView):
     def post(self, request, pk):
         visible = get_submission_for_user(request.user, pk=pk)
         submission = lock_submission(visible.pk)
-        if submission.expected.workflow_status not in ("DRAFT", "PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"):
+        if submission.expected.workflow_status not in ("DRAFT", "PROVIDER_CHANGES_REQUESTED"):
             return Response(
                 {"detail": "Only an editable draft can be sent for provider approval."},
                 status=400,
@@ -511,7 +749,7 @@ class OfficialSubmitView(APIView):
     def post(self, request, pk):
         visible = get_submission_for_user(request.user, pk=pk)
         submission = lock_submission(visible.pk)
-        if submission.expected.workflow_status not in ("PENDING_APPROVAL", "PROVIDER_RESUBMITTED"):
+        if submission.expected.workflow_status not in ("PENDING_APPROVAL", "PROVIDER_RESUBMITTED", "CORRECTION_REQUESTED"):
             return Response({"detail": "Only a form awaiting provider approval can be officially submitted."}, status=400)
         readiness = refresh_submission_completion(submission)
         if not readiness["can_submit"]:
@@ -520,6 +758,38 @@ class OfficialSubmitView(APIView):
                 "detail": "The form changed or failed validation and cannot be approved.",
                 **readiness,
             }, status=409)
+        attestation = request.data.get("attestation")
+        if attestation is not True:
+            return Response({
+                "code": "ATTESTATION_REQUIRED",
+                "detail": "Confirm the accuracy attestation before official submission.",
+            }, status=400)
+        open_items = CorrectionItem.objects.filter(
+            Q(source_submission=submission, stage="PROVIDER_APPROVAL")
+            | Q(resolution_submission=submission, stage="NCA_REVIEW"),
+            status="OPEN",
+        )
+        if open_items.exists():
+            return Response({
+                "code": "OPEN_CORRECTIONS",
+                "detail": "Address every correction item before official submission.",
+                "open_correction_item_ids": list(open_items.values_list("id", flat=True)),
+            }, status=409)
+        latest_handoff = submission.timeline_events.filter(
+            event_type__in=["SUBMITTED_FOR_APPROVAL", "PROVIDER_RESUBMITTED"]
+        ).order_by("-created_at").first()
+        edit_batches = submission.provider_edit_batches.all()
+        if latest_handoff:
+            edit_batches = edit_batches.filter(created_at__gte=latest_handoff.created_at)
+        edit_batch_count = edit_batches.count()
+        change_summary = str(request.data.get("change_summary") or "").strip()
+        if edit_batch_count and not change_summary:
+            return Response({
+                "code": "CHANGE_SUMMARY_REQUIRED",
+                "detail": "Summarize the values changed by the Approver before official submission.",
+                "provider_edit_batch_count": edit_batch_count,
+            }, status=400)
+        approval_note = str(request.data.get("approval_note") or "").strip()
         prior_status = submission.expected.workflow_status
         was_correction = submission.supersedes_id is not None
         submission.expected.workflow_status = "RESUBMITTED" if was_correction else "SUBMITTED"
@@ -528,6 +798,11 @@ class OfficialSubmitView(APIView):
         submission.submitted_by = request.user
         submission.submitted_at = timezone.now()
         submission.save(update_fields=["submitted_by", "submitted_at"])
+        decision = ProviderApprovalDecision.objects.create(
+            submission=submission, approver=request.user, attestation=True,
+            approval_note=approval_note, change_summary=change_summary,
+            approver_edited=bool(edit_batch_count), edit_batch_count=edit_batch_count,
+        )
         from .receipts import create_receipt
         receipt = create_receipt(submission)
         TransactionalOutbox.objects.get_or_create(topic="submission.official", aggregate_type="Submission",
@@ -538,9 +813,18 @@ class OfficialSubmitView(APIView):
             message="The Provider Approver officially resubmitted the corrected form to NCA." if was_correction else "The Provider Approver officially submitted the form to NCA.",
             from_status=prior_status, to_status=submission.expected.workflow_status,
             audience="BOTH", notify=["PROVIDER_DATA_ENTRY", "NCA_REVIEWER"],
-            metadata={"receipt_reference": receipt.reference},
+            metadata={
+                "receipt_reference": receipt.reference,
+                "provider_approval_decision_id": decision.id,
+                "provider_edit_batch_count": edit_batch_count,
+            },
         )
-        return Response({"detail": "Officially submitted to NCA.", "receipt_reference": receipt.reference})
+        return Response({
+            "detail": "Officially submitted to NCA.",
+            "workflow_status": submission.expected.workflow_status,
+            "receipt_reference": receipt.reference,
+            "provider_approval_decision_id": decision.id,
+        })
 
 
 # ── NCA Review ────────────────────────────────────────────────────────────────
@@ -660,6 +944,9 @@ class ReviewRequestCorrectionView(APIView):
         comment = request.data.get("comment", "")
         if not comment.strip() and not any(str(t.get("comment", "")).strip() for t in targets):
             return Response({"detail": "A correction instruction is required."}, status=400)
+        target_error = validate_correction_targets(submission.expected.form_template, targets)
+        if target_error:
+            return Response({"detail": target_error}, status=400)
 
         correction_submission = clone_for_nca_correction(submission)
         prior_status = submission.expected.workflow_status
@@ -888,7 +1175,7 @@ class ProviderRequestCorrectionView(APIView):
     def post(self, request, pk):
         visible = get_submission_for_user(request.user, pk=pk)
         submission = lock_submission(visible.pk)
-        if submission.expected.workflow_status not in ("PENDING_APPROVAL", "PROVIDER_RESUBMITTED"):
+        if submission.expected.workflow_status not in ("PENDING_APPROVAL", "PROVIDER_RESUBMITTED", "CORRECTION_REQUESTED"):
             return Response({"detail": "Only a form awaiting provider approval can be returned."}, status=400)
         reason = str(request.data.get("reason") or request.data.get("comment") or "").strip()
         targets = request.data.get("targets", [])
@@ -896,12 +1183,9 @@ class ProviderRequestCorrectionView(APIView):
             return Response({"detail": "A clear correction reason is required."}, status=400)
         if not isinstance(targets, list) or not targets:
             return Response({"detail": "Identify at least one section, field or grid cell to correct."}, status=400)
-        valid_types = {"SECTION", "FIELD", "GRID_CELL"}
-        for target in targets:
-            target_type = target.get("type")
-            target_id = str(target.get("id", "")).strip()
-            if target_type not in valid_types or not target_id:
-                return Response({"detail": "Every correction target requires a valid type and id."}, status=400)
+        target_error = validate_correction_targets(submission.expected.form_template, targets)
+        if target_error:
+            return Response({"detail": target_error}, status=400)
         prior_status = submission.expected.workflow_status
         for target in targets:
             CorrectionItem.objects.create(
@@ -954,6 +1238,29 @@ class SubmissionNotificationListView(generics.ListAPIView):
         if self.request.query_params.get("unread") in {"1", "true", "True"}:
             queryset = queryset.filter(is_read=False)
         return queryset
+
+
+class SubmissionNotificationSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        queryset = SubmissionNotification.objects.filter(recipient=request.user)
+        grouped = {
+            row["event__event_type"]: row["total"]
+            for row in queryset.filter(is_read=False).values("event__event_type").annotate(total=Count("id"))
+        }
+        pending_approval = 0
+        if request.user.role == "PROVIDER_APPROVER" and request.user.organization_id:
+            pending_approval = ExpectedSubmission.objects.filter(
+                provider__organization_id=request.user.organization_id,
+                workflow_status__in=["PENDING_APPROVAL", "PROVIDER_RESUBMITTED", "CORRECTION_REQUESTED"],
+            ).count()
+        return Response({
+            "unread": queryset.filter(is_read=False).count(),
+            "total": queryset.count(),
+            "by_event_type": grouped,
+            "pending_approval": pending_approval,
+        })
 
 
 class SubmissionNotificationReadView(APIView):

@@ -1,120 +1,44 @@
 "use client";
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { useToast } from "@/components/ui/Toast";
-import type { ExpectedSubmission, User } from "@/lib/types";
-
-function formatDue(iso: string) {
-  return new Date(iso).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" });
-}
+import type { ExpectedSubmission, PaginatedResponse, User } from "@/lib/types";
 
 export default function PendingApprovalPage() {
-  const { toast } = useToast();
-  const qc = useQueryClient();
-  const { data: user } = useQuery<User>({ queryKey:["me"], queryFn:()=>api("/auth/me/") });
-
-  const { data, isLoading } = useQuery<{ results: ExpectedSubmission[] }>({
-    queryKey: ["provider-pending-approval"],
-    queryFn: async () => {
-      const [pending, resubmitted] = await Promise.all([
-        api<any>("/expected-submissions/?workflow_status=PENDING_APPROVAL&ordering=period__due_at"),
-        api<any>("/expected-submissions/?workflow_status=PROVIDER_RESUBMITTED&ordering=period__due_at"),
-      ]);
-      return { ...pending, results: [...pending.results, ...resubmitted.results] };
-    },
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [deadline, setDeadline] = useState("");
+  const { data: user } = useQuery<User>({ queryKey: ["me"], queryFn: () => api("/auth/me/") });
+  const query = new URLSearchParams({ queue: "action_required", ordering: "period__due_at" });
+  if (search) query.set("search", search);
+  if (status) query.set("status", status);
+  if (deadline) query.set("deadline", deadline);
+  const { data, isLoading, error } = useQuery<PaginatedResponse<ExpectedSubmission>>({
+    queryKey: ["provider-approval-queue", search, status, deadline],
+    queryFn: () => api(`/provider-workspace/submissions/?${query}`),
+    enabled: user?.role === "PROVIDER_APPROVER",
   });
+  if (user && user.role !== "PROVIDER_APPROVER") return <div className="rounded-2xl border bg-white p-8"><h1 className="text-xl font-semibold">Provider Approver access required</h1><p className="mt-2 text-sm text-[#737780]">Data Entry users work from their shared dashboard.</p></div>;
 
-  const submissions = data?.results ?? [];
-
-  const submitToNCA = useMutation({
-    mutationFn: (submissionId: number) =>
-      api(`/submissions/${submissionId}/official-submit/`, { method: "POST" }),
-    onSuccess: () => {
-      toast("Submission officially sent to NCA.", "success");
-      qc.invalidateQueries({ queryKey: ["provider-pending-approval"] });
-    },
-    onError: () => toast("Failed to submit. Please try again.", "error"),
-  });
-
-  if (user && user.role !== "PROVIDER_APPROVER") {
-    return <div className="rounded-[16px] border bg-white p-8"><h1 className="text-xl font-semibold">Provider Approver access required</h1><p className="mt-2 text-sm text-[#737780]">Data Entry users submit forms to an Approver from My Forms and cannot access the approval queue.</p></div>;
-  }
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-[28px] font-semibold text-[#191c1e]">Pending Your Approval</h1>
-        <p className="mt-1 text-[14px] text-[#43474f]">
-          These submissions have been completed by your data entry team and are awaiting your review before official submission to NCA.
-        </p>
-      </div>
-
-      {!isLoading && submissions.length === 0 && (
-        <div className="rounded-[16px] border-2 border-dashed border-[#c3c6d0] py-16 text-center">
-          <p className="text-[20px] mb-1">✓</p>
-          <p className="text-[14px] font-medium text-[#191c1e]">No submissions pending your approval</p>
-          <p className="text-[13px] text-[#737780] mt-1">Your data entry team has not submitted anything yet.</p>
-        </div>
-      )}
-
-      {isLoading ? (
-        <div className="space-y-3">
-          {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-[12px]" />)}
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {submissions.map(s => (
-            <div key={s.id} className="rounded-[16px] border border-[#eceef0] bg-white p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <WorkflowBadge status={s.workflow_status} />
-                    <DueStateBadge state={s.due_state} />
-                  </div>
-                  <h3 className="text-[15px] font-semibold text-[#191c1e]">{s.form_name}</h3>
-                  <p className="text-[13px] text-[#43474f] mt-0.5">{s.period_name} · Due {formatDue(s.due_at)}</p>
-                </div>
-
-                <div className="flex gap-2 shrink-0">
-                  <Link href={`/provider/submissions/${s.id}`}
-                    className="rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] font-medium text-[#43474f] hover:bg-[#f2f4f6]">
-                    Review Form
-                  </Link>
-                  <button
-                    onClick={() => {
-                      if (s.latest_submission_id && confirm(`Officially submit "${s.form_name}" to NCA? This cannot be undone.`)) {
-                        submitToNCA.mutate(s.latest_submission_id);
-                      }
-                    }}
-                    disabled={submitToNCA.isPending}
-                    className="rounded-[8px] bg-[#001836] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#002d5b] disabled:opacity-50">
-                    ✓ Submit to NCA
-                  </button>
-                </div>
-              </div>
-
-              <div className="mt-3 pt-3 border-t border-[#eceef0] flex items-center gap-2 text-[12px] text-[#737780]">
-                <span>Form code: <span className="font-mono font-semibold text-[#43474f]">{s.form_code}</span></span>
-                <span>·</span>
-                <span>Provider: <span className="font-medium text-[#43474f]">{s.provider_name}</span></span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="rounded-[12px] bg-[#f7f9fb] border border-[#eceef0] px-5 py-4 text-[13px] text-[#43474f]">
-        <p className="font-semibold text-[#191c1e] mb-1">As Provider Approver, you are responsible for:</p>
-        <ul className="list-disc list-inside space-y-0.5 text-[12px]">
-          <li>Reviewing all data entered by your data entry team for accuracy and completeness</li>
-          <li>Returning submissions that need corrections before they reach NCA</li>
-          <li>Officially submitting accurate, complete returns to NCA on behalf of your organisation</li>
-        </ul>
-      </div>
+  return <div className="space-y-6">
+    <div><h1 className="text-[28px] font-semibold">Approval work queue</h1><p className="mt-1 text-sm text-[#43474f]">Review complete data, correct permitted values, return targeted work or submit with an accuracy attestation.</p></div>
+    <div className="grid gap-3 rounded-xl border bg-white p-4 md:grid-cols-[1fr_220px_180px]">
+      <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search form or period" className="rounded-lg border px-3 py-2 text-sm" />
+      <select aria-label="Approval stage" value={status} onChange={(e) => setStatus(e.target.value)} className="rounded-lg border px-3 py-2 text-sm"><option value="">All approval stages</option><option value="PENDING_APPROVAL">First approval</option><option value="PROVIDER_RESUBMITTED">Returned work</option><option value="CORRECTION_REQUESTED">NCA correction</option></select>
+      <select aria-label="Deadline state" value={deadline} onChange={(e) => setDeadline(e.target.value)} className="rounded-lg border px-3 py-2 text-sm"><option value="">Any deadline</option><option value="OVERDUE">Overdue</option><option value="DUE_SOON">Due soon</option><option value="DUE_TODAY">Due today</option></select>
     </div>
-  );
+    {error && <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">The approval queue could not be loaded. Retry or contact technical support if this persists.</div>}
+    {isLoading ? <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}</div>
+    : !data?.results.length ? <div className="rounded-2xl border-2 border-dashed py-16 text-center"><p className="font-medium">No matching approval work</p><p className="mt-1 text-sm text-[#737780]">Change the filters or wait for Data Entry to submit a return.</p></div>
+    : <div className="space-y-3">{data.results.map((row) => <article key={row.id} className="rounded-2xl border bg-white p-5">
+      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+        <div><div className="flex flex-wrap items-center gap-2"><WorkflowBadge status={row.workflow_status} /><DueStateBadge state={row.due_state} /></div><h2 className="mt-2 font-semibold">{row.form_name}</h2><p className="text-sm text-[#737780]">{row.period_name} · {Number(row.completion_pct).toFixed(0)}% complete · {row.open_correction_count} open corrections</p><p className="mt-2 text-xs text-[#43474f]">Last edited by {row.last_edited_by_name || "Data Entry"}{row.last_edited_at ? ` on ${new Date(row.last_edited_at).toLocaleString()}` : ""}</p></div>
+        <Link href={`/provider/submissions/${row.id}`} className="rounded-lg bg-[#001836] px-5 py-2.5 text-center text-sm font-semibold text-white">Review submission</Link>
+      </div>
+    </article>)}</div>}
+  </div>;
 }

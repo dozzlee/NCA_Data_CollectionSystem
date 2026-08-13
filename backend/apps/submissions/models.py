@@ -1,5 +1,6 @@
 import uuid
 from django.db import models
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 
@@ -43,6 +44,7 @@ FIELD_STATUSES = [
 class ReportingPeriod(models.Model):
     FREQUENCY_CHOICES = [
         ("MONTHLY", "Monthly"),
+        ("QUARTERLY", "Quarterly"),
         ("SEMI_ANNUAL", "Semi-Annual"),
         ("ANNUAL", "Annual"),
     ]
@@ -56,6 +58,7 @@ class ReportingPeriod(models.Model):
     frequency = models.CharField(max_length=15, choices=FREQUENCY_CHOICES)
     year = models.PositiveIntegerField()
     month = models.PositiveIntegerField(null=True, blank=True)  # 1–12, monthly only
+    quarter = models.PositiveIntegerField(null=True, blank=True)
     opens_at = models.DateTimeField()
     due_at = models.DateTimeField()
     status = models.CharField(max_length=10, choices=PERIOD_STATUS_CHOICES, default="DRAFT")
@@ -66,6 +69,16 @@ class ReportingPeriod(models.Model):
 
     def __str__(self):
         return self.name
+
+    def clean(self):
+        if self.frequency == "MONTHLY" and not self.month:
+            raise ValidationError({"month": "Month is required for a monthly period."})
+        if self.month and (self.frequency != "MONTHLY" or not 1 <= self.month <= 12):
+            raise ValidationError({"month": "Month must be 1-12 and is only valid for monthly periods."})
+        if self.frequency == "QUARTERLY" and not self.quarter:
+            raise ValidationError({"quarter": "Quarter is required for a quarterly period."})
+        if self.quarter and (self.frequency != "QUARTERLY" or not 1 <= self.quarter <= 4):
+            raise ValidationError({"quarter": "Quarter must be 1-4 and is only valid for quarterly periods."})
 
     def activate(self):
         """Generate ExpectedSubmission records for all assigned provider-form pairs."""
@@ -79,33 +92,50 @@ class ReportingPeriod(models.Model):
         if invalid:
             raise ValueError("Period activation blocked. " + "; ".join(invalid))
         from apps.providers.models import ProviderFormAssignment
-        for provider in self.assigned_providers.all():
-            assignments = ProviderFormAssignment.objects.filter(
-                provider=provider,
-                form_family__canonical_frequency=self.frequency,
-                effective_from__lte=self.due_at.date(),
-            ).filter(models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=self.opens_at.date()))
-            if not assignments.exists():
-                raise ValueError(f"No confirmed official form assignment exists for {provider.registered_name}.")
-            required_family_ids = set(assignments.filter(obligation__in=["REQUIRED", "OPTIONAL"]).values_list("form_family_id", flat=True))
-            forms = self.applicable_form_templates.filter(family_id__in=required_family_ids, frequency=self.frequency)
-            present_family_ids = set(forms.values_list("family_id", flat=True))
-            missing = required_family_ids - present_family_ids
-            if missing:
-                codes = ", ".join(ProviderFormAssignment.objects.filter(provider=provider, form_family_id__in=missing).values_list("form_family__code", flat=True))
-                raise ValueError(f"The period is missing officially assigned form templates for {provider.registered_name}: {codes}.")
-            for form in forms:
-                ExpectedSubmission.objects.get_or_create(
-                    provider=provider,
-                    form_template=form,
-                    period=self,
-                    defaults={"workflow_status": "NOT_STARTED"},
-                )
+        provider_ids = set(self.assigned_providers.values_list("id", flat=True))
+        template_ids = set(self.applicable_form_templates.values_list("id", flat=True))
+        recurring = ProviderFormAssignment.objects.filter(
+            form_family__canonical_frequency=self.frequency,
+            obligation__in=["REQUIRED", "OPTIONAL"], effective_from__lte=self.due_at.date(),
+        ).filter(models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=self.opens_at.date()))
+        if provider_ids:
+            recurring = recurring.filter(provider_id__in=provider_ids)
+        for assignment in recurring.select_related("provider", "form_family"):
+            form = assignment.form_family.versions.filter(
+                status="ACTIVE", approval_status="APPROVED", frequency=self.frequency,
+            ).order_by("-published_at", "-id").first()
+            if not form:
+                raise ValueError(f"No active approved {assignment.form_family.code} version is available.")
+            if template_ids and form.id not in template_ids:
+                continue
+            ExpectedSubmission.create_from_assignment(
+                provider=assignment.provider, form_template=form, period=self,
+                recurring_assignment=assignment, actor=self.created_by,
+            )
+        for manual in self.manual_form_assignments.select_related("provider", "form_template", "assigned_by"):
+            ExpectedSubmission.create_from_assignment(
+                provider=manual.provider, form_template=manual.form_template, period=self,
+                manual_assignment=manual, actor=manual.assigned_by,
+            )
         self.status = "ACTIVE"
         self.save()
 
     class Meta:
         ordering = ["-year", "-month"]
+
+
+class PeriodFormAssignment(models.Model):
+    """One exact form version sent to one provider for one reporting period."""
+    period = models.ForeignKey(ReportingPeriod, on_delete=models.PROTECT, related_name="manual_form_assignments")
+    form_template = models.ForeignKey("forms_engine.FormTemplate", on_delete=models.PROTECT, related_name="period_assignments")
+    provider = models.ForeignKey("providers.ProviderProfile", on_delete=models.PROTECT, related_name="period_form_assignments")
+    mismatch_override_reason = models.TextField(blank=True)
+    assigned_by = models.ForeignKey("users.User", on_delete=models.PROTECT, related_name="period_form_assignments")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [models.UniqueConstraint(fields=["period", "form_template", "provider"], name="unique_manual_period_form_provider")]
 
 
 class ReminderPolicy(models.Model):
@@ -139,6 +169,35 @@ class ExpectedSubmission(models.Model):
         related_name="replaces_legacy_obligation",
     )
     migration_report = models.JSONField(default=dict, blank=True)
+    recurring_assignment = models.ForeignKey(
+        "providers.ProviderFormAssignment", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="expected_submissions",
+    )
+    manual_assignment = models.ForeignKey(
+        PeriodFormAssignment, null=True, blank=True, on_delete=models.PROTECT,
+        related_name="expected_submissions",
+    )
+
+    @classmethod
+    def create_from_assignment(cls, *, provider, form_template, period, recurring_assignment=None, manual_assignment=None, actor=None):
+        expected, created = cls.objects.get_or_create(
+            provider=provider, form_template=form_template, period=period,
+            defaults={
+                "workflow_status": "NOT_STARTED",
+                "recurring_assignment": recurring_assignment,
+                "manual_assignment": manual_assignment,
+            },
+        )
+        if created:
+            from .workflow import emit_submission_event
+            submission = Submission.objects.create(expected=expected, version=1)
+            emit_submission_event(
+                submission=submission, actor=actor, event_type="FORM_ASSIGNED",
+                message=f"{form_template.name} was assigned for {period.name}.",
+                to_status="NOT_STARTED", audience="PROVIDER", notify=["PROVIDER_DATA_ENTRY"],
+                title="New form assigned",
+            )
+        return expected, created
 
     def compute_due_state(self):
         now = timezone.now()
@@ -219,6 +278,11 @@ class Submission(models.Model):
     )
     reviewed_at = models.DateTimeField(null=True, blank=True)
     revision = models.PositiveIntegerField(default=0)
+    last_edited_by = models.ForeignKey(
+        "users.User", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="last_edited_submissions",
+    )
+    last_edited_at = models.DateTimeField(null=True, blank=True)
     supersedes = models.OneToOneField(
         "self", null=True, blank=True, on_delete=models.PROTECT,
         related_name="superseded_by",
@@ -232,6 +296,49 @@ class Submission(models.Model):
     class Meta:
         ordering = ["-version"]
         unique_together = [["expected", "version"]]
+
+
+class ProviderEditBatch(models.Model):
+    """Immutable record of one Provider Approver section save."""
+
+    submission = models.ForeignKey(Submission, on_delete=models.PROTECT, related_name="provider_edit_batches")
+    actor = models.ForeignKey("users.User", on_delete=models.PROTECT, related_name="provider_edit_batches")
+    stage = models.CharField(max_length=30)
+    section_code = models.CharField(max_length=100)
+    base_revision = models.PositiveIntegerField()
+    resulting_revision = models.PositiveIntegerField()
+    item_count = models.PositiveIntegerField(default=0)
+    changes_sha256 = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+
+class ProviderEditItem(models.Model):
+    """Sensitive before/after values, visible only within the provider tenant and NCA."""
+
+    batch = models.ForeignKey(ProviderEditBatch, on_delete=models.PROTECT, related_name="items")
+    target_type = models.CharField(max_length=20, choices=[("FIELD", "Field"), ("GRID_CELL", "Grid cell")])
+    target_id = models.CharField(max_length=255)
+    before = models.JSONField(default=dict)
+    after = models.JSONField(default=dict)
+
+    class Meta:
+        ordering = ["id"]
+
+
+class ProviderApprovalDecision(models.Model):
+    """The immutable provider attestation attached to an official version."""
+
+    submission = models.OneToOneField(Submission, on_delete=models.PROTECT, related_name="provider_approval")
+    approver = models.ForeignKey("users.User", on_delete=models.PROTECT, related_name="provider_approval_decisions")
+    attestation = models.BooleanField()
+    approval_note = models.TextField(blank=True)
+    change_summary = models.TextField(blank=True)
+    approver_edited = models.BooleanField(default=False)
+    edit_batch_count = models.PositiveIntegerField(default=0)
+    decided_at = models.DateTimeField(auto_now_add=True)
 
 
 class ValidationRun(models.Model):

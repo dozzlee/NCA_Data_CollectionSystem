@@ -157,6 +157,18 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
             "complete": provided >= required,
         })
 
+    validation_issues = [
+        {
+            "id": result.id,
+            "severity": result.severity,
+            "target_type": result.target_type,
+            "target_id": result.target_id,
+            "code": result.code,
+            "message": result.message,
+            "details": result.details,
+        }
+        for result in validation_run.results.all()
+    ]
     return {
         "completion_pct": completion_pct,
         "can_submit": not blockers,
@@ -165,6 +177,7 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
         "blocking_issues": blockers,
         "validation_run_id": validation_run.id,
         "warning_count": validation_run.results.filter(severity="WARN").count(),
+        "validation_issues": validation_issues,
         "sections": sections,
     }
 

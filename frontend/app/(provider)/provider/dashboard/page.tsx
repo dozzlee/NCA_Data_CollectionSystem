@@ -5,176 +5,75 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { WorkflowBadge, DueStateBadge } from "@/components/ui/Badge";
 import { Skeleton } from "@/components/ui/Skeleton";
-import type { ExpectedSubmission, User } from "@/lib/types";
-import { getDueStateRowBg } from "@/lib/utils";
+import type { ExpectedSubmission, PaginatedResponse, ProviderWorkspaceSummary, User } from "@/lib/types";
 
-function formatDue(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-GB", { day:"numeric", month:"short", year:"numeric" });
-}
-
-const STATUS_GROUPS = [
-  { label:"Action Required", statuses:["PROVIDER_CHANGES_REQUESTED","CORRECTION_REQUESTED"], color:"#ffe8e8", text:"#c0112a" },
-  { label:"In Progress",     statuses:["NOT_STARTED","DRAFT"],                            color:"#e8f1fb", text:"#004999" },
-  { label:"Pending Approval",statuses:["PENDING_APPROVAL","PROVIDER_RESUBMITTED"],        color:"#fff3bf", text:"#7a5c00" },
-  { label:"Submitted / Done",statuses:["SUBMITTED","UNDER_REVIEW","RESUBMITTED","APPROVED"], color:"#e5f4eb", text:"#1f7a4d" },
-];
-
-function actionLabel(status: string): string {
-  if (status === "NOT_STARTED") return "Start";
-  if (["DRAFT","PROVIDER_CHANGES_REQUESTED","CORRECTION_REQUESTED"].includes(status)) return "Continue";
-  return "View";
-}
-
-function actionStyle(status: string): string {
-  if (["NOT_STARTED","DRAFT","PROVIDER_CHANGES_REQUESTED","CORRECTION_REQUESTED"].includes(status))
-    return "rounded-[6px] bg-[#001836] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#002d5b]";
-  return "rounded-[6px] border border-[#c3c6d0] px-3 py-1.5 text-[12px] font-medium text-[#43474f] hover:bg-[#f2f4f6]";
+function displayDate(value: string | null) {
+  return value ? new Date(value).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—";
 }
 
 export default function ProviderDashboardPage() {
-  const { data: user } = useQuery<User>({ queryKey:["me"], queryFn:()=>api("/auth/me/"), staleTime:5*60*1000 });
-  const { data, isLoading } = useQuery<{ results: ExpectedSubmission[] }>({
-    queryKey: ["provider-expected-submissions"],
-    queryFn: () => api("/expected-submissions/?ordering=period__due_at"),
+  const { data: user } = useQuery<User>({ queryKey: ["me"], queryFn: () => api("/auth/me/"), staleTime: 300_000 });
+  const { data: summary, isLoading: summaryLoading } = useQuery<ProviderWorkspaceSummary>({
+    queryKey: ["provider-workspace-summary"], queryFn: () => api("/provider-workspace/summary/"),
   });
-
-  const submissions = data?.results ?? [];
+  const { data, isLoading } = useQuery<PaginatedResponse<ExpectedSubmission>>({
+    queryKey: ["provider-workspace", "action_required"],
+    queryFn: () => api("/provider-workspace/submissions/?queue=action_required&ordering=period__due_at&page_size=20"),
+  });
   const isApprover = user?.role === "PROVIDER_APPROVER";
+  const cards = isApprover ? [
+    ["Awaiting approval", summary?.awaiting_approver ?? 0],
+    ["NCA corrections", summary?.nca_corrections ?? 0],
+    ["Returned to Data Entry", summary?.returned_to_data_entry ?? 0],
+    ["Overdue", summary?.overdue ?? 0],
+  ] : [
+    ["Action required", summary?.action_required ?? 0],
+    ["Drafts", summary?.drafts ?? 0],
+    ["Due soon", summary?.due_soon ?? 0],
+    ["Overdue", summary?.overdue ?? 0],
+  ];
+  const rows = data?.results ?? [];
 
-  // Data entry sees active work (not yet submitted to NCA)
-  // Approver sees their full list on this page (pending approval is on /pending-approval)
-  const activeSubmissions = isApprover
-    ? submissions
-    : submissions.filter(s => !["SUBMITTED","UNDER_REVIEW","APPROVED","REJECTED"].includes(s.workflow_status));
-
-  const overdue = submissions.filter(s => s.due_state === "OVERDUE" && s.workflow_status !== "APPROVED");
-  const dueSoon = submissions.filter(s => s.due_state === "DUE_SOON" && !["APPROVED","SUBMITTED"].includes(s.workflow_status));
-
-  return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-[28px] font-semibold text-[#191c1e]">
-          {isApprover ? "Submissions Overview" : "My Forms"}
-        </h1>
-        <p className="mt-1 text-[14px] text-[#43474f]">
-          {isApprover
-            ? "Review all submissions for your organisation. Go to Pending Approval to officially submit to NCA."
-            : "Your assigned regulatory data submissions."}
-        </p>
-      </div>
-
-      {/* Alert banners */}
-      {!isLoading && overdue.length > 0 && (
-        <div className="flex items-start gap-3 rounded-[12px] border border-[#e31937]/30 bg-[#ffe8e8] px-5 py-4">
-          <span className="text-[#e31937] text-[18px] mt-0.5">⚠</span>
-          <div>
-            <p className="text-[14px] font-semibold text-[#c0112a]">
-              {overdue.length} overdue submission{overdue.length > 1 ? "s" : ""}
-            </p>
-            <p className="text-[13px] text-[#c0112a]/80 mt-0.5">Submit as soon as possible to avoid compliance action.</p>
-          </div>
-        </div>
-      )}
-      {!isLoading && dueSoon.length > 0 && (
-        <div className="flex items-start gap-3 rounded-[12px] border border-[#ffd100]/50 bg-[#fff3bf] px-5 py-4">
-          <span className="text-[#7a5c00] text-[18px] mt-0.5">⏰</span>
-          <div>
-            <p className="text-[14px] font-semibold text-[#7a5c00]">
-              {dueSoon.length} submission{dueSoon.length > 1 ? "s" : ""} due within 7 days
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Stat cards */}
-      {isLoading ? (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[80px] rounded-[12px]" />)}
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          {STATUS_GROUPS.map(g => {
-            const count = submissions.filter(s => g.statuses.includes(s.workflow_status)).length;
-            return (
-              <div key={g.label} className="rounded-[12px] px-5 py-4" style={{ background: g.color }}>
-                <p className="text-[28px] font-bold" style={{ color: g.text }}>{count}</p>
-                <p className="mt-0.5 text-[11px] font-semibold uppercase tracking-wide text-[#43474f]">{g.label}</p>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Submissions list */}
-      <div className="rounded-[16px] border border-[#eceef0] bg-white overflow-hidden">
-        <div className="border-b border-[#eceef0] px-6 py-4 flex items-center justify-between">
-          <h2 className="text-[16px] font-semibold text-[#191c1e]">
-            {isApprover ? "All Submissions" : "Active Submissions"}
-          </h2>
-          {!isApprover && (
-            <Link href="/provider/history" className="text-[13px] font-medium text-[#0066cc] hover:underline">
-              View history →
-            </Link>
-          )}
-        </div>
-
-        {isLoading ? (
-          <div className="divide-y divide-[#eceef0]">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="px-6 py-4"><Skeleton className="h-4 w-1/2 mb-2" /><Skeleton className="h-3 w-1/4" /></div>
-            ))}
-          </div>
-        ) : activeSubmissions.length === 0 ? (
-          <div className="px-8 py-14 text-center space-y-3">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#f2f4f6] text-[22px]">
-              📋
-            </div>
-            <p className="text-[15px] font-semibold text-[#191c1e]">No forms assigned yet</p>
-            <p className="text-[13px] text-[#43474f] max-w-sm mx-auto leading-relaxed">
-              Submissions are opened by the NCA when a reporting period is activated for your
-              organisation. You will see your forms here as soon as a period is live.
-            </p>
-            <p className="text-[12px] text-[#737780]">
-              If you believe forms should be visible, contact your NCA officer or use the{" "}
-              <a href="/provider/inquiries" className="text-[#0066cc] hover:underline font-medium">
-                Inquiries
-              </a>{" "}
-              page to raise a query.
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-[#eceef0]">
-            {activeSubmissions.map(s => (
-              <div key={s.id} className={`flex items-center justify-between gap-4 px-6 py-4 hover:brightness-[0.97] transition-colors ${getDueStateRowBg(s.due_state, s.workflow_status)}`}>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-[14px] font-medium text-[#191c1e]">{s.form_name}</p>
-                  <p className="mt-0.5 text-[12px] text-[#737780]">
-                    {s.period_name} · Due {formatDue(s.due_at)}
-                  </p>
-                  {s.workflow_status === "PENDING_APPROVAL" && !isApprover && (
-                    <p className="mt-1 text-[11px] text-[#7a5c00] font-medium">Awaiting approver review</p>
-                  )}
-                  {s.workflow_status === "CORRECTION_REQUESTED" && (
-                    <p className="mt-1 text-[11px] text-[#c0112a] font-medium">NCA has requested corrections</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-3 shrink-0">
-                  <DueStateBadge state={s.due_state} />
-                  <WorkflowBadge status={s.workflow_status} />
-                  {/* Data entry: can't touch PENDING_APPROVAL unless correction requested */}
-                  {!isApprover && s.workflow_status === "PENDING_APPROVAL" ? (
-                    <Link href={`/provider/submissions/${s.id}`} className={actionStyle("view")}>View</Link>
-                  ) : (
-                    <Link href={`/provider/submissions/${s.id}`} className={actionStyle(s.workflow_status)}>
-                      {actionLabel(s.workflow_status)}
-                    </Link>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+  return <div className="space-y-7">
+    <div>
+      <h1 className="text-[28px] font-semibold text-[#191c1e]">{isApprover ? "Approver workspace" : "Data Entry workspace"}</h1>
+      <p className="mt-1 text-sm text-[#43474f]">{isApprover
+        ? "Review returns, manage NCA corrections and submit verified data to NCA."
+        : "Shared work for your provider. Any Data Entry colleague can continue an editable return."}</p>
     </div>
-  );
+
+    {summary?.overdue ? <div className="rounded-xl border border-[#e31937]/30 bg-[#ffe8e8] px-5 py-4 text-sm text-[#9b1c1c]">
+      <strong>{summary.overdue} overdue return{summary.overdue === 1 ? "" : "s"}.</strong> Open the work item to see its current blocker and next action.
+    </div> : null}
+
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {summaryLoading ? Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-24 rounded-xl" />) : cards.map(([label, count]) =>
+        <div key={label} className="rounded-xl border border-[#e6e8ea] bg-white p-5">
+          <p className="text-3xl font-bold text-[#002d5b]">{count}</p><p className="mt-1 text-xs font-semibold uppercase tracking-wide text-[#737780]">{label}</p>
+        </div>)}
+    </div>
+
+    <section className="overflow-hidden rounded-2xl border border-[#e6e8ea] bg-white">
+      <div className="flex items-center justify-between border-b border-[#eceef0] px-6 py-4">
+        <div><h2 className="font-semibold text-[#191c1e]">Action required</h2><p className="text-xs text-[#737780]">Server-calculated queue across every provider return</p></div>
+        {isApprover && <Link href="/provider/pending-approval" className="text-sm font-medium text-[#0066cc]">Open full queue →</Link>}
+      </div>
+      {isLoading ? <div className="space-y-3 p-6">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+      : rows.length === 0 ? <div className="p-12 text-center"><p className="font-medium text-[#191c1e]">Nothing needs your action</p><p className="mt-1 text-sm text-[#737780]">New drafts, approval work and corrections will appear here.</p></div>
+      : <div className="divide-y divide-[#eceef0]">{rows.map((row) => <article key={row.id} className="grid gap-4 px-6 py-4 md:grid-cols-[1fr_auto] md:items-center">
+        <div>
+          <div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-[#191c1e]">{row.form_name}</h3><WorkflowBadge status={row.workflow_status} /><DueStateBadge state={row.due_state} /></div>
+          <p className="mt-1 text-xs text-[#737780]">{row.period_name} · Effective deadline {displayDate(row.effective_due_at)}</p>
+          <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[#43474f]">
+            <span>{Number(row.completion_pct).toFixed(0)}% complete</span>
+            <span>{row.open_correction_count} open correction{row.open_correction_count === 1 ? "" : "s"}</span>
+            <span>Last edit: {row.last_edited_by_name || "Not edited"}{row.last_edited_at ? ` · ${new Date(row.last_edited_at).toLocaleString()}` : ""}</span>
+          </div>
+        </div>
+        <Link href={`/provider/submissions/${row.id}`} className="rounded-lg bg-[#002d5b] px-4 py-2 text-center text-sm font-semibold text-white">
+          {row.permitted_actions.includes("EDIT") ? "Open and work" : "Review"}
+        </Link>
+      </article>)}</div>}
+    </section>
+  </div>;
 }
