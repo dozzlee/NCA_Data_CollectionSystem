@@ -199,7 +199,7 @@ export interface FormTemplate {
   kmz_required: boolean;
   excel_backup_enabled: boolean;
   mapping_complete: boolean;
-  mapping_basis: "LEGACY" | "PRD_SECTION_11" | "SOURCE_FORM";
+  mapping_basis: "LEGACY" | "PRD_SECTION_11" | "SOURCE_FORM" | "CUSTOM";
   approval_status: "DRAFT" | "PENDING_APPROVAL" | "APPROVED";
   source_reference: string;
   source_sha256: string;
@@ -243,8 +243,18 @@ export interface FormSection {
   sort_order: number;
   kmz_upload_required: boolean;
   kmz_requirements: KMZRequirement[];
+  headings: FormHeading[];
   fields: FormField[];
   grids: FormGrid[];
+}
+
+export interface FormHeading {
+  id: number;
+  heading_code: string;
+  title: string;
+  level: 1 | 2 | 3;
+  sort_order: number;
+  source_row: number;
 }
 
 export interface KMZRequirement {
@@ -257,6 +267,8 @@ export interface KMZRequirement {
 
 export interface FormField {
   id: number;
+  heading: number | null;
+  heading_code: string;
   field_code: string;
   label: string;
   field_type: FieldType;
@@ -340,6 +352,8 @@ export interface ExpectedSubmission {
   form_code: FormCode;
   form_name: string;
   form_sector: Sector;
+  form_version: string;
+  form_created_at: string;
   period: number;
   period_name: string;
   due_at: string;
@@ -362,6 +376,10 @@ export interface ExpectedSubmission {
   receipt_reference: string | null;
   permitted_actions: string[];
   assignment_source: { type: "MANUAL" | "RECURRING" | "LEGACY"; id: number | null };
+  ownership_label: "Shared Data Entry queue";
+  data_entry_team: Array<{ id: string; name: string; email: string }>;
+  last_data_entry_editor: { id: string; name: string; email: string; edited_at: string } | null;
+  sent_at: string;
   created_at: string;
 }
 
@@ -377,15 +395,23 @@ export interface FormWorkbookImport {
   file_size: number;
   sha256: string;
   scan_status: "PENDING" | "CLEAN" | "INFECTED" | "ERROR";
+  scan_engine: string;
+  scan_details: string;
   parse_status: "PENDING" | "READY" | "FAILED" | "CONFIRMED";
   parser_version: string;
   detected_schema: {
-    sections: Array<{
+    parser_version?: string;
+    grouping?: { strategy:"worksheet-tabs"; visible_worksheet_count:number; engine?:"streaming" };
+    sections?: Array<{
       section_code: string;
       title: string;
       instructions: string;
-      fields: Array<{ field_code:string; label:string; field_type:FieldType; unit:string; is_required:boolean; help_text:string; formula:string; options:string[] }>;
-      grids: Array<{ grid_code:string; title:string; row_mode:"FIXED"|"REPEATABLE"; min_rows:number; instructions:string; columns:Array<{column_code:string;label:string;field_type:FieldType;unit:string;is_required:boolean}>; fixed_rows:string[] }>;
+      worksheet_order: number;
+      source: { sheet:string; sheet_index:number };
+      column_mapping: { detected:boolean; header_row:number|null; indicator_column:number|null; definition_column:number|null; data_type_column:number|null; unit_column:number|null; required_column:number|null; options_column:number|null; candidates:Array<{row:number;columns:Array<{column:number;label:string}>}> };
+      headings: Array<{ heading_code:string; title:string; level:1|2|3; source_order:number; source_row:number; source:{sheet:string;row:number}; parser_version:string }>;
+      fields: Array<{ source_order:number; field_code:string; heading_code:string; label:string; field_type:FieldType; unit:string; is_required:boolean; help_text:string; formula:string; options:string[]; source:{sheet:string;row:number;heading:string}; parser_version:string }>;
+      grids: Array<{ source_order:number; grid_code:string; title:string; row_mode:"FIXED"|"REPEATABLE"; min_rows:number; instructions:string; columns:Array<{column_code:string;label:string;field_type:FieldType;unit:string;is_required:boolean}>; fixed_rows:string[]; source:{sheet:string;row:number;heading:string}; parser_version:string }>;
     }>;
   };
   warnings: Array<{ code:string; severity:string; message:string }>;
@@ -399,6 +425,7 @@ export interface ProviderWorkspaceSummary {
   role: "PROVIDER_DATA_ENTRY" | "PROVIDER_APPROVER";
   action_required: number;
   drafts: number;
+  awaiting_data_entry: number;
   due_soon: number;
   overdue: number;
   awaiting_approver: number;

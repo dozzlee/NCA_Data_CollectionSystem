@@ -10,6 +10,14 @@ SAFE_STATUSES = {"NOT_STARTED", "DRAFT", "PENDING_APPROVAL"}
 
 def build_mapping(expected, target):
     source = expected.form_template
+    target_fields_by_code = {}
+    for field in target.sections.prefetch_related("fields").all():
+        for item in field.fields.all():
+            target_fields_by_code.setdefault(item.field_code, []).append(item)
+    target_grids_by_code = {}
+    for section in target.sections.prefetch_related("grids__columns", "grids__fixed_rows").all():
+        for grid in section.grids.all():
+            target_grids_by_code.setdefault(grid.grid_code, []).append(grid)
     target_fields = {
         (field.section.section_code, field.field_code): field
         for field in target.sections.prefetch_related("fields").all()
@@ -28,13 +36,21 @@ def build_mapping(expected, target):
         if value.field_id:
             key = (value.field.section.section_code, value.field.field_code)
             destination = target_fields.get(key)
+            if not destination and len(target_fields_by_code.get(value.field.field_code, [])) == 1:
+                destination = target_fields_by_code[value.field.field_code][0]
             if not destination:
-                issues.append(f"Unmapped field {key[0]}.{key[1]}")
+                matches = target_fields_by_code.get(value.field.field_code, [])
+                issues.append(
+                    f"Ambiguous field {key[1]} ({len(matches)} destinations)" if len(matches) > 1
+                    else f"Unmapped field {key[0]}.{key[1]}"
+                )
             else:
                 value_map.append((value, {"field": destination}))
             continue
         source_grid = value.grid
         destination_grid = target_grids.get((source_grid.section.section_code, source_grid.grid_code))
+        if not destination_grid and len(target_grids_by_code.get(source_grid.grid_code, [])) == 1:
+            destination_grid = target_grids_by_code[source_grid.grid_code][0]
         if not destination_grid:
             issues.append(f"Unmapped grid {source_grid.section.section_code}.{source_grid.grid_code}")
             continue
@@ -60,6 +76,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--commit", action="store_true")
         parser.add_argument("--expected-id", action="append", type=int)
+        parser.add_argument("--target-template-id", type=int)
 
     def handle(self, *args, **options):
         queryset = ExpectedSubmission.objects.filter(workflow_status__in=SAFE_STATUSES).select_related("form_template__family")
@@ -68,7 +85,13 @@ class Command(BaseCommand):
         reports, failures = [], []
         for expected in queryset:
             family = expected.form_template.family
-            target = family.versions.filter(status="ACTIVE", mapping_basis="PRD_SECTION_11").order_by("-published_at", "-id").first() if family else None
+            target = (
+                FormTemplate.objects.filter(pk=options["target_template_id"]).first()
+                if options["target_template_id"] else
+                family.versions.filter(status="ACTIVE").order_by("-published_at", "-id").first() if family else None
+            )
+            if target and family and target.family_id != family.id:
+                raise CommandError(f"Target template {target.id} is not in family {family.code}.")
             if not target or target.id == expected.form_template_id:
                 continue
             value_map, issues = build_mapping(expected, target)
@@ -91,15 +114,24 @@ class Command(BaseCommand):
         replacement, _ = ExpectedSubmission.objects.get_or_create(
             provider=source_expected.provider, form_template=target, period=source_expected.period,
             defaults={"workflow_status": "NOT_STARTED" if source_expected.workflow_status == "NOT_STARTED" else "DRAFT",
-                "due_state": source_expected.due_state, "assigned_officer": source_expected.assigned_officer},
+                "due_state": source_expected.due_state, "assigned_officer": source_expected.assigned_officer,
+                "recurring_assignment": source_expected.recurring_assignment,
+                "manual_assignment": source_expected.manual_assignment},
         )
-        if value_map and not replacement.versions.exists():
+        if not replacement.versions.exists():
             submission = Submission.objects.create(expected=replacement, version=1)
             SubmissionValue.objects.bulk_create([
                 SubmissionValue(submission=submission, value=source.value, value_status=source.value_status,
                     explanation=source.explanation, updated_by=source.updated_by, **destination)
                 for source, destination in value_map
             ])
+            from apps.submissions.workflow import emit_submission_event
+            emit_submission_event(
+                submission=submission, actor=None, event_type="FORM_VERSION_MIGRATED",
+                message=f"Editable obligation migrated from {source_expected.form_template.form_code} v{source_expected.form_template.version} to v{target.version}.",
+                from_status=source_expected.workflow_status, to_status=replacement.workflow_status,
+                audience="BOTH", metadata={"source_expected_id": source_expected.id, "migration_report": report},
+            )
         source_expected.workflow_status = "ARCHIVED"
         source_expected.replacement = replacement
         source_expected.migration_report = report

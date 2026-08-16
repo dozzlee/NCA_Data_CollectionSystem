@@ -12,9 +12,12 @@ All endpoints are below `/api/v1/`. Browser authentication uses rotating JWTs in
 
 - Form families/templates, sections, fields, options, grids, columns, fixed rows and validated rules
 - Template clone, source-map decision, gap recalculate/resolve and publication actions
-- `POST form-workbook-imports/`, `GET|PATCH form-workbook-imports/{id}/` and `POST form-workbook-imports/{id}/confirm/` provide private, scanned `.xlsx` schema import and reviewed draft generation. Workbook cell values are never provider-answer defaults.
-- `GET form-templates/{id}/assignment-preview/` and `GET|POST form-templates/{id}/assignments/` preview and create recurring or exact one-period provider assignments.
+- Publication checks expose the template basis. Only `PRD_SECTION_11` templates require Section 11 gap clearance; new manual `CUSTOM` and workbook `SOURCE_FORM` templates use their own structure, source, validation and Admin-approval checks.
+- `POST form-workbook-imports/`, `GET|PATCH form-workbook-imports/{id}/`, `POST form-workbook-imports/{id}/reparse/` and `POST form-workbook-imports/{id}/confirm/` provide private, scanned `.xlsx` schema import and reviewed draft generation. Parser `xlsx-worksheet-v4-definition-headings` creates one section per visible tab, maps Indicator/Definition metadata, and keeps historical workbook values out of provider answers. Missing metadata columns must be mapped and reparsed before confirmation.
+- Draft-template headings are managed under `GET|POST form-templates/{id}/sections/{section_id}/headings/` and `GET|PATCH|DELETE form-templates/{id}/sections/{section_id}/headings/{heading_id}/`. Fields may reference a heading; headings are non-interactive and never create submission values.
+- `GET form-templates/{id}/assignment-preview/` lists all active provider candidates with Data Entry/Approver readiness, mismatch, duplicate and blocking state; `GET|POST form-templates/{id}/assignments/` creates recurring schedules or exact one-period assignments as an atomic, idempotent batch. Manual responses identify immediately created obligations; recurring responses identify schedules and do not claim provider delivery before period activation.
 - `GET periods/{id}/assignment-preview/` resolves the exact recurring/manual obligations that period activation will create.
+- `GET provider-workspace/submissions/?queue=awaiting_data_entry` gives Provider Approvers read-only visibility of assigned forms still owned by Data Entry; `GET provider-workspace/summary/` includes `awaiting_data_entry`.
 - Provider/form assignments with CSV dry-run/commit and import template
 - Reporting periods support monthly, quarterly and annual creation while retaining historical semi-annual records; activation, reminders, deadline-change and submission-override decisions remain available.
 

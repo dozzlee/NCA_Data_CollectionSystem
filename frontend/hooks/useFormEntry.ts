@@ -34,7 +34,15 @@ interface CompletionData {
   completion_pct: number;
   can_submit: boolean;
   missing_required_count: number;
+  missing_indicator_count: number;
   missing_by_type: Record<string, number>;
+  completeness_warnings: {
+    code: string;
+    type: string;
+    id: number | string;
+    section_code: string;
+    label: string;
+  }[];
   blocking_issues: {
     code: string;
     type: string;
@@ -125,8 +133,13 @@ export function useStartSubmission() {
   return useMutation({
     mutationFn: (expectedId: number) =>
       api.post<Submission>(`/expected-submissions/${expectedId}/start/`),
-    onSuccess: () => {
+    onSuccess: (_response, expectedId) => {
       qc.invalidateQueries({ queryKey: ["expected-submissions"] });
+      qc.invalidateQueries({ queryKey: ["expected-submission", expectedId] });
+      qc.invalidateQueries({ queryKey: ["provider-workspace"] });
+      qc.invalidateQueries({ queryKey: ["provider-workspace-summary"] });
+      qc.invalidateQueries({ queryKey: ["submission-notifications"] });
+      qc.invalidateQueries({ queryKey: ["submission-notification-summary"] });
     },
   });
 }
@@ -137,7 +150,15 @@ export function useSubmitForApproval(submissionId: number) {
     mutationFn: () => api.post(`/submissions/${submissionId}/submit-for-approval/`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["submission", submissionId] });
+      qc.invalidateQueries({ queryKey: ["provider-review-data", submissionId] });
+      qc.invalidateQueries({ queryKey: ["submission-completion", submissionId] });
       qc.invalidateQueries({ queryKey: ["expected-submissions"] });
+      qc.invalidateQueries({ queryKey: ["provider-workspace"] });
+      qc.invalidateQueries({ queryKey: ["provider-workspace-summary"] });
+      qc.invalidateQueries({ queryKey: ["provider-approval-queue"] });
+      qc.invalidateQueries({ queryKey: ["submission-notifications"] });
+      qc.invalidateQueries({ queryKey: ["submission-notification-summary"] });
+      qc.invalidateQueries({ queryKey: ["provider-period-forms"] });
     },
   });
 }

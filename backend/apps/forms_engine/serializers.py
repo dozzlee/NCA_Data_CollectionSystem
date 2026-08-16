@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import FormFamily, FormTemplate, FormSection, FormField, FormGrid, GridColumn, GridRow, SelectOption, KMZUploadRequirement, ValidationRule, FormRequirement, FormGapAssessment, FormWorkbookImport
+from .models import FormFamily, FormTemplate, FormSection, FormHeading, FormField, FormGrid, GridColumn, GridRow, SelectOption, KMZUploadRequirement, ValidationRule, FormRequirement, FormGapAssessment, FormWorkbookImport
 from .workbook_import import normalize_form_code
 from .rules import validate_rule_definition
 
@@ -80,13 +80,25 @@ class FormGridSerializer(serializers.ModelSerializer):
         fields = ["id", "grid_code", "title", "row_mode", "min_rows", "sort_order", "instructions", "columns", "fixed_rows"]
 
 
+class FormHeadingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FormHeading
+        fields = ["id", "heading_code", "title", "level", "sort_order", "source_row"]
+
+    def validate_level(self, value):
+        if value not in {1, 2, 3}:
+            raise serializers.ValidationError("Heading level must be between 1 and 3.")
+        return value
+
+
 class FormFieldSerializer(serializers.ModelSerializer):
     options = SelectOptionSerializer(many=True, read_only=True)
+    heading_code = serializers.CharField(source="heading.heading_code", read_only=True)
 
     class Meta:
         model = FormField
         fields = [
-            "id", "field_code", "label", "field_type", "unit",
+            "id", "field_code", "label", "field_type", "unit", "heading", "heading_code",
             "is_required", "help_text", "formula",
             "conditional_on_field", "conditional_on_value",
             "sort_order", "export_name", "options",
@@ -94,6 +106,7 @@ class FormFieldSerializer(serializers.ModelSerializer):
 
 
 class FormSectionSerializer(serializers.ModelSerializer):
+    headings = FormHeadingSerializer(many=True, read_only=True)
     fields = FormFieldSerializer(many=True, read_only=True)
     grids = FormGridSerializer(many=True, read_only=True)
     kmz_requirements = serializers.SerializerMethodField()
@@ -114,7 +127,7 @@ class FormSectionSerializer(serializers.ModelSerializer):
         model = FormSection
         fields = [
             "id", "section_code", "title", "instructions", "sort_order",
-            "kmz_upload_required", "kmz_requirements", "fields", "grids",
+            "kmz_upload_required", "kmz_requirements", "headings", "fields", "grids",
         ]
 
 
@@ -122,7 +135,7 @@ class FormTemplateListSerializer(serializers.ModelSerializer):
     class Meta:
         model = FormTemplate
         fields = ["id", "family", "form_code", "name", "sector", "provider_category", "frequency", "version", "effective_from", "status", "kmz_required", "excel_backup_enabled", "mapping_complete", "mapping_basis", "approval_status", "source_reference", "source_sha256", "approved_by", "approved_at", "published_at"]
-        read_only_fields = ["family", "status", "approval_status", "approved_by", "approved_at", "published_at"]
+        read_only_fields = ["family", "mapping_basis", "status", "approval_status", "approved_by", "approved_at", "published_at"]
 
     def validate_form_code(self, value):
         try:
@@ -153,6 +166,11 @@ class FormTemplateListSerializer(serializers.ModelSerializer):
         if not created and family.canonical_frequency and family.canonical_frequency != validated_data["frequency"]:
             raise serializers.ValidationError({"frequency": "This form family already uses a different frequency."})
         validated_data["family"] = family
+        if created:
+            validated_data["mapping_basis"] = "CUSTOM"
+        else:
+            previous = family.versions.order_by("-published_at", "-created_at", "-id").first()
+            validated_data["mapping_basis"] = previous.mapping_basis if previous else "CUSTOM"
         return super().create(validated_data)
 
     def validate_source_sha256(self, value):

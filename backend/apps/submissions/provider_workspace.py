@@ -3,7 +3,7 @@ from django.db.models import Prefetch, Q
 from .models import ExpectedSubmission, Submission
 
 
-DATA_ENTRY_EDIT_STATES = {"DRAFT", "PROVIDER_CHANGES_REQUESTED"}
+DATA_ENTRY_EDIT_STATES = {"NOT_STARTED", "DRAFT", "PROVIDER_CHANGES_REQUESTED"}
 APPROVER_EDIT_STATES = {"PENDING_APPROVAL", "PROVIDER_RESUBMITTED", "CORRECTION_REQUESTED"}
 APPROVER_QUEUE_STATES = {"PENDING_APPROVAL", "PROVIDER_RESUBMITTED", "CORRECTION_REQUESTED"}
 OFFICIAL_STATES = {"SUBMITTED", "UNDER_REVIEW", "RESUBMITTED", "APPROVED", "REJECTED", "ARCHIVED"}
@@ -26,10 +26,10 @@ def permitted_actions(user, expected, latest=None):
     state = expected.workflow_status
     actions = ["VIEW"]
     if user.role == "PROVIDER_DATA_ENTRY":
-        if state == "NOT_STARTED":
-            actions.append("START")
         if latest and state in DATA_ENTRY_EDIT_STATES:
             actions.extend(["EDIT", "UPLOAD", "SUBMIT_FOR_APPROVAL"])
+        if state == "NOT_STARTED":
+            actions.append("START")
     elif user.role == "PROVIDER_APPROVER":
         if latest and state in APPROVER_EDIT_STATES:
             actions.extend(["EDIT", "UPLOAD", "REQUEST_CORRECTION", "OFFICIAL_SUBMIT"])
@@ -65,6 +65,8 @@ def apply_workspace_queue(queryset, user, queue):
         return queryset.filter(workflow_status__in=states)
     if queue == "drafts":
         return queryset.filter(workflow_status__in=["NOT_STARTED", "DRAFT"])
+    if queue == "awaiting_data_entry":
+        return queryset.filter(workflow_status__in=["NOT_STARTED", "DRAFT", "PROVIDER_CHANGES_REQUESTED"])
     if queue == "awaiting_approver":
         return queryset.filter(workflow_status__in=["PENDING_APPROVAL", "PROVIDER_RESUBMITTED"])
     if queue == "nca_corrections":
@@ -124,6 +126,9 @@ def summary_for_user(user):
         "role": user.role,
         "action_required": queryset.filter(workflow_status__in=action_states).count(),
         "drafts": queryset.filter(workflow_status__in=["NOT_STARTED", "DRAFT"]).count(),
+        "awaiting_data_entry": queryset.filter(
+            workflow_status__in=["NOT_STARTED", "DRAFT", "PROVIDER_CHANGES_REQUESTED"],
+        ).count(),
         "due_soon": queryset.filter(due_state__in=["DUE_SOON", "DUE_TODAY"]).exclude(workflow_status__in=OFFICIAL_STATES).count(),
         "overdue": queryset.filter(due_state="OVERDUE").exclude(workflow_status__in=OFFICIAL_STATES).count(),
         "awaiting_approver": queryset.filter(workflow_status__in=["PENDING_APPROVAL", "PROVIDER_RESUBMITTED"]).count(),

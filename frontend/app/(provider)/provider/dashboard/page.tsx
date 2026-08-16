@@ -13,6 +13,7 @@ function displayDate(value: string | null) {
 
 export default function ProviderDashboardPage() {
   const { data: user } = useQuery<User>({ queryKey: ["me"], queryFn: () => api("/auth/me/"), staleTime: 300_000 });
+  const isApprover = user?.role === "PROVIDER_APPROVER";
   const { data: summary, isLoading: summaryLoading } = useQuery<ProviderWorkspaceSummary>({
     queryKey: ["provider-workspace-summary"], queryFn: () => api("/provider-workspace/summary/"),
   });
@@ -20,8 +21,13 @@ export default function ProviderDashboardPage() {
     queryKey: ["provider-workspace", "action_required"],
     queryFn: () => api("/provider-workspace/submissions/?queue=action_required&ordering=period__due_at&page_size=20"),
   });
-  const isApprover = user?.role === "PROVIDER_APPROVER";
+  const awaitingDataEntry = useQuery<PaginatedResponse<ExpectedSubmission>>({
+    queryKey: ["provider-workspace", "awaiting_data_entry"],
+    queryFn: () => api("/provider-workspace/submissions/?queue=awaiting_data_entry&ordering=period__due_at&page_size=20"),
+    enabled: isApprover,
+  });
   const cards = isApprover ? [
+    ["Awaiting Data Entry", summary?.awaiting_data_entry ?? 0],
     ["Awaiting approval", summary?.awaiting_approver ?? 0],
     ["NCA corrections", summary?.nca_corrections ?? 0],
     ["Returned to Data Entry", summary?.returned_to_data_entry ?? 0],
@@ -46,8 +52,8 @@ export default function ProviderDashboardPage() {
       <strong>{summary.overdue} overdue return{summary.overdue === 1 ? "" : "s"}.</strong> Open the work item to see its current blocker and next action.
     </div> : null}
 
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-      {summaryLoading ? Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-24 rounded-xl" />) : cards.map(([label, count]) =>
+    <div className={`grid grid-cols-2 gap-4 ${isApprover ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
+      {summaryLoading ? Array.from({ length: isApprover ? 5 : 4 }).map((_, index) => <Skeleton key={index} className="h-24 rounded-xl" />) : cards.map(([label, count]) =>
         <div key={label} className="rounded-xl border border-[#e6e8ea] bg-white p-5">
           <p className="text-3xl font-bold text-[#002d5b]">{count}</p><p className="mt-1 text-xs font-semibold uppercase tracking-wide text-[#737780]">{label}</p>
         </div>)}
@@ -75,5 +81,15 @@ export default function ProviderDashboardPage() {
         </Link>
       </article>)}</div>}
     </section>
+
+    {isApprover && <section className="overflow-hidden rounded-2xl border border-[#e6e8ea] bg-white">
+      <div className="border-b border-[#eceef0] px-6 py-4"><h2 className="font-semibold text-[#191c1e]">Awaiting Data Entry</h2><p className="text-xs text-[#737780]">Track newly assigned forms. Data Entry owns editing until it submits the form for approval.</p></div>
+      {awaitingDataEntry.isLoading ? <div className="space-y-3 p-6">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+      : !(awaitingDataEntry.data?.results.length) ? <div className="p-10 text-center text-sm text-[#737780]">No forms are currently awaiting Data Entry.</div>
+      : <div className="divide-y divide-[#eceef0]">{awaitingDataEntry.data.results.map(row => <article key={row.id} className="grid gap-4 px-6 py-4 md:grid-cols-[1fr_auto] md:items-center">
+        <div><div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-[#191c1e]">{row.form_name}</h3><WorkflowBadge status={row.workflow_status} /><DueStateBadge state={row.due_state} /></div><p className="mt-1 text-xs text-[#737780]">{row.period_name} · {Number(row.completion_pct).toFixed(0)}% complete · Data Entry action required</p></div>
+        <Link href={`/provider/submissions/${row.id}`} className="rounded-lg border border-[#c3c6d0] px-4 py-2 text-center text-sm font-semibold text-[#43474f]">View progress</Link>
+      </article>)}</div>}
+    </section>}
   </div>;
 }

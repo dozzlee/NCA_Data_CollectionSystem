@@ -191,10 +191,12 @@ class ExpectedSubmission(models.Model):
         if created:
             from .workflow import emit_submission_event
             submission = Submission.objects.create(expected=expected, version=1)
+            expected.refresh_due_state()
             emit_submission_event(
                 submission=submission, actor=actor, event_type="FORM_ASSIGNED",
                 message=f"{form_template.name} was assigned for {period.name}.",
-                to_status="NOT_STARTED", audience="PROVIDER", notify=["PROVIDER_DATA_ENTRY"],
+                to_status="NOT_STARTED", audience="PROVIDER",
+                notify=["PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER"],
                 title="New form assigned",
             )
         return expected, created

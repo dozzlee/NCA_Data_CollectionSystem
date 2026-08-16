@@ -1,5 +1,6 @@
 import hashlib
 import os
+import threading
 import uuid
 from datetime import date
 
@@ -12,24 +13,39 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import (
-    FormFamily, FormTemplate, FormSection, FormField, FormGrid,
+    FormFamily, FormTemplate, FormSection, FormHeading, FormField, FormGrid,
     GridColumn, GridRow, SelectOption, KMZUploadRequirement, ValidationRule, FormRequirement, FormGapAssessment,
     FormWorkbookImport,
 )
 from .serializers import (
     FormTemplateListSerializer, FormTemplateDetailSerializer,
-    FormSectionSerializer, FormFieldSerializer, FormGridSerializer,
+    FormSectionSerializer, FormHeadingSerializer, FormFieldSerializer, FormGridSerializer,
     GridColumnSerializer, GridRowSerializer, SelectOptionSerializer, KMZRequirementSerializer,
     FormFamilySerializer, ValidationRuleSerializer, FormRequirementSerializer, FormGapAssessmentSerializer,
     FormWorkbookImportSerializer,
 )
-from .workbook_import import parse_workbook, create_template_from_import, normalize_form_code
+from .workbook_import import (
+    PARSER_VERSION, STREAMING_THRESHOLD_BYTES, create_template_from_import,
+    normalize_form_code, process_workbook_import_record,
+)
 from .gaps import recalculate_form_gaps
 from django.db import transaction
 from django.db import models
 from django.utils import timezone
 from apps.audit.services import record_audit
-from apps.uploads.scanner import scan_path
+
+
+def _schedule_workbook_import(import_id):
+    if settings.DEBUG:
+        threading.Thread(
+            target=process_workbook_import_record,
+            args=(import_id,),
+            name=f"workbook-import-{import_id}",
+            daemon=True,
+        ).start()
+        return
+    from .tasks import process_workbook_import
+    process_workbook_import.delay(import_id)
 
 
 def locked(form):
@@ -96,30 +112,23 @@ class FormWorkbookImportListCreateView(generics.ListCreateAPIView):
             form_code=form_code, name=request.data["name"].strip(), version=request.data["version"].strip(),
             sector=request.data["sector"], provider_category=request.data["provider_category"], frequency=frequency,
             file_name=os.path.basename(uploaded.name), file_size=uploaded.size, storage_path=storage_path,
-            sha256=digest.hexdigest(), created_by=request.user,
+            sha256=digest.hexdigest(), created_by=request.user, parser_version=PARSER_VERSION,
         )
-        try:
-            scan = scan_path(full_path)
-            workbook_import.scan_status = scan["status"]
-            workbook_import.scan_engine = scan["engine"]
-            workbook_import.scan_details = scan["details"]
-            if scan["status"] == "CLEAN":
-                schema, warnings = parse_workbook(full_path)
-                workbook_import.detected_schema = schema
-                workbook_import.warnings = warnings
-                workbook_import.parse_status = "READY"
-            else:
-                workbook_import.parse_status = "FAILED"
-        except Exception as exc:
-            workbook_import.scan_status = workbook_import.scan_status if workbook_import.scan_status != "PENDING" else "ERROR"
-            workbook_import.parse_status = "FAILED"
-            workbook_import.scan_details = str(exc)
-        workbook_import.save()
+        async_threshold = getattr(settings, "FORM_WORKBOOK_ASYNC_THRESHOLD_BYTES", STREAMING_THRESHOLD_BYTES)
+        is_async = uploaded.size >= async_threshold
+        if is_async:
+            _schedule_workbook_import(workbook_import.id)
+        else:
+            process_workbook_import_record(workbook_import.id)
+            workbook_import.refresh_from_db()
         record_audit(
             user=request.user, action="FORM_WORKBOOK_IMPORTED", entity_type="FormWorkbookImport", entity_id=workbook_import.id,
             after={"file_name": workbook_import.file_name, "sha256": workbook_import.sha256, "scan_status": workbook_import.scan_status, "parse_status": workbook_import.parse_status},
         )
-        response_status = status.HTTP_201_CREATED if workbook_import.parse_status == "READY" else status.HTTP_422_UNPROCESSABLE_ENTITY
+        # The upload itself created a durable import record even when scanning or
+        # parsing failed. Return that resource so the UI can open a diagnostic
+        # preview instead of reducing a useful parser error to a generic 422.
+        response_status = status.HTTP_202_ACCEPTED if is_async else status.HTTP_201_CREATED
         return Response(FormWorkbookImportSerializer(workbook_import).data, status=response_status)
 
 
@@ -136,6 +145,35 @@ class FormWorkbookImportDetailView(generics.RetrieveUpdateAPIView):
         return super().patch(request, *args, **kwargs)
 
 
+class ReparseFormWorkbookImportView(APIView):
+    permission_classes = [IsNCAEditor]
+
+    def post(self, request, pk):
+        item = generics.get_object_or_404(FormWorkbookImport, pk=pk)
+        if item.resulting_template_id:
+            return Response({"detail": "Confirmed imports are immutable."}, status=409)
+        column_mappings = request.data.get("column_mappings")
+        if not isinstance(column_mappings, dict):
+            return Response({"detail": "column_mappings must be an object keyed by worksheet name."}, status=400)
+        decisions = dict(item.mapping_decisions or {})
+        decisions["column_mappings"] = column_mappings
+        item.mapping_decisions = decisions
+        item.parse_status = "PENDING"
+        item.warnings = []
+        item.save(update_fields=["mapping_decisions", "parse_status", "warnings", "updated_at"])
+        async_threshold = getattr(settings, "FORM_WORKBOOK_ASYNC_THRESHOLD_BYTES", STREAMING_THRESHOLD_BYTES)
+        is_async = item.file_size >= async_threshold
+        if is_async:
+            _schedule_workbook_import(item.id)
+        else:
+            process_workbook_import_record(item.id)
+            item.refresh_from_db()
+        return Response(
+            FormWorkbookImportSerializer(item).data,
+            status=status.HTTP_202_ACCEPTED if is_async else status.HTTP_200_OK,
+        )
+
+
 class ConfirmFormWorkbookImportView(APIView):
     permission_classes = [IsNCAEditor]
 
@@ -146,7 +184,14 @@ class ConfirmFormWorkbookImportView(APIView):
             return Response({"detail": "The workbook must be clean and successfully parsed before confirmation."}, status=409)
         blocking_codes = {warning.get("code") for warning in item.warnings if warning.get("severity") == "BLOCKING"}
         resolved_codes = set((item.mapping_decisions or {}).get("resolved_warning_codes", []))
-        unresolved_codes = sorted(code for code in blocking_codes - resolved_codes if code)
+        # A missing Indicator/Definition mapping is objective structural state,
+        # not an advisory that can be dismissed. Reparse with a valid mapping
+        # before confirmation instead of resolving this warning manually.
+        structural_codes = {
+            code for code in blocking_codes
+            if code and code.startswith("MISSING_DEFINITION_COLUMNS_")
+        }
+        unresolved_codes = sorted(code for code in (blocking_codes - resolved_codes) | structural_codes if code)
         if unresolved_codes:
             return Response({"detail": "Resolve every blocking workbook warning before confirmation.", "warning_codes": unresolved_codes}, status=409)
         try:
@@ -160,6 +205,7 @@ class ConfirmFormWorkbookImportView(APIView):
 class FormTemplateDetailView(generics.RetrieveUpdateAPIView):
     permission_classes = [IsNCAOrReadOnly]
     queryset = FormTemplate.objects.prefetch_related(
+        "sections__headings",
         "sections__fields__options",
         "sections__grids__columns",
         "sections__grids__fixed_rows",
@@ -285,7 +331,7 @@ class CloneFormVersionView(APIView):
     permission_classes = [IsNCAEditor]
     @transaction.atomic
     def post(self, request, pk):
-        source=generics.get_object_or_404(FormTemplate.objects.prefetch_related("sections__fields__options","sections__grids__columns","sections__grids__fixed_rows"), pk=pk)
+        source=generics.get_object_or_404(FormTemplate.objects.prefetch_related("sections__headings","sections__fields__options","sections__grids__columns","sections__grids__fixed_rows"), pk=pk)
         version=request.data.get("version", "").strip()
         if not version: return Response({"detail":"version is required."},status=400)
         if FormTemplate.objects.filter(family=source.family,version=version).exists(): return Response({"detail":"This family/version already exists."},status=409)
@@ -296,11 +342,17 @@ class CloneFormVersionView(APIView):
         field_map = {}
         grid_map = {}
         section_map = {}
+        heading_map = {}
         for section in source.sections.all():
             new_section=FormSection.objects.create(form_template=clone,section_code=section.section_code,title=section.title,instructions=section.instructions,sort_order=section.sort_order,kmz_upload_required=section.kmz_upload_required)
             section_map[section.id] = new_section
+            for heading in section.headings.all():
+                heading_map[heading.id] = FormHeading.objects.create(
+                    section=new_section, heading_code=heading.heading_code, title=heading.title,
+                    level=heading.level, sort_order=heading.sort_order, source_row=heading.source_row,
+                )
             for field in section.fields.all():
-                new_field=FormField.objects.create(section=new_section,field_code=field.field_code,label=field.label,field_type=field.field_type,unit=field.unit,is_required=field.is_required,help_text=field.help_text,formula=field.formula,conditional_on_value=field.conditional_on_value,sort_order=field.sort_order,export_name=field.export_name)
+                new_field=FormField.objects.create(section=new_section,heading=heading_map.get(field.heading_id),field_code=field.field_code,label=field.label,field_type=field.field_type,unit=field.unit,is_required=field.is_required,help_text=field.help_text,formula=field.formula,conditional_on_value=field.conditional_on_value,sort_order=field.sort_order,export_name=field.export_name)
                 field_map[field.id] = new_field
                 SelectOption.objects.bulk_create([SelectOption(field=new_field,value=o.value,label=o.label,sort_order=o.sort_order) for o in field.options.all()])
             for grid in section.grids.all():
@@ -339,8 +391,10 @@ class ApproveFormVersionView(APIView):
         if request.user.role != "NCA_ADMIN":
             return Response({"detail":"Only an NCA Admin can publish a template. Officers can prepare and submit drafts for approval."},status=403)
         if not form.mapping_complete or not form.source_reference or len(form.source_sha256)!=64: return Response({"detail":"Complete the source map, source reference and SHA-256 before approval."},status=409)
-        recalculate_form_gaps(form, request.user)
-        if form.gap_assessments.filter(requirement__severity__in=["BLOCKER", "HIGH"], status__in=["MISSING", "PARTIAL"]).exists():
+        section_11_applicable = form.mapping_basis == "PRD_SECTION_11"
+        if section_11_applicable:
+            recalculate_form_gaps(form, request.user)
+        if section_11_applicable and form.gap_assessments.filter(requirement__severity__in=["BLOCKER", "HIGH"], status__in=["MISSING", "PARTIAL"]).exists():
             return Response({"detail":"Resolve all blocker/high Section 11 gaps before publication."},status=409)
         if not form.prepared_by_id or not form.sections.filter(models.Q(fields__isnull=False)|models.Q(grids__columns__isnull=False)).exists(): return Response({"detail":"A maker and at least one mapped data point are required."},status=409)
         if form.family.frequency_decision_status!="APPROVED" or not form.family.canonical_frequency: return Response({"detail":"Canonical frequency decision is pending."},status=409)
@@ -356,23 +410,45 @@ class PublicationChecksView(APIView):
     permission_classes=[IsNCAEditor]
     def get(self,request,pk):
         form=generics.get_object_or_404(FormTemplate.objects.select_related("family").prefetch_related("sections__fields","sections__grids__columns","validation_rules"),pk=pk)
-        recalculate_form_gaps(form, request.user)
+        section_11_applicable = form.mapping_basis == "PRD_SECTION_11"
+        if section_11_applicable:
+            recalculate_form_gaps(form, request.user)
         checks={
             "source_reference":bool(form.source_reference), "source_sha256":len(form.source_sha256)==64,
             "mapping_complete":form.mapping_complete, "frequency_decision":bool(form.family_id and form.family.frequency_decision_status=="APPROVED"),
             "has_sections":form.sections.exists(), "has_data_points":form.sections.filter(models.Q(fields__isnull=False)|models.Q(grids__columns__isnull=False)).exists(),
             "maker_identified":bool(form.prepared_by_id),
-            "section_11_gaps_clear":not form.gap_assessments.filter(requirement__severity__in=["BLOCKER", "HIGH"], status__in=["MISSING", "PARTIAL"]).exists(),
         }
-        return Response({"can_publish":all(checks.values()),"checks":checks,"preview":FormTemplateDetailSerializer(form).data})
+        if section_11_applicable:
+            checks["section_11_gaps_clear"] = not form.gap_assessments.filter(
+                requirement__severity__in=["BLOCKER", "HIGH"], status__in=["MISSING", "PARTIAL"],
+            ).exists()
+        return Response({
+            "can_publish":all(checks.values()), "checks":checks,
+            "section_11_applicable":section_11_applicable,
+            "publication_basis":"PRD_SECTION_11" if section_11_applicable else form.mapping_basis,
+            "preview":FormTemplateDetailSerializer(form).data,
+        })
 
 
-def _assignment_preview(form, provider_ids, *, mode, period=None, override_reason=""):
+def _assignment_preview(form, provider_ids, *, mode, period=None, override_reason="", lock=False):
     from apps.providers.models import ProviderProfile, ProviderFormAssignment
     from apps.submissions.models import PeriodFormAssignment
-    providers = ProviderProfile.objects.filter(pk__in=provider_ids, status="ACTIVE").order_by("registered_name")
+    from apps.users.models import User
+
+    selected_ids = set(map(int, provider_ids))
+    providers = ProviderProfile.objects.filter(status="ACTIVE").order_by("registered_name")
+    if lock:
+        providers = providers.select_for_update()
     rows = []
     for provider in providers:
+        has_data_entry = bool(provider.organization_id and User.objects.filter(
+            organization_id=provider.organization_id, role="PROVIDER_DATA_ENTRY", is_active=True,
+        ).exists())
+        has_approver = bool(provider.organization_id and User.objects.filter(
+            organization_id=provider.organization_id, role="PROVIDER_APPROVER", is_active=True,
+        ).exists())
+        ready = has_data_entry and has_approver
         mismatch = provider.sector != form.sector or provider.category != form.provider_category
         if mode == "MANUAL":
             duplicate = bool(period and PeriodFormAssignment.objects.filter(period=period, form_template=form, provider=provider).exists())
@@ -381,13 +457,26 @@ def _assignment_preview(form, provider_ids, *, mode, period=None, override_reaso
                 provider=provider, form_family=form.family,
                 effective_to__isnull=True, obligation__in=["REQUIRED", "OPTIONAL"],
             ).exists()
+        blocking_reason = ""
+        if not has_data_entry and not has_approver:
+            blocking_reason = "Add active Data Entry and Provider Approver accounts before sending."
+        elif not has_data_entry:
+            blocking_reason = "Add an active Provider Data Entry account before sending."
+        elif not has_approver:
+            blocking_reason = "Add an active Provider Approver account before sending."
+        elif duplicate:
+            blocking_reason = "This exact form version has already been sent for the selected period."
+        elif mismatch and not override_reason.strip():
+            blocking_reason = "A mismatch override reason is required."
         rows.append({
             "provider_id": provider.id, "provider_name": provider.registered_name,
             "provider_sector": provider.sector, "provider_category": provider.category,
-            "mismatch": mismatch, "duplicate": duplicate,
-            "can_assign": not duplicate and (not mismatch or bool(override_reason.strip())),
+            "selected": provider.id in selected_ids,
+            "has_data_entry": has_data_entry, "has_approver": has_approver, "ready": ready,
+            "mismatch": mismatch, "duplicate": duplicate, "blocking_reason": blocking_reason,
+            "can_assign": ready and not duplicate and (not mismatch or bool(override_reason.strip())),
         })
-    missing_ids = set(map(int, provider_ids)) - {row["provider_id"] for row in rows}
+    missing_ids = selected_ids - {row["provider_id"] for row in rows}
     return rows, missing_ids
 
 
@@ -399,15 +488,25 @@ class FormAssignmentPreviewView(APIView):
         form = generics.get_object_or_404(FormTemplate.objects.select_related("family"), pk=pk)
         provider_ids = [value for value in request.query_params.get("provider_ids", "").split(",") if value.isdigit()]
         mode = request.query_params.get("mode", "RECURRING").upper()
+        if mode not in {"RECURRING", "MANUAL"}:
+            return Response({"detail": "mode must be RECURRING or MANUAL."}, status=400)
         period = generics.get_object_or_404(ReportingPeriod, pk=request.query_params.get("period")) if mode == "MANUAL" and request.query_params.get("period") else None
+        if period and period.status != "ACTIVE":
+            return Response({"detail": "Forms can only be sent to an active reporting period."}, status=409)
+        if period and period.frequency != form.frequency:
+            return Response({"detail": "The form frequency must match the reporting period."}, status=409)
         rows, missing_ids = _assignment_preview(form, provider_ids, mode=mode, period=period, override_reason=request.query_params.get("override_reason", ""))
+        selected_rows = [row for row in rows if row["selected"]]
         return Response({
             "form_template": form.id, "mode": mode, "period": period.id if period else None,
             "due_at": period.due_at if period else None, "providers": rows,
             "missing_provider_ids": sorted(missing_ids),
             "summary": {
-                "selected": len(provider_ids), "assignable": sum(row["can_assign"] for row in rows),
-                "mismatches": sum(row["mismatch"] for row in rows), "duplicates": sum(row["duplicate"] for row in rows),
+                "selected": len(provider_ids), "assignable": sum(row["can_assign"] for row in selected_rows),
+                "mismatches": sum(row["mismatch"] for row in selected_rows),
+                "duplicates": sum(row["duplicate"] for row in selected_rows),
+                "not_ready": sum(not row["ready"] for row in selected_rows),
+                "blocked": sum(not row["can_assign"] and not row["duplicate"] for row in selected_rows) + len(missing_ids),
             },
         })
 
@@ -418,7 +517,7 @@ class FormAssignmentListCreateView(APIView):
     def get(self, request, pk):
         from apps.providers.models import ProviderFormAssignment
         from apps.submissions.models import PeriodFormAssignment
-        form = generics.get_object_or_404(FormTemplate.objects.select_related("family"), pk=pk)
+        form = generics.get_object_or_404(FormTemplate.objects.select_for_update().select_related("family"), pk=pk)
         recurring = ProviderFormAssignment.objects.filter(form_family=form.family).select_related("provider", "confirmed_by")
         manual = PeriodFormAssignment.objects.filter(form_template=form).select_related("provider", "period", "assigned_by")
         return Response({
@@ -441,32 +540,45 @@ class FormAssignmentListCreateView(APIView):
         form = generics.get_object_or_404(FormTemplate.objects.select_related("family"), pk=pk)
         if form.status != "ACTIVE" or form.approval_status != "APPROVED":
             return Response({"detail": "Only an active, approved form can be assigned."}, status=409)
-        provider_ids = request.data.get("provider_ids", [])
-        if not isinstance(provider_ids, list) or not provider_ids:
+        raw_provider_ids = request.data.get("provider_ids", [])
+        if not isinstance(raw_provider_ids, list) or not raw_provider_ids:
             return Response({"detail": "Select at least one provider."}, status=400)
+        try:
+            provider_ids = list(dict.fromkeys(int(value) for value in raw_provider_ids))
+        except (TypeError, ValueError):
+            return Response({"detail": "provider_ids must contain provider record IDs."}, status=400)
         mode = str(request.data.get("mode", "RECURRING")).upper()
         if mode not in {"RECURRING", "MANUAL"}:
             return Response({"detail": "mode must be RECURRING or MANUAL."}, status=400)
         override_reason = str(request.data.get("override_reason", "")).strip()
         period = None
         if mode == "MANUAL":
-            period = generics.get_object_or_404(ReportingPeriod, pk=request.data.get("period_id"))
-            if period.status == "CLOSED":
-                return Response({"detail": "Forms cannot be assigned to a closed period."}, status=409)
+            period = generics.get_object_or_404(ReportingPeriod.objects.select_for_update(), pk=request.data.get("period_id"))
+            if period.status != "ACTIVE":
+                return Response({"detail": "Forms can only be sent to an active reporting period."}, status=409)
             if period.frequency != form.frequency:
                 return Response({"detail": "The form frequency must match the reporting period."}, status=409)
-        rows, missing_ids = _assignment_preview(form, provider_ids, mode=mode, period=period, override_reason=override_reason)
+        rows, missing_ids = _assignment_preview(form, provider_ids, mode=mode, period=period, override_reason=override_reason, lock=True)
+        selected_rows = [row for row in rows if row["selected"]]
         if missing_ids:
             return Response({"detail": "One or more selected providers are unavailable.", "missing_provider_ids": sorted(missing_ids)}, status=400)
-        mismatches = [row for row in rows if row["mismatch"]]
+        not_ready = [row for row in selected_rows if not row["ready"]]
+        if not_ready:
+            return Response({
+                "detail": "Every selected provider must have active Data Entry and Provider Approver accounts before a form can be sent.",
+                "blocked": len(not_ready), "providers": not_ready,
+            }, status=409)
+        mismatches = [row for row in selected_rows if row["mismatch"]]
         if mismatches and not override_reason:
             return Response({"detail": "A reason is required to assign this form across a sector or provider-type mismatch.", "mismatches": mismatches}, status=409)
-        created, existing = 0, 0
+        obligations_created, duplicates, recurring_schedules_created = 0, 0, 0
+        obligation_references = []
+        recurring_references = []
         providers = {item.id: item for item in ProviderProfile.objects.filter(pk__in=provider_ids)}
-        for row in rows:
+        for row in selected_rows:
             provider = providers[row["provider_id"]]
             if row["duplicate"]:
-                existing += 1
+                duplicates += 1
                 continue
             if mode == "RECURRING":
                 effective_from = request.data.get("effective_from") or date.today().isoformat()
@@ -477,21 +589,44 @@ class FormAssignmentListCreateView(APIView):
                     source_reference=f"Form Builder assignment by {request.user.email}" + (f"; mismatch override: {override_reason}" if row["mismatch"] else ""),
                     confirmed_by=request.user,
                 )
-                created += 1
+                recurring_schedules_created += 1
+                recurring_references.append({
+                    "provider_id": provider.id,
+                    "provider_name": provider.registered_name,
+                    "assignment_id": assignment.id,
+                    "effective_from": assignment.effective_from,
+                    "effective_to": assignment.effective_to,
+                })
                 record_audit(user=request.user, action="FORM_RECURRING_ASSIGNMENT_CREATED", entity_type="ProviderFormAssignment", entity_id=assignment.id, after={"form": form.id, "provider": provider.id, "override_reason": override_reason if row["mismatch"] else ""})
             else:
                 assignment = PeriodFormAssignment.objects.create(
                     period=period, form_template=form, provider=provider,
                     mismatch_override_reason=override_reason if row["mismatch"] else "", assigned_by=request.user,
                 )
-                if period.status == "ACTIVE":
-                    ExpectedSubmission.create_from_assignment(
-                        provider=provider, form_template=form, period=period,
-                        manual_assignment=assignment, actor=request.user,
-                    )
-                created += 1
+                expected, _ = ExpectedSubmission.create_from_assignment(
+                    provider=provider, form_template=form, period=period,
+                    manual_assignment=assignment, actor=request.user,
+                )
+                obligations_created += 1
+                obligation_references.append({
+                    "provider_id": provider.id, "provider_name": provider.registered_name,
+                    "assignment_id": assignment.id, "expected_submission_id": expected.id,
+                    "submission_id": expected.versions.order_by("version").values_list("id", flat=True).first(),
+                    "period_id": period.id, "period_name": period.name,
+                    "due_at": expected.effective_due_at,
+                })
                 record_audit(user=request.user, action="FORM_MANUAL_ASSIGNMENT_CREATED", entity_type="PeriodFormAssignment", entity_id=assignment.id, after={"form": form.id, "provider": provider.id, "period": period.id, "override_reason": assignment.mismatch_override_reason})
-        return Response({"created": created, "existing": existing, "mode": mode}, status=201 if created else 200)
+        return Response({
+            "created": obligations_created + recurring_schedules_created,
+            "existing": duplicates,
+            "obligations_created": obligations_created,
+            "duplicates": duplicates,
+            "recurring_schedules_created": recurring_schedules_created,
+            "blocked": 0, "mode": mode,
+            "delivery_type": "IMMEDIATE" if mode == "MANUAL" else "SCHEDULED",
+            "obligations": obligation_references,
+            "recurring_schedules": recurring_references,
+        }, status=201 if obligations_created or recurring_schedules_created else 200)
 
 
 # ── Sections ──────────────────────────────────────────────────────────────────
@@ -503,7 +638,7 @@ class SectionListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
         return FormSection.objects.filter(
             form_template_id=self.kwargs["pk"]
-        ).prefetch_related("fields__options", "grids__columns", "grids__fixed_rows")
+        ).prefetch_related("headings", "fields__options", "grids__columns", "grids__fixed_rows")
 
     def perform_create(self, serializer):
         form = generics.get_object_or_404(FormTemplate, pk=self.kwargs["pk"])
@@ -533,16 +668,66 @@ class SectionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 # ── Fields ────────────────────────────────────────────────────────────────────
 
+class HeadingListCreateView(generics.ListCreateAPIView):
+    permission_classes = [IsNCAEditor]
+    serializer_class = FormHeadingSerializer
+
+    def get_queryset(self):
+        return FormHeading.objects.filter(
+            section_id=self.kwargs["sid"], section__form_template_id=self.kwargs["pk"],
+        )
+
+    def perform_create(self, serializer):
+        section = generics.get_object_or_404(
+            FormSection, pk=self.kwargs["sid"], form_template_id=self.kwargs["pk"],
+        )
+        reject_if_locked(section.form_template)
+        next_order = max(
+            list(section.headings.values_list("sort_order", flat=True))
+            + list(section.fields.values_list("sort_order", flat=True))
+            + list(section.grids.values_list("sort_order", flat=True))
+            + [0]
+        ) + 1
+        serializer.save(section=section, sort_order=serializer.validated_data.get("sort_order") or next_order)
+
+
+class HeadingDetailView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsNCAEditor]
+    serializer_class = FormHeadingSerializer
+    http_method_names = ["get", "patch", "delete", "head", "options"]
+
+    def get_object(self):
+        return generics.get_object_or_404(
+            FormHeading, pk=self.kwargs["hid"], section_id=self.kwargs["sid"],
+            section__form_template_id=self.kwargs["pk"],
+        )
+
+    def perform_update(self, serializer):
+        reject_if_locked(serializer.instance.section.form_template)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        reject_if_locked(instance.section.form_template)
+        instance.delete()
+
+
 class FieldListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsNCAEditor]
     serializer_class = FormFieldSerializer
 
     def get_queryset(self):
-        return FormField.objects.filter(section_id=self.kwargs["sid"])
+        return FormField.objects.filter(
+            section_id=self.kwargs["sid"], section__form_template_id=self.kwargs["pk"],
+        )
 
     def perform_create(self, serializer):
-        section = generics.get_object_or_404(FormSection, pk=self.kwargs["sid"])
+        section = generics.get_object_or_404(
+            FormSection, pk=self.kwargs["sid"], form_template_id=self.kwargs["pk"],
+        )
         reject_if_locked(section.form_template)
+        heading = serializer.validated_data.get("heading")
+        if heading and heading.section_id != section.id:
+            raise serializers.ValidationError({"heading": "The heading must belong to this section."})
         max_order = FormField.objects.filter(section=section).count()
         field = serializer.save(section=section, sort_order=max_order + 1)
         if field.field_type == "boolean" and not field.options.exists():
@@ -565,6 +750,9 @@ class FieldDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_update(self, serializer):
         reject_if_locked(serializer.instance.section.form_template)
+        heading = serializer.validated_data.get("heading")
+        if heading and heading.section_id != serializer.instance.section_id:
+            raise serializers.ValidationError({"heading": "The heading must belong to this section."})
         serializer.save()
 
     def perform_destroy(self, instance):

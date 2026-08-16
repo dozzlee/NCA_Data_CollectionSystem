@@ -36,6 +36,40 @@ type ProviderReviewData = {
   permitted_actions:string[];
 };
 
+function formatDate(value: string | null | undefined) {
+  if (!value) return "Not yet";
+  return new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+function AssignmentSummary({ expected }: { expected: ExpectedSubmission }) {
+  const team = (expected.data_entry_team ?? []).map((member) => member.name).join(", ") || "No active Data Entry users";
+  const items = [
+    ["Organisation", expected.provider_name],
+    ["Reporting period", expected.period_name],
+    ["Data Entry ownership", expected.ownership_label || "Shared Data Entry queue"],
+    ["Active Data Entry team", team],
+    ["Form version", `${expected.form_code}${expected.form_version ? ` v${expected.form_version}` : ""}`],
+    ["Form created", formatDate(expected.form_created_at)],
+    ["Sent to provider", formatDate(expected.sent_at || expected.created_at)],
+    ["Provider submitted", formatDate(expected.submitted_at)],
+  ];
+  return (
+    <section className="rounded-[14px] border border-[#dce3e9] bg-gradient-to-br from-white to-[#f7f9fb] p-4 shadow-[0_2px_8px_rgba(0,45,91,0.05)]">
+      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
+        {items.map(([label, value]) => <div key={label} className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-[#737780]">{label}</p>
+          <p className="mt-1 break-words text-[12px] font-medium text-[#191c1e]">{value}</p>
+        </div>)}
+      </div>
+      <div className="mt-4 border-t border-[#e6e8ea] pt-3 text-[11px] text-[#5e6269]">
+        Most recent Data Entry edit: {expected.last_data_entry_editor
+          ? `${expected.last_data_entry_editor.name} · ${formatDate(expected.last_data_entry_editor.edited_at)}`
+          : "No Data Entry values saved yet"}
+      </div>
+    </section>
+  );
+}
+
 function useSectionFieldState(
   sectionFields: FormSection["fields"],
   serverValues: { field?: number | null; value: string; value_status: string; explanation?: string }[] | undefined,
@@ -137,7 +171,7 @@ function SectionContent({
     setSaveMsg(null);
     setSaveError("");
     try {
-      const fieldPayload = Object.entries(fieldValues).map(([fid, v]) => ({
+      const fieldPayload = Object.entries(fieldValues).filter(([, v]) => Boolean(v.status || v.value || v.explanation)).map(([fid, v]) => ({
         field: Number(fid),
         value: v.value,
         value_status: v.status || (v.value ? "PROVIDED" : "MISSING"),
@@ -196,6 +230,11 @@ function SectionContent({
     );
   }
 
+  const orderedFieldItems = [
+    ...(section.headings??[]).map(heading=>({kind:"heading" as const,sortOrder:heading.sort_order,heading})),
+    ...section.fields.map(field=>({kind:"field" as const,sortOrder:field.sort_order,field})),
+  ].sort((left,right)=>left.sortOrder-right.sortOrder);
+
   return (
     <div className="space-y-6">
       {/* Section header */}
@@ -247,12 +286,14 @@ function SectionContent({
       ))}
 
       {/* Scalar fields */}
-      {section.fields.length > 0 && (
+      {orderedFieldItems.length > 0 && (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          {section.fields.map((field) => {
+          {orderedFieldItems.map((item) => {
+            if (item.kind === "heading") return <div key={`heading-${item.heading.id}`} className={`md:col-span-2 ${item.heading.level===1?'border-b-2 border-[#001836] pb-2 pt-3':item.heading.level===2?'rounded-lg border-l-4 border-[#0066cc] bg-[#e8f1fb] px-4 py-3':'border-l-2 border-[#8aa9c7] pl-3'}`}><h3 className={item.heading.level===1?'text-[16px] font-semibold text-[#001836]':'text-[13px] font-semibold text-[#23364d]'}>{item.heading.title}</h3></div>;
+            const field = item.field;
             const fv = fieldValues[field.id] ?? { value: "", status: "", explanation: "" };
             return (
-              <div key={field.id} className={field.field_type === "textarea" || field.field_type === "declaration" ? "md:col-span-2" : ""}>
+              <div key={field.id} className={`${field.field_type === "textarea" || field.field_type === "declaration" ? "md:col-span-2" : ""} ${isEditable ? "rounded-[10px] border border-[#eceef0] bg-[#fbfcfd] p-4" : ""}`}>
                 <FieldRenderer
                   field={field}
                   value={fv.value}
@@ -260,6 +301,7 @@ function SectionContent({
                   explanation={fv.explanation}
                   onChange={(v, s, e) => handleFieldChange(field.id, v, s, e)}
                   disabled={!isEditable}
+                  readOnlyPresentation={!isEditable}
                   allFieldValues={Object.fromEntries(
                     Object.entries(fieldValues).map(([k, v]) => [k, { value: v.value }])
                   )}
@@ -284,6 +326,7 @@ function SectionContent({
               setDirty(true);
             }}
             disabled={!isEditable}
+            readOnlyPresentation={!isEditable}
             issues={validationIssues.filter((issue) => issue.target_type === "GRID_CELL").map((issue) => ({ targetId:String(issue.target_id), message:issue.message }))}
             correctionInstructions={correctionItems.filter((item) => item.status === "OPEN" && item.target_type === "GRID_CELL").map((item) => ({ targetId:String(item.target_id), instruction:item.instruction }))}
           />
@@ -375,6 +418,12 @@ export default function FormEntryPage() {
   const [actionError, setActionError] = useState("");
   const [receiptReference, setReceiptReference] = useState<string | null>(null);
 
+  async function handleStart() {
+    if (!expectedId) return;
+    await startMutation.mutateAsync(expectedId);
+    expectedQ.refetch();
+  }
+
   const sections = useMemo(() => form?.sections ?? [], [form?.sections]);
   const [activeSection, setActiveSection] = useState<string>("");
 
@@ -395,17 +444,13 @@ export default function FormEntryPage() {
     ...section.grids.map((grid) => ({ key:`SECTION:${section.section_code}`, label:`${section.title} · ${grid.title} (whole grid)` })),
   ]).filter((option, index, all) => all.findIndex((candidate) => candidate.key === option.key) === index), [sections]);
 
-  async function handleStart() {
-    if (!expectedId) return;
-    await startMutation.mutateAsync(expectedId);
-    expectedQ.refetch();
-  }
-
   async function handleSubmitForApproval() {
     setSubmitError(null);
     try {
       await submitMutation.mutateAsync();
-      expectedQ.refetch();
+      await Promise.all([
+        expectedQ.refetch(), providerReviewQ.refetch(), completionQ.refetch(), periodFormsQ.refetch(),
+      ]);
     } catch (error) {
       setSubmitError(error instanceof ApiError ? error.message : "Submission failed. Please try again.");
       completionQ.refetch();
@@ -429,15 +474,16 @@ export default function FormEntryPage() {
   }
 
   // Not yet started
-  if (expected.workflow_status === "NOT_STARTED") {
+  if (expected.workflow_status === "NOT_STARTED" && !isDataEntry && !isApprover) {
     return (
       <div className="space-y-4">
         <Link href="/provider/dashboard"
           className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#737780] hover:text-[#0066cc] transition-colors">
           <ChevronLeft size={14} /> Back to My Forms
         </Link>
-        <div className="flex flex-col items-center justify-center min-h-[360px] text-center">
-        <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-8 max-w-md space-y-4"
+        <AssignmentSummary expected={expected} />
+        <div className="flex flex-col items-center justify-center min-h-[300px] text-center">
+        <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-8 max-w-lg space-y-4"
           style={{ boxShadow: "0 2px 8px rgba(0,45,91,0.06)" }}>
           <div>
             <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-[#737780]">{form.form_code}</p>
@@ -457,7 +503,7 @@ export default function FormEntryPage() {
             </button>
           ) : (
             <p className="rounded-[8px] bg-[#f2f4f6] px-4 py-3 text-[12px] text-[#43474f]">
-              This form must be started by a Provider Data Entry user before it can be reviewed.
+              Read-only monitoring is available now. A Provider Data Entry user must start the form before values can be entered; it becomes editable for you only after submission to the Approver queue.
             </p>
           )}
         </div>
@@ -489,12 +535,12 @@ export default function FormEntryPage() {
 
         <div className="flex gap-2 shrink-0">
           {/* DATA ENTRY: can submit draft to approver */}
-          {isDataEntry && ["DRAFT", "PROVIDER_CHANGES_REQUESTED"].includes(expected.workflow_status) && (
+          {isDataEntry && ["NOT_STARTED", "DRAFT", "PROVIDER_CHANGES_REQUESTED"].includes(expected.workflow_status) && (
             <button
               onClick={handleSubmitForApproval}
               disabled={submitMutation.isPending || !completion?.transition_ready}
               className="flex items-center gap-2 rounded-[8px] bg-[#1f7a4d] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#185e3b] disabled:opacity-50 transition-colors"
-              title="Complete all required fields before submitting to your approver"
+              title="Blank indicators are allowed; only genuine blockers prevent submission"
             >
               <Send size={13} />
               {submitMutation.isPending ? "Submitting…" : "Submit to Approver"}
@@ -522,6 +568,24 @@ export default function FormEntryPage() {
           )}
         </div>
       </div>
+
+      <AssignmentSummary expected={expected} />
+
+      {isApprover && !isEditable && ["NOT_STARTED", "DRAFT", "PROVIDER_CHANGES_REQUESTED"].includes(expected.workflow_status) && (
+        <div className="rounded-[10px] border border-[#b9d4ef] bg-[#eef6ff] px-4 py-3 text-[12px] text-[#264f73]">
+          Read-only monitoring view. You can see saved values and progress now; editing becomes available after Data Entry submits this form to the Approver queue.
+        </div>
+      )}
+      {isApprover && !isEditable && !["NOT_STARTED", "DRAFT", "PROVIDER_CHANGES_REQUESTED"].includes(expected.workflow_status) && (
+        <div className="rounded-[10px] border border-[#dce3e9] bg-[#f7f9fb] px-4 py-3 text-[12px] text-[#5e6269]">
+          This official provider version is read-only. Its submitted values, receipt and review progress remain available here.
+        </div>
+      )}
+      {isDataEntry && !isEditable && (
+        <div className="rounded-[10px] border border-[#b9d4ef] bg-[#eef6ff] px-4 py-3 text-[12px] text-[#264f73]">
+          This form is read-only while it is with the Provider Approver or NCA. Saved values and review progress remain visible here.
+        </div>
+      )}
 
       {submitError && (
         <div className="rounded-[8px] border border-[#E31937]/30 bg-[#ffe8e8] px-4 py-3 text-[12px] text-[#9b1c1c]">
@@ -555,12 +619,12 @@ export default function FormEntryPage() {
 
       {approvalOpen && <div className="rounded-xl border border-[#0066cc] bg-[#f7fbff] p-5">
         <h2 className="font-semibold">Final provider approval</h2><p className="mt-1 text-xs text-[#43474f]">A fresh readiness check is performed before NCA receives the official version.</p>
-        <div className="mt-4 grid gap-3 md:grid-cols-2"><div className="rounded-lg bg-white p-3 text-xs"><strong>Readiness</strong><p className="mt-1">{completion?.missing_required_count ?? 0} blockers · {completion?.warning_count ?? 0} warnings · {completion?.open_correction_item_count ?? 0} open corrections</p></div><div className="rounded-lg bg-white p-3 text-xs"><strong>Approver edits</strong><p className="mt-1">{providerReviewQ.data?.provider_edits.length ?? 0} edit batches are recorded for this version.</p></div></div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2"><div className="rounded-lg bg-white p-3 text-xs"><strong>Readiness</strong><p className="mt-1">{completion?.blocking_issues.length ?? 0} blockers · {completion?.missing_indicator_count ?? 0} blank indicators · {completion?.open_correction_item_count ?? 0} open corrections</p></div><div className="rounded-lg bg-white p-3 text-xs"><strong>Approver edits</strong><p className="mt-1">{providerReviewQ.data?.provider_edits.length ?? 0} edit batches are recorded for this version.</p></div></div>
         <label className="mt-4 block text-xs font-medium">Approval note (optional)<textarea value={approvalNote} onChange={(e) => setApprovalNote(e.target.value)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2" rows={2} /></label>
         {(providerReviewQ.data?.provider_edits.length ?? 0) > 0 && <label className="mt-3 block text-xs font-medium">Required change summary<textarea value={changeSummary} onChange={(e) => setChangeSummary(e.target.value)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2" rows={3} placeholder="Summarize what you changed and why." /></label>}
-        <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={attestation} onChange={(e) => setAttestation(e.target.checked)} className="mt-1" /><span>I attest that I reviewed this return and that it is accurate and complete to the best of my knowledge.</span></label>
+        <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={attestation} onChange={(e) => setAttestation(e.target.checked)} className="mt-1" /><span>I attest that I reviewed this return and that the information supplied is accurate to the best of my knowledge. Any blank indicators will remain visible to NCA.</span></label>
         {actionError && <p role="alert" className="mt-3 text-xs text-red-700">{actionError}</p>}
-        <div className="mt-4 flex justify-end gap-2"><button onClick={() => setApprovalOpen(false)} className="rounded-lg border px-4 py-2 text-xs">Cancel</button><button disabled={!attestation || ((providerReviewQ.data?.provider_edits.length ?? 0) > 0 && !changeSummary.trim()) || !completion?.transition_ready} onClick={async () => { try { setActionError(""); const response = await api.post<{receipt_reference:string}>(`/submissions/${submission?.id}/provider-review/approve/`, { attestation, approval_note:approvalNote, change_summary:changeSummary }); setReceiptReference(response.receipt_reference); setApprovalOpen(false); await Promise.all([expectedQ.refetch(), providerReviewQ.refetch(), completionQ.refetch()]); } catch (error) { setActionError(error instanceof ApiError ? error.message : "Official submission failed."); } }} className="rounded-lg bg-[#001836] px-5 py-2 text-xs font-semibold text-white disabled:opacity-50">Submit officially to NCA</button></div>
+        <div className="mt-4 flex justify-end gap-2"><button onClick={() => setApprovalOpen(false)} className="rounded-lg border px-4 py-2 text-xs">Cancel</button><button disabled={!attestation || ((providerReviewQ.data?.provider_edits.length ?? 0) > 0 && !changeSummary.trim()) || !completion?.transition_ready} onClick={async () => { try { setActionError(""); const response = await api.post<{receipt_reference:string}>(`/submissions/${submission?.id}/provider-review/approve/`, { attestation, approval_note:approvalNote, change_summary:changeSummary }); setReceiptReference(response.receipt_reference); setApprovalOpen(false); await Promise.all([expectedQ.refetch(), providerReviewQ.refetch(), completionQ.refetch(), periodFormsQ.refetch(), timelineQ.refetch(), submissionQ.refetch()]); } catch (error) { setActionError(error instanceof ApiError ? error.message : "Official submission failed."); } }} className="rounded-lg bg-[#001836] px-5 py-2 text-xs font-semibold text-white disabled:opacity-50">Submit officially to NCA</button></div>
       </div>}
 
       {(receiptReference || submission?.receipt_reference) && <div className="flex items-center justify-between rounded-xl border border-green-200 bg-green-50 p-4 text-sm"><span>Official receipt: <strong>{receiptReference || submission?.receipt_reference}</strong></span><button onClick={() => import("@/lib/api").then(({downloadAuthenticated}) => downloadAuthenticated(`/submissions/${submission?.id}/receipt/`, {}, `submission-receipt-${submission?.id}.pdf`))} className="font-semibold text-[#0066cc]">Download receipt</button></div>}
@@ -577,9 +641,17 @@ export default function FormEntryPage() {
         </section>
       )}
 
+      {completion && completion.missing_indicator_count > 0 && (
+        <div className="rounded-[8px] border border-[#b9d4ef] bg-[#eef6ff] px-4 py-3 text-[12px] text-[#264f73]">
+          {["SUBMITTED", "UNDER_REVIEW", "RESUBMITTED", "APPROVED", "REJECTED", "ARCHIVED"].includes(expected.workflow_status)
+            ? `${completion.missing_indicator_count} requested indicator${completion.missing_indicator_count === 1 ? " was" : "s were"} submitted blank and remain visible to reviewers.`
+            : `${completion.missing_indicator_count} requested indicator${completion.missing_indicator_count === 1 ? " is" : "s are"} blank. You may continue and submit; reviewers will see these blanks.`}
+        </div>
+      )}
+
       {isEditable && completion && !completion.transition_ready && (
-        <div className="rounded-[8px] border border-[#ffd100] bg-[#fff3bf]/50 px-4 py-3 text-[12px] text-[#7a5c00]">
-          Complete {completion.missing_required_count} required item{completion.missing_required_count === 1 ? "" : "s"} before submitting.
+        <div className="rounded-[8px] border border-[#e6a5ae] bg-[#fff1f2] px-4 py-3 text-[12px] text-[#8f1d2c]">
+          Resolve {completion.blocking_issues.length} blocking issue{completion.blocking_issues.length === 1 ? "" : "s"} before submitting.
           {completion.blocking_issues.slice(0, 3).map((issue) => (
             <span key={`${issue.type}-${issue.id}`} className="ml-2">• {issue.label}</span>
           ))}
@@ -621,9 +693,9 @@ export default function FormEntryPage() {
       )}
 
       {/* Main layout: stepper + content */}
-      <div className="flex gap-5 items-start">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
         {/* Section stepper */}
-        <SectionStepper
+        <div className="hidden lg:block"><SectionStepper
           sections={completion?.sections ?? sections.map((s) => ({
             section_code: s.section_code,
             title: s.title,
@@ -634,10 +706,17 @@ export default function FormEntryPage() {
           activeSection={activeSection}
           onSelect={setActiveSection}
           completionPct={completion?.completion_pct ?? 0}
-        />
+        /></div>
+
+        <label className="block lg:hidden">
+          <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.05em] text-[#737780]">Form section</span>
+          <select value={activeSection} onChange={(event) => setActiveSection(event.target.value)} className="w-full rounded-[9px] border border-[#c3c6d0] bg-white px-3 py-2.5 text-[13px] text-[#191c1e]">
+            {sections.map((section, index) => <option key={section.section_code} value={section.section_code}>{index + 1}. {section.title}</option>)}
+          </select>
+        </label>
 
         {/* Section content */}
-        <div className="flex-1 min-w-0 rounded-[16px] border border-[#e6e8ea] bg-white p-6"
+        <div className="w-full min-w-0 flex-1 rounded-[16px] border border-[#e6e8ea] bg-white p-4 sm:p-6"
           style={{ boxShadow: "0 2px 8px rgba(0,45,91,0.05)" }}>
           {currentSection && submission && (
             <SectionContent

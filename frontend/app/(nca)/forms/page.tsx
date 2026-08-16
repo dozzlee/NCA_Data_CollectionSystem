@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
+import { FormSendDialog } from "@/components/forms/FormSendDialog";
 import type { FormTemplate, FormWorkbookImport, ProviderCategory, Frequency, Sector } from "@/lib/types";
 import { PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 
@@ -36,6 +37,7 @@ export default function FormsPage() {
   const [workbook, setWorkbook] = useState<File | null>(null);
   const [filterCat, setFilterCat] = useState("");
   const [filterSector, setFilterSector] = useState("");
+  const [sendTemplate, setSendTemplate] = useState<FormTemplate | null>(null);
 
   const { data, isLoading } = useQuery<{ results: FormTemplate[] }>({
     queryKey: ["form-templates", filterCat, filterSector],
@@ -58,7 +60,12 @@ export default function FormsPage() {
       return api<FormTemplate>("/form-templates/", { method:"POST", body: JSON.stringify({ ...d, effective_from: new Date().toISOString().split("T")[0], kmz_required: false }) });
     },
     onSuccess: (result) => {
-      toast(workbook ? "Workbook parsed. Review the generated structure." : "Form template created.", "success");
+      const message = "detected_schema" in result
+        ? result.parse_status === "PENDING"
+          ? "Workbook uploaded. Analysis is continuing in the preview."
+          : "Workbook parsed. Review the generated structure."
+        : "Form template created.";
+      toast(message, "success");
       setShowCreate(false); setForm(EMPTY);
       setWorkbook(null);
       qc.invalidateQueries({ queryKey: ["form-templates"] });
@@ -132,11 +139,18 @@ export default function FormsPage() {
                 onChange={e => setWorkbook(e.target.files?.[0] ?? null)}
                 className="mt-2 block w-full text-[13px] text-[#43474f] file:mr-3 file:rounded-[8px] file:border-0 file:bg-[#e8f1fb] file:px-3 file:py-2 file:font-semibold file:text-[#004999]" />
               <p className="mt-2 text-[11px] text-[#737780]">Up to 20 MB. Only the workbook structure is imported; cell values never become provider answers.</p>
+              {workbook && <p className="mt-2 text-xs font-medium text-[#191c1e]">Selected: {workbook.name} · {(workbook.size / 1024 / 1024).toFixed(1)} MB</p>}
             </div>
           </div>
+          {createMutation.isPending && workbook && (
+            <div role="status" className="rounded-[10px] border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              <p className="font-semibold">Uploading and analyzing the workbook…</p>
+              <p className="mt-1 text-xs">Each visible worksheet is being converted into a form section. Large workbooks with many formatted tabs can take up to two minutes; keep this page open.</p>
+            </div>
+          )}
           <button type="submit" disabled={createMutation.isPending}
             className="rounded-[8px] bg-[#001836] px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-[#002d5b] disabled:opacity-50">
-            {createMutation.isPending ? "Creating…" : workbook ? "Upload & Preview" : "Create Template"}
+            {createMutation.isPending ? (workbook ? "Analyzing workbook…" : "Creating…") : workbook ? "Upload & Preview" : "Create Template"}
           </button>
         </form>
       )}
@@ -187,15 +201,17 @@ export default function FormsPage() {
                   </td>
                   <td className="px-5 py-3.5 text-[13px] text-[#737780]">—</td>
                   <td className="px-5 py-3.5">
-                    <Link href={`/forms/${t.id}`} className="text-[13px] font-medium text-[#0066cc] hover:underline">
-                      Build →
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <Link href={`/forms/${t.id}`} className="rounded-lg border border-[#c3c6d0] px-3 py-1.5 text-[12px] font-semibold text-[#43474f] hover:bg-[#f2f4f6]">Open</Link>
+                      <button type="button" onClick={() => setSendTemplate(t)} disabled={t.status!=="ACTIVE"||t.approval_status!=="APPROVED"} title={t.status!=="ACTIVE"||t.approval_status!=="APPROVED"?"Only active, approved templates can be sent.":"Send this exact template version to providers"} className="rounded-lg bg-[#0066cc] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#0056ad] disabled:cursor-not-allowed disabled:bg-[#c3c6d0]">Send</button>
+                    </div>
                   </td>
                 </tr>
               ))}
           </tbody>
         </table>
       </div>
+      {sendTemplate&&<FormSendDialog template={sendTemplate} open onClose={()=>setSendTemplate(null)}/>}
     </div>
   );
 }

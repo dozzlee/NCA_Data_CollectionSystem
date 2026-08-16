@@ -22,12 +22,13 @@ interface FieldRendererProps {
   issues?: string[];
   correctionInstructions?: string[];
   onBlur?: () => void;
+  readOnlyPresentation?: boolean;
 }
 
 const inputBase =
   "w-full rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] placeholder:text-[#737780] transition-colors focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20 disabled:bg-[#f2f4f6] disabled:text-[#737780]";
 
-export function FieldRenderer({ field, value, valueStatus, explanation, onChange, disabled, allFieldValues, issues = [], correctionInstructions = [], onBlur }: FieldRendererProps) {
+export function FieldRenderer({ field, value, valueStatus, explanation, onChange, disabled, allFieldValues, issues = [], correctionInstructions = [], onBlur, readOnlyPresentation = false }: FieldRendererProps) {
   // Conditional visibility — hide if parent field's value doesn't match the required value
   if (
     field.conditional_on_field !== null &&
@@ -39,6 +40,28 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
   }
 
   const isNonFilled = !!valueStatus && valueStatus !== "PROVIDED" && valueStatus !== "MISSING";
+
+  if (disabled && readOnlyPresentation) {
+    const statusLabel = valueStatus ? valueStatus.split("_").join(" ").toLowerCase() : "not provided";
+    return (
+      <div className="h-full rounded-[10px] border border-[#e6e8ea] bg-[#f9fafb] px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-[12px] font-medium leading-snug text-[#43474f]">
+            {field.label}{field.unit && <span className="ml-1 font-normal text-[#737780]">({field.unit})</span>}
+          </p>
+          {field.is_required && <span className="rounded-full bg-[#e8f1fb] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#004999]">Requested</span>}
+        </div>
+        <p className="mt-2 whitespace-pre-wrap break-words text-[14px] font-medium text-[#191c1e]">
+          {value || <span className="font-normal italic text-[#8a8f98]">— Not provided</span>}
+        </p>
+        {isNonFilled && <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-[#7a5c00]">{statusLabel}</p>}
+        {explanation && <p className="mt-2 border-l-2 border-[#ffd100] pl-2 text-[11px] text-[#5e6269]">{explanation}</p>}
+        {field.help_text && <p className="mt-2 text-[10px] leading-relaxed text-[#737780]">{field.help_text}</p>}
+        {correctionInstructions.map((instruction, index) => <p key={index} className="mt-2 rounded-md bg-[#fff3bf] px-2 py-1.5 text-[11px] text-[#7a5c00]">Correction: {instruction}</p>)}
+        {issues.map((issue, index) => <p key={index} role="alert" className="mt-1 text-[11px] font-medium text-[#c0112a]">{issue}</p>)}
+      </div>
+    );
+  }
 
   function handleValueChange(newVal: string) {
     onChange(newVal, newVal ? "PROVIDED" : "MISSING", explanation);

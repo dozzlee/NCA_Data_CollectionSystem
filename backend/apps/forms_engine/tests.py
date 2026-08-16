@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from django.core.management import call_command
 from django.test import TestCase, override_settings
@@ -7,9 +8,14 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 from openpyxl import Workbook
 from io import BytesIO
+from django.utils import timezone
 
 from apps.users.models import User
-from .models import FormGapAssessment, FormTemplate, GridRow, ValidationRule, FormWorkbookImport
+from .models import (
+    FormField, FormGapAssessment, FormHeading, FormRequirement, FormSection,
+    FormTemplate, GridRow, ValidationRule, FormWorkbookImport,
+)
+from .workbook_import import PARSER_VERSION, _parse_workbook_streaming, parse_workbook
 
 
 class PRDSection11FormTests(TestCase):
@@ -51,10 +57,11 @@ class WorkbookFormImportTests(APITestCase):
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Subscriber Data"
-        sheet.append(["Indicator", "Value"])
-        sheet.append(["Total subscribers", 999999])
-        sheet.append(["Churn rate (%)", 0.12])
-        sheet.add_table(__import__("openpyxl").worksheet.table.Table(displayName="SubscriberMetrics", ref="A1:B3"))
+        sheet.append(["NCA quarterly subscriber return"])
+        sheet.append(["Industry Data", "Definitions", "Data Type", "Unit", "Mandatory", "Options", "June 2025"])
+        sheet.append(["Subscriber indicators", "", "", "", "", "", "Historical heading"])
+        sheet.append(["Total subscribers", "Number of active subscriptions", "Number", "Subscribers", "No", "", 999999])
+        sheet.append(["Customer segment", "Select the customer category", "Select", "", "Yes", "Prepaid; Postpaid", "Prepaid"])
         out = BytesIO(); workbook.save(out)
         return SimpleUploadedFile("source.xlsx", out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
@@ -71,9 +78,251 @@ class WorkbookFormImportTests(APITestCase):
                 item = FormWorkbookImport.objects.get(pk=response.data["id"])
                 self.assertEqual(item.parse_status, "READY")
                 self.assertNotIn("999999", str(item.detected_schema))
+                self.assertEqual(item.parser_version, PARSER_VERSION)
+                section = item.detected_schema["sections"][0]
+                self.assertEqual(section["headings"][0]["title"], "Subscriber indicators")
+                self.assertEqual(section["fields"][0]["help_text"], "Number of active subscriptions")
+                self.assertFalse(section["fields"][0]["is_required"])
+                self.assertTrue(section["fields"][1]["is_required"])
                 confirmed = self.client.post(f"/api/v1/form-workbook-imports/{item.id}/confirm/", {}, format="json")
                 self.assertEqual(confirmed.status_code, 201, confirmed.data)
                 form = FormTemplate.objects.get(pk=confirmed.data["id"])
                 self.assertEqual(form.form_code, "NEW-QUARTERLY")
                 self.assertEqual(form.frequency, "QUARTERLY")
                 self.assertEqual(form.mapping_basis, "SOURCE_FORM")
+                heading = FormHeading.objects.get(section__form_template=form)
+                self.assertEqual(heading.title, "Subscriber indicators")
+                fields = list(FormField.objects.filter(section__form_template=form).order_by("sort_order"))
+                self.assertEqual(fields[0].heading, heading)
+                self.assertFalse(fields[0].is_required)
+                self.assertTrue(fields[1].is_required)
+                updated_heading = self.client.patch(
+                    f"/api/v1/form-templates/{form.id}/sections/{heading.section_id}/headings/{heading.id}/",
+                    {"title": "Subscriber measures"}, format="json",
+                )
+                self.assertEqual(updated_heading.status_code, 200, updated_heading.data)
+                added_heading = self.client.post(
+                    f"/api/v1/form-templates/{form.id}/sections/{heading.section_id}/headings/",
+                    {"heading_code": "ADDITIONAL", "title": "Additional measures", "level": 2},
+                    format="json",
+                )
+                self.assertEqual(added_heading.status_code, 201, added_heading.data)
+                removed_heading = self.client.delete(
+                    f"/api/v1/form-templates/{form.id}/sections/{heading.section_id}/headings/{added_heading.data['id']}/",
+                )
+                self.assertEqual(removed_heading.status_code, 204)
+
+    @override_settings(MALWARE_SCANNER_REQUIRED=False)
+    def test_missing_mapping_is_blocking_until_reparsed_with_selected_columns(self):
+        workbook = Workbook(); sheet = workbook.active; sheet.title = "Custom Layout"
+        sheet.append(["Metric", "Meaning", "Kind"])
+        sheet.append(["Customers", "Active customer count", "Number"])
+        out = BytesIO(); workbook.save(out)
+        with TemporaryDirectory() as private_root:
+            with override_settings(PRIVATE_UPLOAD_ROOT=private_root):
+                response = self.client.post("/api/v1/form-workbook-imports/", {
+                    "form_code": "CUSTOM-LAYOUT", "name": "Custom Layout", "version": "1.0",
+                    "sector": "TELECOM", "provider_category": "ISP", "frequency": "ANNUAL",
+                    "file": SimpleUploadedFile("custom.xlsx", out.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                }, format="multipart")
+                self.assertEqual(response.status_code, 201, response.data)
+                item_id = response.data["id"]
+                code = "MISSING_DEFINITION_COLUMNS_1"
+                self.assertIn(code, {warning["code"] for warning in response.data["warnings"]})
+                patched = self.client.patch(
+                    f"/api/v1/form-workbook-imports/{item_id}/",
+                    {"mapping_decisions": {"resolved_warning_codes": [code]}}, format="json",
+                )
+                self.assertEqual(patched.status_code, 200, patched.data)
+                denied = self.client.post(f"/api/v1/form-workbook-imports/{item_id}/confirm/", {}, format="json")
+                self.assertEqual(denied.status_code, 409, denied.data)
+                reparsed = self.client.post(
+                    f"/api/v1/form-workbook-imports/{item_id}/reparse/",
+                    {"column_mappings": {"Custom Layout": {
+                        "header_row": 1, "indicator_column": 1,
+                        "definition_column": 2, "data_type_column": 3,
+                    }}}, format="json",
+                )
+                self.assertEqual(reparsed.status_code, 200, reparsed.data)
+                self.assertEqual(reparsed.data["detected_schema"]["sections"][0]["fields"][0]["label"], "Customers")
+                confirmed = self.client.post(f"/api/v1/form-workbook-imports/{item_id}/confirm/", {}, format="json")
+                self.assertEqual(confirmed.status_code, 201, confirmed.data)
+
+    @override_settings(MALWARE_SCANNER_REQUIRED=False)
+    def test_failed_parse_returns_diagnostic_import_resource(self):
+        with TemporaryDirectory() as private_root:
+            with override_settings(PRIVATE_UPLOAD_ROOT=private_root):
+                response = self.client.post("/api/v1/form-workbook-imports/", {
+                    "form_code": "BROKEN-WORKBOOK", "name": "Broken Workbook", "version": "1.0",
+                    "sector": "TELECOM", "provider_category": "ISP", "frequency": "ANNUAL",
+                    "file": SimpleUploadedFile(
+                        "broken.xlsx", b"not-an-excel-archive",
+                        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ),
+                }, format="multipart")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["scan_status"], "CLEAN")
+        self.assertEqual(response.data["parse_status"], "FAILED")
+        self.assertIn("could not be read", response.data["scan_details"])
+        self.assertEqual(response.data["detected_schema"], {})
+
+    @override_settings(MALWARE_SCANNER_REQUIRED=False, FORM_WORKBOOK_ASYNC_THRESHOLD_BYTES=1)
+    @patch("apps.forms_engine.views._schedule_workbook_import")
+    def test_large_upload_returns_pending_preview_resource_and_schedules_processing(self, schedule):
+        with TemporaryDirectory() as private_root:
+            with override_settings(PRIVATE_UPLOAD_ROOT=private_root):
+                response = self.client.post("/api/v1/form-workbook-imports/", {
+                    "form_code": "LARGE-WORKBOOK", "name": "Large Workbook", "version": "1.0",
+                    "sector": "TELECOM", "provider_category": "ISP", "frequency": "ANNUAL",
+                    "file": self.workbook_file(),
+                }, format="multipart")
+        self.assertEqual(response.status_code, 202, response.data)
+        self.assertEqual(response.data["scan_status"], "PENDING")
+        self.assertEqual(response.data["parse_status"], "PENDING")
+        schedule.assert_called_once_with(response.data["id"])
+
+
+class WorksheetWorkbookGroupingTests(TestCase):
+    def test_visible_worksheets_become_sections_in_tab_order(self):
+        workbook = Workbook()
+        voice = workbook.active
+        voice.title = "Mobile Voice"
+        voice.append(["Contact", "compliance@example.test"])
+        voice.append(["Indicator", "Definition", "Data Type", "Required", "June 2025"])
+        voice.append(["Mobile services", "", "", "", "Historical header"])
+        voice.append(["Voice traffic", "", "", "", "Historical header"])
+        voice.append(["Mobile voice minutes", "Total outgoing mobile minutes", "Number", "No", 12345])
+        data = workbook.create_sheet("Mobile Data")
+        data.append(["Industry Data", "Definitions", "Data Type", "Mandatory", "March 2025"])
+        data.append(["Mobile voice minutes", "A deliberately repeated indicator", "Numeric", "Yes", 999])
+        empty = workbook.create_sheet("Supporting Notes")
+        hidden = workbook.create_sheet("Internal Lookup")
+        hidden.sheet_state = "hidden"
+        hidden.append(["Must not become a form field", 42])
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "worksheet-tabs.xlsx"
+            workbook.save(path)
+            schema, warnings = parse_workbook(path)
+        self.assertEqual(schema["parser_version"], PARSER_VERSION)
+        self.assertEqual(schema["grouping"]["strategy"], "worksheet-tabs")
+        self.assertEqual([section["title"] for section in schema["sections"]], [
+            "Mobile Voice", "Mobile Data", "Supporting Notes",
+        ])
+        self.assertEqual([item["level"] for item in schema["sections"][0]["headings"]], [1, 2])
+        self.assertEqual(schema["sections"][0]["fields"][0]["source"]["heading"], "Voice traffic")
+        self.assertEqual(schema["sections"][0]["fields"][0]["help_text"], "Total outgoing mobile minutes")
+        self.assertFalse(schema["sections"][0]["fields"][0]["is_required"])
+        self.assertEqual(schema["sections"][0]["fields"][0]["parser_version"], PARSER_VERSION)
+        self.assertEqual(schema["sections"][1]["fields"][0]["label"], "Mobile voice minutes")
+        self.assertTrue(schema["sections"][1]["fields"][0]["is_required"])
+        self.assertEqual(schema["sections"][2]["fields"], [])
+        self.assertIn("EMPTY_WORKSHEET_SECTION_3", {warning["code"] for warning in warnings})
+        self.assertIn("MISSING_DEFINITION_COLUMNS_3", {warning["code"] for warning in warnings})
+        self.assertNotIn("Internal Lookup", str(schema))
+        self.assertNotIn("12345", str(schema))
+        self.assertNotIn("999", str(schema))
+
+    def test_large_worksheet_remains_one_section_and_codes_are_deterministic(self):
+        workbook = Workbook(); sheet = workbook.active; sheet.title = "Customer-Data"
+        sheet.append(["Indicator", "Definition"])
+        for index in range(1, 27):
+            sheet.append([f"Customer account {index}", f"Definition {index}"])
+        second_sheet = workbook.create_sheet("Customer Data")
+        second_sheet.append(["Indicator", "Definition"])
+        second_sheet.append(["Customer reference", "Provider reference"])
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "large-worksheet.xlsx"; workbook.save(path)
+            first, _ = parse_workbook(path); second, _ = parse_workbook(path)
+        self.assertEqual([section["section_code"] for section in first["sections"]], ["CUSTOMER_DATA", "CUSTOMER_DATA_2"])
+        self.assertEqual(len(first["sections"][0]["fields"]), 26)
+        self.assertEqual(first, second)
+
+    def test_metadata_types_options_units_and_unknown_type_warning(self):
+        workbook = Workbook(); sheet = workbook.active; sheet.title = "Traffic"
+        sheet.append(["Indicator", "Definitions", "Data Type", "Unit", "Required", "Options"])
+        sheet.append(["Traffic measures", "", "", "", "", ""])
+        sheet.append(["Domestic traffic", "Domestic traffic carried", "Number", "Minutes", "true", ""])
+        sheet.append(["Traffic category", "Select category", "Text", "", "", "Voice|Data"])
+        sheet.append(["Special measure", "Unrecognized type example", "Bespoke", "", "", ""])
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "metadata.xlsx"; workbook.save(path)
+            schema, warnings = parse_workbook(path)
+        fields = schema["sections"][0]["fields"]
+        self.assertEqual(fields[0]["field_type"], "number")
+        self.assertEqual(fields[0]["unit"], "Minutes")
+        self.assertTrue(fields[0]["is_required"])
+        self.assertEqual(fields[1]["field_type"], "select")
+        self.assertEqual(fields[1]["options"], ["Voice", "Data"])
+        self.assertEqual(fields[2]["field_type"], "text")
+        self.assertIn("UNKNOWN_DATA_TYPE_1_5", {warning["code"] for warning in warnings})
+
+    def test_streaming_parser_matches_normal_parser_sections_and_warnings(self):
+        workbook = Workbook(); sheet = workbook.active; sheet.title = "Subscriber Data"
+        sheet.append(["Industry Data", "Definition", "Data Type", "Required"])
+        sheet.append(["Subscriber heading", "", "", ""])
+        sheet.append(["Prepaid customers", "Active prepaid subscribers", "Number", "Yes"])
+        network = workbook.create_sheet("Network")
+        network.append(["Indicator", "Definitions", "Data Type"])
+        network.append(["Sites on air", "Operational radio sites", "Count"])
+        hidden = workbook.create_sheet("Internal"); hidden.sheet_state = "hidden"; hidden.append(["Secret", 1])
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "streaming.xlsx"; workbook.save(path)
+            normal, normal_warnings = parse_workbook(path)
+            streamed, streamed_warnings = _parse_workbook_streaming(path)
+        self.assertEqual(streamed["grouping"]["engine"], "streaming")
+        self.assertEqual(streamed["sections"], normal["sections"])
+        self.assertEqual(streamed_warnings, normal_warnings)
+        self.assertNotIn("Internal", str(streamed))
+
+
+class CustomFormPublicationTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user("custom-admin@nca.test", "password", name="Admin", role="NCA_ADMIN")
+        self.client.force_authenticate(self.admin)
+
+    def _make_publishable(self, form):
+        form.mapping_complete = True
+        form.source_reference = "NCA custom form approval record"
+        form.source_sha256 = "a" * 64
+        form.save(update_fields=["mapping_complete", "source_reference", "source_sha256"])
+        section = FormSection.objects.create(form_template=form, section_code="CUSTOM_SECTION", title="Custom Section")
+        FormField.objects.create(section=section, field_code="CUSTOM_FIELD", label="Custom Field", field_type="text", is_required=True)
+
+    def test_new_manual_family_is_custom_and_does_not_require_section_11_match(self):
+        created = self.client.post("/api/v1/form-templates/", {
+            "form_code": "NCA-CUSTOM-01", "name": "Custom Return", "version": "1.0",
+            "sector": "TELECOM", "provider_category": "MNO", "frequency": "MONTHLY",
+            "effective_from": timezone.localdate(),
+        }, format="json")
+        self.assertEqual(created.status_code, 201, created.data)
+        form = FormTemplate.objects.get(pk=created.data["id"])
+        self.assertEqual(form.mapping_basis, "CUSTOM")
+        self._make_publishable(form)
+        FormRequirement.objects.create(
+            family=form.family, requirement_key="PRD_ONLY_TEST", requirement_type="SECTION",
+            label="PRD-only missing section", description="Not applicable to a custom family.",
+            severity="BLOCKER", criteria={"section_codes": ["NOT_PRESENT"]},
+        )
+        checks = self.client.get(f"/api/v1/form-templates/{form.id}/publication-checks/")
+        self.assertEqual(checks.status_code, 200, checks.data)
+        self.assertFalse(checks.data["section_11_applicable"])
+        self.assertNotIn("section_11_gaps_clear", checks.data["checks"])
+        approved = self.client.post(f"/api/v1/form-templates/{form.id}/approve/", {}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.data)
+        self.assertEqual(approved.data["approval_status"], "APPROVED")
+
+    def test_prd_basis_still_blocks_missing_section_11_requirement(self):
+        form = FormTemplate.objects.create(
+            form_code="PRD-GATED", name="PRD Gated", version="1.0", sector="TELECOM",
+            provider_category="MNO", frequency="MONTHLY", effective_from=timezone.localdate(),
+            mapping_basis="PRD_SECTION_11", prepared_by=self.admin,
+        )
+        self._make_publishable(form)
+        FormRequirement.objects.create(
+            family=form.family, requirement_key="REQUIRED_PRD_SECTION", requirement_type="SECTION",
+            label="Required PRD section", description="A required Section 11 structure.",
+            severity="BLOCKER", criteria={"section_codes": ["PRD_REQUIRED"]},
+        )
+        denied = self.client.post(f"/api/v1/form-templates/{form.id}/approve/", {}, format="json")
+        self.assertEqual(denied.status_code, 409, denied.data)
+        self.assertIn("Section 11", denied.data["detail"])

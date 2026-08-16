@@ -91,7 +91,12 @@ class FormTemplate(models.Model):
     mapping_complete = models.BooleanField(default=False)
     mapping_basis = models.CharField(
         max_length=30,
-        choices=[("LEGACY", "Legacy"), ("PRD_SECTION_11", "PRD Section 11"), ("SOURCE_FORM", "Original source form")],
+        choices=[
+            ("LEGACY", "Legacy"),
+            ("PRD_SECTION_11", "PRD Section 11"),
+            ("SOURCE_FORM", "Original source form"),
+            ("CUSTOM", "Custom NCA form"),
+        ],
         default="LEGACY",
     )
     approval_status = models.CharField(
@@ -213,8 +218,32 @@ class FormSection(models.Model):
         unique_together = [["form_template", "section_code"]]
 
 
+class FormHeading(models.Model):
+    """Non-interactive workbook heading used to group fields inside a section."""
+
+    section = models.ForeignKey(FormSection, on_delete=models.CASCADE, related_name="headings")
+    heading_code = models.CharField(max_length=100)
+    title = models.CharField(max_length=255)
+    level = models.PositiveSmallIntegerField(default=1)
+    sort_order = models.PositiveIntegerField(default=0)
+    source_row = models.PositiveIntegerField(default=0)
+
+    def __str__(self):
+        return f"{self.section.section_code} / {self.title}"
+
+    class Meta:
+        ordering = ["sort_order", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["section", "heading_code"], name="unique_section_heading_code"),
+            models.CheckConstraint(condition=models.Q(level__gte=1, level__lte=3), name="form_heading_level_1_to_3"),
+        ]
+
+
 class FormField(models.Model):
     section = models.ForeignKey(FormSection, on_delete=models.CASCADE, related_name="fields")
+    heading = models.ForeignKey(
+        FormHeading, null=True, blank=True, on_delete=models.SET_NULL, related_name="fields",
+    )
     field_code = models.CharField(max_length=100)
     label = models.CharField(max_length=255)
     field_type = models.CharField(max_length=20, choices=FIELD_TYPES)
@@ -332,7 +361,7 @@ class FormWorkbookImport(models.Model):
     scan_engine = models.CharField(max_length=100, blank=True)
     scan_details = models.TextField(blank=True)
     parse_status = models.CharField(max_length=20, choices=PARSE_STATUSES, default="PENDING")
-    parser_version = models.CharField(max_length=30, default="xlsx-schema-v1")
+    parser_version = models.CharField(max_length=50, default="xlsx-worksheet-v4-definition-headings")
     detected_schema = models.JSONField(default=dict, blank=True)
     warnings = models.JSONField(default=list, blank=True)
     mapping_decisions = models.JSONField(default=dict, blank=True)

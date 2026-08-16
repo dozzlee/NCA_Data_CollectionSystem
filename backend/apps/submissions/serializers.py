@@ -50,6 +50,12 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
     receipt_reference = serializers.SerializerMethodField()
     permitted_actions = serializers.SerializerMethodField()
     assignment_source = serializers.SerializerMethodField()
+    form_version = serializers.CharField(source="form_template.version", read_only=True)
+    form_created_at = serializers.DateTimeField(source="form_template.created_at", read_only=True)
+    ownership_label = serializers.SerializerMethodField()
+    data_entry_team = serializers.SerializerMethodField()
+    last_data_entry_editor = serializers.SerializerMethodField()
+    sent_at = serializers.SerializerMethodField()
 
     def _latest(self, obj):
         prefetched = getattr(obj, "workspace_versions", None)
@@ -116,11 +122,45 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
             return {"type": "RECURRING", "id": obj.recurring_assignment_id}
         return {"type": "LEGACY", "id": None}
 
+    def get_ownership_label(self, obj):
+        return "Shared Data Entry queue"
+
+    def get_data_entry_team(self, obj):
+        organization_id = obj.provider.organization_id
+        if not organization_id:
+            return []
+        from apps.users.models import User
+        return list(User.objects.filter(
+            organization_id=organization_id, role="PROVIDER_DATA_ENTRY", is_active=True,
+        ).order_by("name").values("id", "name", "email"))
+
+    def get_last_data_entry_editor(self, obj):
+        latest = self._latest(obj)
+        if not latest:
+            return None
+        value = latest.values.filter(
+            updated_by__role="PROVIDER_DATA_ENTRY",
+        ).select_related("updated_by").order_by("-updated_at", "-id").first()
+        if not value or not value.updated_by:
+            return None
+        return {
+            "id": value.updated_by_id,
+            "name": value.updated_by.name,
+            "email": value.updated_by.email,
+            "edited_at": value.updated_at,
+        }
+
+    def get_sent_at(self, obj):
+        event = obj.versions.filter(
+            timeline_events__event_type="FORM_ASSIGNED",
+        ).values_list("timeline_events__created_at", flat=True).order_by("timeline_events__created_at").first()
+        return event or obj.created_at
+
     class Meta:
         model = ExpectedSubmission
         fields = [
             "id", "provider", "provider_name", "provider_sector", "provider_category",
-            "form_template", "form_code", "form_name", "form_sector",
+            "form_template", "form_code", "form_name", "form_sector", "form_version", "form_created_at",
             "period", "period_name", "due_at", "effective_due_at", "due_at_override",
             "workflow_status", "due_state",
             "assigned_officer", "assigned_officer_name",
@@ -128,6 +168,7 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
             "latest_submission_version", "completion_pct", "last_edited_by", "last_edited_by_name",
             "last_edited_at", "submitted_at", "correction_count", "open_correction_count",
             "receipt_available", "receipt_reference", "permitted_actions", "assignment_source",
+            "ownership_label", "data_entry_team", "last_data_entry_editor", "sent_at",
             "created_at",
             "replacement", "migration_report",
         ]

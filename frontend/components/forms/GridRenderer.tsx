@@ -20,6 +20,7 @@ interface GridRendererProps {
   disabled?: boolean;
   issues?: Array<{ targetId:string; message:string }>;
   correctionInstructions?: Array<{ targetId:string; instruction:string }>;
+  readOnlyPresentation?: boolean;
 }
 
 const cellInput =
@@ -27,7 +28,7 @@ const cellInput =
 
 const nonFilled = ["NOT_APPLICABLE", "NOT_AVAILABLE", "NOT_REQUIRED"];
 
-export function GridRenderer({ grid, values, onChange, disabled, issues = [], correctionInstructions = [] }: GridRendererProps) {
+export function GridRenderer({ grid, values, onChange, disabled, issues = [], correctionInstructions = [], readOnlyPresentation = false }: GridRendererProps) {
   const [repeatableRows, setRepeatableRows] = useState<string[]>(() => {
     if (grid.row_mode === "FIXED") return [];
     const ids = [...new Set(values.map((value) => value.grid_row_id).filter(Boolean))];
@@ -42,7 +43,8 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
 
   const rows = grid.row_mode === "FIXED"
     ? (grid.fixed_rows ?? []).map((row) => ({ id: String(row.id), label: row.row_label }))
-    : repeatableRows.map((id, index) => ({ id, label: `Row ${index + 1}` }));
+    : (disabled && readOnlyPresentation && values.length === 0 ? [] : repeatableRows)
+        .map((id, index) => ({ id, label: `Row ${index + 1}` }));
 
   function cell(rowId: string, columnId: number) {
     return values.find((value) => value.grid_row_id === rowId && value.grid_column_id === columnId);
@@ -83,6 +85,35 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
   function removeRow(rowId: string) {
     setRepeatableRows((current) => current.filter((id) => id !== rowId));
     onChange(values.filter((value) => value.grid_row_id !== rowId));
+  }
+
+  if (disabled && readOnlyPresentation) {
+    return (
+      <div className="overflow-hidden rounded-[10px] border border-[#e6e8ea] bg-white">
+        <div className="border-b border-[#e6e8ea] bg-[#f2f4f6] px-4 py-3">
+          <p className="text-[13px] font-semibold text-[#191c1e]">{grid.title}</p>
+          {grid.instructions && <p className="mt-1 text-[11px] text-[#737780]">{grid.instructions}</p>}
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-left">
+            <thead><tr className="bg-[#f9fafb]">
+              <th className="min-w-[130px] px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-[#737780]">Item</th>
+              {grid.columns.map((column) => <th key={column.id} className="min-w-[140px] px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-[#737780]">{column.label}{column.unit ? ` (${column.unit})` : ""}</th>)}
+            </tr></thead>
+            <tbody>{rows.length ? rows.map((row) => <tr key={row.id} className="border-t border-[#eceef0]">
+              <td className="px-3 py-2 text-[11px] font-medium text-[#43474f]">{row.label}</td>
+              {grid.columns.map((column) => {
+                const current = cell(row.id, column.id);
+                return <td key={column.id} className="px-3 py-2 text-[12px] text-[#191c1e]">
+                  {current?.value || current?.explanation || <span className="italic text-[#8a8f98]">— Not provided</span>}
+                  {current?.value_status && !["PROVIDED", "MISSING"].includes(current.value_status) && <span className="mt-0.5 block text-[9px] uppercase tracking-wide text-[#7a5c00]">{current.value_status.split("_").join(" ")}</span>}
+                </td>;
+              })}
+            </tr>) : <tr><td colSpan={grid.columns.length + 1} className="px-4 py-8 text-center text-[12px] italic text-[#8a8f98]">No rows provided</td></tr>}</tbody>
+          </table>
+        </div>
+      </div>
+    );
   }
 
   return (

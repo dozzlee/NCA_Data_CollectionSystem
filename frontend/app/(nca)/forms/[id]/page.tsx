@@ -7,7 +7,8 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import type { FormTemplate, FormSection, FormField, FormGrid, FieldType, ProviderProfile, ReportingPeriod } from "@/lib/types";
+import { FormSendDialog } from "@/components/forms/FormSendDialog";
+import type { FormTemplate, FormSection, FormHeading, FormField, FormGrid, FieldType, ProviderProfile, ReportingPeriod } from "@/lib/types";
 import { ChevronDown, ChevronRight, Plus, Trash2, GripVertical } from "lucide-react";
 
 const FIELD_TYPES: { value: FieldType; label: string }[] = [
@@ -31,7 +32,8 @@ const lbl = "block text-[11px] font-semibold uppercase tracking-wide text-[#7377
 function AssignmentPanel({ template }: { template: FormTemplate }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [mode,setMode]=useState<"RECURRING"|"MANUAL">("RECURRING");
+  const [mode,setMode]=useState<"RECURRING"|"MANUAL">("MANUAL");
+  const [sendOpen,setSendOpen]=useState(false);
   const [selected,setSelected]=useState<number[]>([]);
   const [periodId,setPeriodId]=useState("");
   const [effectiveFrom,setEffectiveFrom]=useState(new Date().toISOString().slice(0,10));
@@ -44,31 +46,32 @@ function AssignmentPanel({ template }: { template: FormTemplate }) {
     queryKey:["assignment-preview",template.id,mode,selected,periodId,overrideReason],
     queryFn:()=>api(`/form-templates/${template.id}/assignment-preview/?mode=${mode}&provider_ids=${selected.join(",")}${periodId?`&period=${periodId}`:""}&override_reason=${encodeURIComponent(overrideReason)}`),enabled:selected.length>0,
   });
-  const send=useMutation({mutationFn:()=>api(`/form-templates/${template.id}/assignments/`,{method:"POST",body:JSON.stringify({mode,provider_ids:selected,period_id:mode==="MANUAL"?Number(periodId):undefined,effective_from:effectiveFrom,effective_to:effectiveTo||null,override_reason:overrideReason})}),onSuccess:()=>{toast("Form assignment saved and provider users notified.","success");setSelected([]);qc.invalidateQueries({queryKey:["form-assignments",template.id]});},onError:(error:Error)=>toast(error.message,"error")});
+  const send=useMutation<{delivery_type:"IMMEDIATE"|"SCHEDULED";obligations_created:number;recurring_schedules_created:number;duplicates:number}>({mutationFn:()=>api(`/form-templates/${template.id}/assignments/`,{method:"POST",body:JSON.stringify({mode,provider_ids:selected,period_id:mode==="MANUAL"?Number(periodId):undefined,effective_from:effectiveFrom,effective_to:effectiveTo||null,override_reason:overrideReason})}),onSuccess:(result)=>{toast(result.delivery_type==="IMMEDIATE"?(result.obligations_created?`${result.obligations_created} provider form${result.obligations_created===1?"":"s"} sent.`:"Already sent for the selected provider and period."):`${result.recurring_schedules_created} recurring schedule${result.recurring_schedules_created===1?"":"s"} configured. Forms will be created when matching future periods are activated.`,"success");setSelected([]);qc.invalidateQueries({queryKey:["form-assignments",template.id]});qc.invalidateQueries({queryKey:["expected-submissions"]});},onError:(error:Error)=>toast(error.message,"error")});
   if(template.approval_status!=="APPROVED")return <section className="rounded-xl border bg-white p-5"><h2 className="font-semibold">Assignments</h2><p className="mt-1 text-sm text-[#737780]">Publish this template before sending it to providers.</p></section>;
   const providerList=providers.data?.results??[];
-  return <section className="rounded-xl border bg-white p-5"><div><h2 className="font-semibold">Assign / Send to providers</h2><p className="mt-1 text-xs text-[#737780]">Recurring assignments renew each matching period. Manual assignments apply to one period.</p></div>
-    <div className="mt-4 grid gap-3 sm:grid-cols-3"><select className={inp} value={mode} onChange={e=>setMode(e.target.value as "RECURRING"|"MANUAL")}><option value="RECURRING">Recurring assignment</option><option value="MANUAL">Manual one-period assignment</option></select>{mode==="MANUAL"?<select className={`${inp} sm:col-span-2`} value={periodId} onChange={e=>setPeriodId(e.target.value)}><option value="">Select reporting period</option>{(periods.data?.results??[]).filter(p=>p.status!=="CLOSED").map(p=><option key={p.id} value={p.id}>{p.name} · {p.status}</option>)}</select>:<><input className={inp} type="date" value={effectiveFrom} onChange={e=>setEffectiveFrom(e.target.value)}/><input className={inp} type="date" value={effectiveTo} onChange={e=>setEffectiveTo(e.target.value)} aria-label="Recurring assignment end date"/></>}</div>
+  return <><section className="rounded-xl border bg-white p-5"><div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold">Send to providers</h2><p className="mt-1 text-xs text-[#737780]">Use the primary action to deliver this exact version immediately for one active reporting period.</p></div><button type="button" onClick={()=>setSendOpen(true)} className="rounded-lg bg-[#0066cc] px-4 py-2 text-sm font-semibold text-white">Send for one period</button></div>
+    <div className="mt-4 grid gap-3 sm:grid-cols-3"><select className={inp} value={mode} onChange={e=>setMode(e.target.value as "RECURRING"|"MANUAL")}><option value="MANUAL">Send for one active period</option><option value="RECURRING">Configure recurring schedule</option></select>{mode==="MANUAL"?<select className={`${inp} sm:col-span-2`} value={periodId} onChange={e=>setPeriodId(e.target.value)}><option value="">Select active reporting period</option>{(periods.data?.results??[]).filter(p=>p.status==="ACTIVE").map(p=><option key={p.id} value={p.id}>{p.name} · {p.status}</option>)}</select>:<><input className={inp} type="date" value={effectiveFrom} onChange={e=>setEffectiveFrom(e.target.value)}/><input className={inp} type="date" value={effectiveTo} onChange={e=>setEffectiveTo(e.target.value)} aria-label="Recurring assignment end date"/></>}</div>
+    {mode==="RECURRING"&&<p className="mt-3 rounded-lg bg-[#f7f9fb] px-3 py-2 text-xs text-[#43474f]">This creates a schedule only. Provider forms and notifications are generated when matching future reporting periods are activated.</p>}
     <div className="mt-4 max-h-56 overflow-y-auto rounded-lg border p-2">{providerList.map(provider=>{const mismatch=provider.sector!==template.sector||provider.category!==template.provider_category;return <label key={provider.id} className="flex items-center gap-3 rounded px-2 py-2 hover:bg-[#f7f9fb]"><input type="checkbox" checked={selected.includes(provider.id)} onChange={()=>setSelected(items=>items.includes(provider.id)?items.filter(id=>id!==provider.id):[...items,provider.id])}/><span className="flex-1 text-sm">{provider.registered_name}</span>{mismatch&&<span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">Type mismatch</span>}</label>})}</div>
     {(preview.data?.summary.mismatches??0)>0&&<textarea className={`${inp} mt-3`} rows={2} placeholder="Required reason for assigning across a sector or provider-type mismatch" value={overrideReason} onChange={e=>setOverrideReason(e.target.value)}/>}
     {preview.data&&<p className="mt-3 text-xs text-[#43474f]">{preview.data.summary.assignable} assignable · {preview.data.summary.duplicates} already assigned · {preview.data.summary.mismatches} mismatches</p>}
-    <div className="mt-3 flex justify-end"><button onClick={()=>send.mutate()} disabled={!selected.length||send.isPending||(mode==="MANUAL"&&!periodId)||(Boolean(preview.data?.summary.mismatches)&&!overrideReason.trim())} className="rounded-lg bg-[#001836] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Confirm & send</button></div>
+    <div className="mt-3 flex justify-end"><button onClick={()=>send.mutate()} disabled={!selected.length||send.isPending||(mode==="MANUAL"&&!periodId)||(Boolean(preview.data?.summary.mismatches)&&!overrideReason.trim())} className="rounded-lg bg-[#001836] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{mode==="MANUAL"?"Confirm & send":"Configure recurring schedule"}</button></div>
     {(assignments.data?.recurring.length||assignments.data?.manual.length)?<div className="mt-5 border-t pt-4 text-xs text-[#43474f]"><p className="font-semibold">Current assignments</p>{assignments.data?.recurring.map(a=><p key={`r${a.id}`} className="mt-1">Recurring · {a.provider_name} · from {a.effective_from}{a.effective_to?` to ${a.effective_to}`:""}</p>)}{assignments.data?.manual.map(a=><p key={`m${a.id}`} className="mt-1">Manual · {a.provider_name} · {a.period_name}</p>)}</div>:null}
-  </section>;
+  </section><FormSendDialog template={template} open={sendOpen} onClose={()=>setSendOpen(false)}/></>;
 }
 
-function AddFieldForm({ templateId, sectionId, availableFields, onDone }: { templateId: string; sectionId: number; availableFields: FormField[]; onDone: () => void }) {
+function AddFieldForm({ templateId, sectionId, headings, availableFields, onDone }: { templateId: string; sectionId: number; headings: FormHeading[]; availableFields: FormField[]; onDone: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const initial = { field_code:"", label:"", field_type:"text" as FieldType, unit:"", is_required:true, help_text:"", formula:"", conditional_on_field:"", conditional_on_value:"", options:"" };
+  const initial = { field_code:"", label:"", field_type:"text" as FieldType, unit:"", is_required:false, help_text:"", formula:"", heading:"", conditional_on_field:"", conditional_on_value:"", options:"" };
   const [d, setD] = useState(initial);
 
   const mut = useMutation({
     mutationFn: async () => {
-      const { options, conditional_on_field, ...fieldData } = d;
+      const { options, conditional_on_field, heading, ...fieldData } = d;
       const field = await api<FormField>(`/form-templates/${templateId}/sections/${sectionId}/fields/`, {
         method:"POST",
-        body: JSON.stringify({ ...fieldData, conditional_on_field: conditional_on_field ? Number(conditional_on_field) : null }),
+        body: JSON.stringify({ ...fieldData, heading: heading ? Number(heading) : null, conditional_on_field: conditional_on_field ? Number(conditional_on_field) : null }),
       });
       if (["select", "multiselect"].includes(d.field_type)) {
         const labels = options.split("\n").map((item) => item.trim()).filter(Boolean);
@@ -139,6 +142,13 @@ function AddFieldForm({ templateId, sectionId, availableFields, onDone }: { temp
           <select className={inp} value={d.conditional_on_field} onChange={e=>setD(p=>({...p,conditional_on_field:e.target.value}))}>
             <option value="">Always visible</option>
             {availableFields.map(field=><option key={field.id} value={field.id}>{field.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className={lbl}>Heading</label>
+          <select className={inp} value={d.heading} onChange={e=>setD(p=>({...p,heading:e.target.value}))}>
+            <option value="">No heading</option>
+            {headings.map(heading=><option key={heading.id} value={heading.id}>{heading.title}</option>)}
           </select>
         </div>
         {d.conditional_on_field && <div className="sm:col-span-2">
@@ -289,8 +299,10 @@ function SectionBlock({ section, templateId, editable }: { section: FormSection;
   const { toast } = useToast();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [addingHeading, setAddingHeading] = useState(false);
   const [addingField, setAddingField] = useState(false);
   const [addingGrid, setAddingGrid] = useState(false);
+  const [headingDraft, setHeadingDraft] = useState({ heading_code:"", title:"", level:1 as 1|2|3 });
 
   const deleteFieldMut = useMutation({
     mutationFn: (fid: number) =>
@@ -305,6 +317,31 @@ function SectionBlock({ section, templateId, editable }: { section: FormSection;
     onSuccess: () => { toast("Section removed.", "info"); qc.invalidateQueries({ queryKey: ["form-template", templateId] }); },
     onError: () => toast("Cannot delete — section may have submission data.", "error"),
   });
+
+  const addHeadingMut = useMutation({
+    mutationFn:()=>api(`/form-templates/${templateId}/sections/${section.id}/headings/`,{method:"POST",body:JSON.stringify(headingDraft)}),
+    onSuccess:()=>{toast("Heading added.","success");setHeadingDraft({heading_code:"",title:"",level:1});setAddingHeading(false);qc.invalidateQueries({queryKey:["form-template",templateId]});},
+    onError:(error:Error)=>toast(error.message,"error"),
+  });
+
+  async function updateHeading(heading:FormHeading, changes:Partial<FormHeading>) {
+    try {
+      await api(`/form-templates/${templateId}/sections/${section.id}/headings/${heading.id}/`,{method:"PATCH",body:JSON.stringify(changes)});
+      qc.invalidateQueries({queryKey:["form-template",templateId]});
+    } catch (error) { toast(error instanceof Error?error.message:"Unable to update heading.","error"); }
+  }
+
+  async function deleteHeading(heading:FormHeading) {
+    try {
+      await api(`/form-templates/${templateId}/sections/${section.id}/headings/${heading.id}/`,{method:"DELETE"});
+      qc.invalidateQueries({queryKey:["form-template",templateId]});
+    } catch (error) { toast(error instanceof Error?error.message:"Unable to remove heading.","error"); }
+  }
+
+  const structureItems = [
+    ...(section.headings??[]).map(heading=>({kind:"heading" as const,sortOrder:heading.sort_order,heading})),
+    ...section.fields.map(field=>({kind:"field" as const,sortOrder:field.sort_order,field})),
+  ].sort((left,right)=>left.sortOrder-right.sortOrder);
 
   return (
     <div className="rounded-[12px] border border-[#eceef0] bg-white overflow-hidden">
@@ -335,19 +372,22 @@ function SectionBlock({ section, templateId, editable }: { section: FormSection;
             <p className="text-[12px] text-[#43474f] italic mb-3">{section.instructions}</p>
           )}
 
-          {/* Fields list */}
-          {section.fields.length > 0 && (
+          {/* Ordered headings and fields */}
+          {structureItems.length > 0 && (
             <div className="space-y-1 mb-3">
-              {section.fields.map((field: FormField) => (
-                <div key={field.id} className="flex items-center gap-3 rounded-[8px] bg-[#f7f9fb] px-3 py-2">
-                  <span className="text-[12px] font-medium text-[#191c1e] flex-1">{field.label}</span>
-                  <span className="text-[10px] font-mono text-[#737780] bg-white border border-[#eceef0] rounded px-1.5 py-0.5">{field.field_type}</span>
-                  {field.unit && <span className="text-[10px] text-[#737780]">{field.unit}</span>}
-                  {field.is_required && <span className="text-[10px] text-[#e31937]">*</span>}
-                  <button onClick={() => { if (confirm(`Remove field "${field.label}"?`)) deleteFieldMut.mutate(field.id); }}
-                    className="text-[#c3c6d0] hover:text-[#e31937] transition-colors ml-1">
-                    <Trash2 size={12} />
-                  </button>
+              {structureItems.map(item => item.kind === "heading" ? (
+                <div key={`h${item.heading.id}`} className={`flex items-center gap-2 rounded-[8px] border-l-4 px-3 py-2 ${item.heading.level===1?'border-[#001836] bg-[#e8f1fb]':item.heading.level===2?'border-[#0066cc] bg-[#f1f7fd]':'border-[#8aa9c7] bg-[#f7f9fb]'}`}>
+                  <span className="text-[10px] font-semibold uppercase text-[#737780]">Header {item.heading.level}</span>
+                  {editable ? <input defaultValue={item.heading.title} onBlur={event=>{if(event.target.value.trim()&&event.target.value.trim()!==item.heading.title)updateHeading(item.heading,{title:event.target.value.trim()});}} className="min-w-0 flex-1 border-0 bg-transparent text-[12px] font-semibold outline-none"/> : <span className="flex-1 text-[12px] font-semibold">{item.heading.title}</span>}
+                  {editable&&<><label className="flex items-center gap-1 text-[10px] text-[#737780]">Order<input aria-label={`Order for ${item.heading.title}`} type="number" min={0} defaultValue={item.heading.sort_order} onBlur={event=>{const next=Number(event.target.value);if(Number.isFinite(next)&&next!==item.heading.sort_order)updateHeading(item.heading,{sort_order:next});}} className="w-14 rounded border bg-white px-1 py-0.5"/></label><select aria-label={`Level for ${item.heading.title}`} value={item.heading.level} onChange={event=>updateHeading(item.heading,{level:Number(event.target.value) as 1|2|3})} className="rounded border bg-white px-1 py-0.5 text-[10px]"><option value={1}>Level 1</option><option value={2}>Level 2</option><option value={3}>Level 3</option></select><button aria-label={`Delete ${item.heading.title}`} onClick={()=>{if(confirm(`Remove heading "${item.heading.title}"? Fields remain in the section.`))deleteHeading(item.heading);}} className="text-[#737780] hover:text-[#e31937]"><Trash2 size={12}/></button></>}
+                </div>
+              ) : (
+                <div key={`f${item.field.id}`} className="flex items-center gap-3 rounded-[8px] bg-[#f7f9fb] px-3 py-2">
+                  <span className="text-[12px] font-medium text-[#191c1e] flex-1">{item.field.label}</span>
+                  <span className="text-[10px] font-mono text-[#737780] bg-white border border-[#eceef0] rounded px-1.5 py-0.5">{item.field.field_type}</span>
+                  {item.field.unit&&<span className="text-[10px] text-[#737780]">{item.field.unit}</span>}
+                  {item.field.is_required&&<span className="text-[10px] text-[#e31937]">*</span>}
+                  {editable&&<button onClick={()=>{if(confirm(`Remove field "${item.field.label}"?`))deleteFieldMut.mutate(item.field.id);}} className="text-[#c3c6d0] hover:text-[#e31937] transition-colors ml-1"><Trash2 size={12}/></button>}
                 </div>
               ))}
             </div>
@@ -357,9 +397,13 @@ function SectionBlock({ section, templateId, editable }: { section: FormSection;
           {section.grids?.map(grid => <GridEditor key={grid.id} grid={grid} editable={editable}
             onChanged={() => qc.invalidateQueries({queryKey:["form-template", templateId]})} />)}
 
-          {/* Add field / grid buttons */}
-          {editable && !addingField && !addingGrid && (
+          {/* Add heading / field / grid buttons */}
+          {editable && !addingHeading && !addingField && !addingGrid && (
             <div className="flex gap-2 pt-1">
+              <button onClick={() => setAddingHeading(true)}
+                className="flex items-center gap-1.5 rounded-[8px] border border-[#c3c6d0] px-3 py-1.5 text-[12px] font-medium text-[#43474f] hover:bg-[#f2f4f6] transition-colors">
+                <Plus size={12} /> Add Heading
+              </button>
               <button onClick={() => setAddingField(true)}
                 className="flex items-center gap-1.5 rounded-[8px] border border-[#c3c6d0] px-3 py-1.5 text-[12px] font-medium text-[#43474f] hover:bg-[#f2f4f6] transition-colors">
                 <Plus size={12} /> Add Field
@@ -371,7 +415,8 @@ function SectionBlock({ section, templateId, editable }: { section: FormSection;
             </div>
           )}
 
-          {addingField && <AddFieldForm templateId={templateId} sectionId={section.id} availableFields={section.fields} onDone={() => setAddingField(false)} />}
+          {addingHeading&&<div className="mt-3 grid gap-2 rounded-[10px] border bg-[#f7f9fb] p-4 sm:grid-cols-[1fr_2fr_120px_auto]"><input className={inp} placeholder="Heading code" value={headingDraft.heading_code} onChange={e=>setHeadingDraft(current=>({...current,heading_code:e.target.value}))}/><input className={inp} placeholder="Heading title" value={headingDraft.title} onChange={e=>setHeadingDraft(current=>({...current,title:e.target.value}))}/><select className={inp} value={headingDraft.level} onChange={e=>setHeadingDraft(current=>({...current,level:Number(e.target.value) as 1|2|3}))}><option value={1}>Level 1</option><option value={2}>Level 2</option><option value={3}>Level 3</option></select><div className="flex gap-2"><button disabled={!headingDraft.heading_code||!headingDraft.title||addHeadingMut.isPending} onClick={()=>addHeadingMut.mutate()} className="rounded bg-[#001836] px-3 text-xs font-semibold text-white disabled:opacity-50">Add</button><button onClick={()=>setAddingHeading(false)} className="rounded border px-3 text-xs">Cancel</button></div></div>}
+          {addingField && <AddFieldForm templateId={templateId} sectionId={section.id} headings={section.headings??[]} availableFields={section.fields} onDone={() => setAddingField(false)} />}
           {addingGrid && <AddGridForm templateId={templateId} sectionId={section.id} onDone={() => setAddingGrid(false)} />}
         </div>
       )}
@@ -476,6 +521,7 @@ export default function FormBuilderPage() {
       </div>
 
       {activeTab==="publication"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-4 text-[12px] text-[#43474f]">
+        <p className="mb-3 rounded-lg bg-[#f2f4f6] p-3"><span className="font-semibold">Publication basis:</span> {template.mapping_basis==="PRD_SECTION_11"?"PRD Section 11 — blocker/high gaps must pass.":template.mapping_basis==="CUSTOM"?"Custom NCA form — Section 11 matching is not applicable.":"Approved source form — Section 11 matching is not applicable."}</p>
         <p><span className="font-semibold">Source:</span> {template.source_reference || "Not recorded"}</p>
         <p className="mt-1 break-all font-mono text-[10px] text-[#737780]">{template.source_sha256 || "No source hash"}</p>
         <button onClick={() => { const version=window.prompt("New version number"); if(version?.trim()) cloneMut.mutate(version.trim()); }}
@@ -485,7 +531,7 @@ export default function FormBuilderPage() {
 
       {activeTab==="workbook"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-5 text-sm text-[#43474f]"><h2 className="font-semibold text-[#191c1e]">Workbook provenance</h2><p className="mt-2">{template.source_reference||"This version was created manually and has no workbook source."}</p><p className="mt-2 break-all font-mono text-xs text-[#737780]">{template.source_sha256||"No workbook SHA-256 recorded"}</p><Link href="/forms" className="mt-4 inline-flex rounded-lg bg-[#001836] px-4 py-2 text-xs font-semibold text-white">Import a workbook as a new draft</Link></div>}
 
-      {activeTab==="gaps"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-5"><h2 className="text-sm font-semibold">Gap Analysis</h2><p className="mt-1 text-xs text-[#737780]">Review objective structural requirements and publication blockers for this immutable version.</p><Link href={`/forms/${id}/gaps`} className="mt-4 inline-flex rounded-lg bg-[#0066cc] px-4 py-2 text-xs font-semibold text-white">Open Gap Analysis</Link></div>}
+      {activeTab==="gaps"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-5"><h2 className="text-sm font-semibold">Gap Analysis</h2><p className="mt-1 text-xs text-[#737780]">{template.mapping_basis==="PRD_SECTION_11"?"Review objective Section 11 requirements and publication blockers for this immutable version.":"Section 11 matching is not applicable to this custom/source-derived form. Publication uses its configured structure, validation and source approval checks."}</p>{template.mapping_basis==="PRD_SECTION_11"&&<Link href={`/forms/${id}/gaps`} className="mt-4 inline-flex rounded-lg bg-[#0066cc] px-4 py-2 text-xs font-semibold text-white">Open Gap Analysis</Link>}</div>}
 
       {/* Section count */}
       <div className={activeTab==="structure"?"contents":"hidden"}>

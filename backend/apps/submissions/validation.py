@@ -27,6 +27,18 @@ def _expression(node, values):
     return OPS[op](args[0], args[1])
 
 
+def _expression_has_all_operands(node, values):
+    if isinstance(node, (int, float)):
+        return True
+    if isinstance(node, str):
+        return str(node).strip() != ""
+    if not isinstance(node, dict):
+        return False
+    if "field" in node:
+        return values.get(int(node["field"])) not in (None, "")
+    return all(_expression_has_all_operands(arg, values) for arg in node.get("args", []))
+
+
 def _type_valid(field_type, value):
     if value in (None, ""): return True
     if field_type in {"number", "currency", "percentage", "formula"}: _decimal(value)
@@ -52,6 +64,7 @@ def run_validation(submission, scope="FULL"):
     failures = []
     for rule in rules:
         target_id = str(rule.field_id or rule.grid_id or "")
+        missing_conditional_value = False
         try:
             value = values.get(rule.field_id, "") if rule.field_id else ""
             params = rule.parameters or {}
@@ -81,22 +94,40 @@ def run_validation(submission, scope="FULL"):
                         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
                             raise ValueError(f"Coordinates in row {row_id} are outside valid bounds.")
             elif rule.rule_type == "CONDITIONAL":
-                if str(values.get(int(params["when_field"]), "")) == str(params.get("equals")) and not str(value).strip(): raise ValueError("Value is required by a conditional rule.")
+                if str(values.get(int(params["when_field"]), "")) == str(params.get("equals")) and not str(value).strip():
+                    missing_conditional_value = True
+                    raise ValueError("The applicable indicator is blank.")
             elif rule.rule_type == "FORMULA" and rule.field:
-                calculated = _expression(params.get("expression"), values)
+                expression = params.get("expression")
+                if not _expression_has_all_operands(expression, values):
+                    SubmissionValue.objects.filter(
+                        submission=submission, field=rule.field, value_status="SYSTEM_CALCULATED",
+                    ).delete()
+                    values.pop(rule.field_id, None)
+                    continue
+                calculated = _expression(expression, values)
                 obj, _ = SubmissionValue.objects.update_or_create(submission=submission, field=rule.field,
                     defaults={"value": str(calculated), "value_status": "SYSTEM_CALCULATED"})
                 values[rule.field_id] = obj.value
             elif rule.rule_type == "COMPARISON":
-                left = _decimal(values.get(int(params.get("left_field", rule.field_id)), "")); right = _decimal(values.get(int(params["right_field"]), ""))
+                left_value = values.get(int(params.get("left_field", rule.field_id)), "")
+                right_value = values.get(int(params["right_field"]), "")
+                if left_value in (None, "") or right_value in (None, ""):
+                    continue
+                left = _decimal(left_value); right = _decimal(right_value)
                 op = params.get("operator")
                 if op not in OPS or not OPS[op](left, right): raise ValueError("Cross-field comparison failed.")
             elif rule.rule_type == "GRID_TOTAL":
-                column_id = int(params["column_id"]); total = sum((_decimal(v.value) for v in grid_values if v.grid_column_id == column_id and v.value), Decimal(0))
-                expected = _decimal(values.get(int(params["equals_field"]), ""))
+                column_id = int(params["column_id"])
+                supplied_cells = [v for v in grid_values if v.grid_column_id == column_id and v.value not in (None, "")]
+                expected_value = values.get(int(params["equals_field"]), "")
+                if not supplied_cells or expected_value in (None, ""):
+                    continue
+                total = sum((_decimal(v.value) for v in supplied_cells), Decimal(0))
+                expected = _decimal(expected_value)
                 if total != expected: raise ValueError(f"Grid total {total} does not match {expected}.")
         except (ValueError, KeyError, TypeError, InvalidOperation) as exc:
-            result = ValidationResult.objects.create(run=run, rule=rule, severity=rule.severity,
+            result = ValidationResult.objects.create(run=run, rule=rule, severity="WARN" if missing_conditional_value else rule.severity,
                 target_type="FIELD" if rule.field_id else "GRID", target_id=target_id,
                 code=f"VALIDATION_{rule.rule_type}", message=rule.message or str(exc), details={"reason": str(exc)})
             failures.append(result)

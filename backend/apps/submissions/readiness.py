@@ -46,6 +46,7 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
     }
 
     blockers = []
+    completeness_warnings = []
     required_total = 0
     completed_total = 0
     section_required = defaultdict(int)
@@ -65,14 +66,20 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
             completed_total += 1
             section_completed[field.section.section_code] += 1
             continue
-        code = "EXPLANATION_REQUIRED" if value and value.value_status in ACCEPTED_NON_FILLED else "REQUIRED_FIELD"
-        blockers.append({
-            "code": code,
+        issue = {
+            "code": "EXPLANATION_REQUIRED" if value and value.value_status in ACCEPTED_NON_FILLED else "MISSING_INDICATOR",
             "type": "FIELD",
             "id": field.id,
             "section_code": field.section.section_code,
             "label": field.label,
-        })
+        }
+        if field.field_type == "declaration":
+            issue["code"] = "REQUIRED_DECLARATION"
+            blockers.append(issue)
+        elif value and value.value_status in ACCEPTED_NON_FILLED:
+            blockers.append(issue)
+        else:
+            completeness_warnings.append(issue)
 
     grids = (
         FormGrid.objects.filter(section__form_template=template)
@@ -91,8 +98,8 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
         else:
             row_ids = sorted(rows_by_grid.get(grid.id, set()))
             if len(row_ids) < grid.min_rows:
-                blockers.append({
-                    "code": "REQUIRED_GRID_ROWS", "type": "GRID", "id": grid.id,
+                completeness_warnings.append({
+                    "code": "MISSING_GRID_ROWS", "type": "GRID", "id": grid.id,
                     "section_code": grid.section.section_code, "label": f"{grid.title} requires at least {grid.min_rows} row(s)",
                 })
         for row_id in row_ids:
@@ -104,8 +111,8 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
                     completed_total += 1
                     section_completed[grid.section.section_code] += 1
                     continue
-                blockers.append({
-                    "code": "REQUIRED_GRID_CELL",
+                completeness_warnings.append({
+                    "code": "MISSING_GRID_CELL",
                     "type": "GRID_CELL",
                     "id": f"{grid.id}:{row_id}:{column.id}",
                     "section_code": grid.section.section_code,
@@ -142,8 +149,8 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
     blockers = [b for b in blockers if b["code"] in non_overridable or str(b["id"]) not in waived]
     completion_pct = round((completed_total / required_total) * 100, 2) if required_total else 100.0
     missing_types = defaultdict(int)
-    for blocker in blockers:
-        missing_types[blocker["type"]] += 1
+    for warning in completeness_warnings:
+        missing_types[warning["type"]] += 1
 
     sections = []
     for section in template.sections.all():
@@ -172,8 +179,12 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
     return {
         "completion_pct": completion_pct,
         "can_submit": not blockers,
-        "missing_required_count": len(blockers),
+        "missing_indicator_count": len(completeness_warnings),
+        # Compatibility field retained for existing clients; it now describes
+        # requested indicators that are blank, not workflow blockers.
+        "missing_required_count": len(completeness_warnings),
         "missing_by_type": dict(missing_types),
+        "completeness_warnings": completeness_warnings,
         "blocking_issues": blockers,
         "validation_run_id": validation_run.id,
         "warning_count": validation_run.results.filter(severity="WARN").count(),

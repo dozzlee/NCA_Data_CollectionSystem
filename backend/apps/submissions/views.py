@@ -627,6 +627,14 @@ class SectionValuesView(APIView):
             mark_matching_corrections_addressed(
                 submission, section_code=section_code, target_keys=target_keys,
             )
+        if submission.expected.workflow_status == "NOT_STARTED":
+            submission.expected.workflow_status = "DRAFT"
+            submission.expected.save(update_fields=["workflow_status"])
+            audit_transition(
+                request=request, submission=submission, event_type="SUBMISSION_STARTED",
+                message="The form was opened for data entry by saving its first section.",
+                from_status="NOT_STARTED", to_status="DRAFT", audience="BOTH",
+            )
         base_revision = submission.revision
         revision = complete_submission_revision(submission, request.user)
 
@@ -704,7 +712,7 @@ class SubmitForApprovalView(APIView):
     def post(self, request, pk):
         visible = get_submission_for_user(request.user, pk=pk)
         submission = lock_submission(visible.pk)
-        if submission.expected.workflow_status not in ("DRAFT", "PROVIDER_CHANGES_REQUESTED"):
+        if submission.expected.workflow_status not in ("NOT_STARTED", "DRAFT", "PROVIDER_CHANGES_REQUESTED"):
             return Response(
                 {"detail": "Only an editable draft can be sent for provider approval."},
                 status=400,
@@ -714,8 +722,8 @@ class SubmitForApprovalView(APIView):
         readiness = refresh_submission_completion(submission)
         if not readiness["can_submit"]:
             return Response({
-                "code": "INCOMPLETE_SUBMISSION",
-                "detail": "Complete all required items before submitting for approval.",
+                "code": "SUBMISSION_BLOCKED",
+                "detail": "Resolve blocking validation, declaration, upload or security issues before submitting. Blank indicators are allowed.",
                 **readiness,
             }, status=400)
         open_items = CorrectionItem.objects.filter(
@@ -729,6 +737,15 @@ class SubmitForApprovalView(APIView):
                 "open_correction_item_ids": list(open_items.values_list("id", flat=True)),
             }, status=409)
         prior_status = submission.expected.workflow_status
+        if prior_status == "NOT_STARTED":
+            submission.expected.workflow_status = "DRAFT"
+            submission.expected.save(update_fields=["workflow_status"])
+            audit_transition(
+                request=request, submission=submission, event_type="SUBMISSION_STARTED",
+                message="The form was opened for data entry before submission to the Provider Approver.",
+                from_status="NOT_STARTED", to_status="DRAFT", audience="BOTH",
+            )
+            prior_status = "DRAFT"
         is_resubmission = prior_status in {"PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"} or submission.supersedes_id is not None
         submission.expected.workflow_status = "PROVIDER_RESUBMITTED" if is_resubmission else "PENDING_APPROVAL"
         submission.expected.save(update_fields=["workflow_status"])
@@ -754,8 +771,8 @@ class OfficialSubmitView(APIView):
         readiness = refresh_submission_completion(submission)
         if not readiness["can_submit"]:
             return Response({
-                "code": "INCOMPLETE_SUBMISSION",
-                "detail": "The form changed or failed validation and cannot be approved.",
+                "code": "SUBMISSION_BLOCKED",
+                "detail": "Resolve blocking validation, declaration, upload or security issues before official submission. Blank indicators are allowed.",
                 **readiness,
             }, status=409)
         attestation = request.data.get("attestation")
