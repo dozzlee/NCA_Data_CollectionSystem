@@ -331,13 +331,14 @@ export default function PeriodDetailPage() {
               {submissions.map(s => (
                 <tr key={s.id} className="hover:bg-[#f7f9fb] transition-colors">
                   <td className="px-5 py-3.5 text-[13px] font-medium text-[#191c1e]">{s.provider_name}</td>
-                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{s.form_code}</td>
+                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{s.form_code}{s.submission_reference&&<span className="mt-1 block max-w-[240px] break-all font-mono text-[10px] text-[#004999]">{s.submission_reference}</span>}</td>
                   <td className="px-5 py-3.5"><WorkflowBadge status={s.workflow_status} /></td>
                   <td className="px-5 py-3.5"><DueStateBadge state={s.due_state} /></td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{s.assigned_officer_name ?? "—"}</td>
                   <td className="px-5 py-3.5">
-                    <Link href={`/submissions/${s.id}/review`}
+                    {s.latest_submission_id ? <Link href={`/submissions/${s.latest_submission_id}/review`}
                       className="text-[13px] font-medium text-[#0066cc] hover:underline">View →</Link>
+                      : <span title="No submission version exists for this obligation." className="text-[13px] text-[#737780]">Unavailable</span>}
                   </td>
                 </tr>
               ))}

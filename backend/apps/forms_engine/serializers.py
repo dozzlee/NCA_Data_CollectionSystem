@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import FormFamily, FormTemplate, FormSection, FormHeading, FormField, FormGrid, GridColumn, GridRow, SelectOption, KMZUploadRequirement, ValidationRule, FormRequirement, FormGapAssessment, FormWorkbookImport
+from .models import FormCodeCatalog, FormFamily, FormTemplate, FormSection, FormHeading, FormField, FormGrid, GridColumn, GridRow, SelectOption, KMZUploadRequirement, ValidationRule, FormRequirement, FormGapAssessment, FormWorkbookImport
 from .workbook_import import normalize_form_code
 from .rules import validate_rule_definition
 
@@ -9,6 +9,17 @@ class FormFamilySerializer(serializers.ModelSerializer):
         model = FormFamily
         fields = "__all__"
         read_only_fields = ["frequency_decision_status", "frequency_decision_reference", "source_owner", "created_at"]
+
+
+class FormCodeCatalogSerializer(serializers.ModelSerializer):
+    next_version = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = FormCodeCatalog
+        fields = [
+            "id", "code", "name", "frequency", "source_filename",
+            "code_status", "next_version",
+        ]
 
 
 class ValidationRuleSerializer(serializers.ModelSerializer):
@@ -62,13 +73,13 @@ class SelectOptionSerializer(serializers.ModelSerializer):
 class GridRowSerializer(serializers.ModelSerializer):
     class Meta:
         model = GridRow
-        fields = ["id", "row_label", "sort_order"]
+        fields = ["id", "row_label", "sort_order", "source_sheet", "source_rows"]
 
 
 class GridColumnSerializer(serializers.ModelSerializer):
     class Meta:
         model = GridColumn
-        fields = ["id", "column_code", "label", "field_type", "unit", "is_required", "sort_order"]
+        fields = ["id", "column_code", "label", "field_type", "unit", "is_required", "sort_order", "source_sheet", "source_row"]
 
 
 class FormGridSerializer(serializers.ModelSerializer):
@@ -77,7 +88,7 @@ class FormGridSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FormGrid
-        fields = ["id", "grid_code", "title", "row_mode", "min_rows", "sort_order", "instructions", "columns", "fixed_rows"]
+        fields = ["id", "grid_code", "title", "row_mode", "min_rows", "sort_order", "instructions", "source_sheet", "source_row", "columns", "fixed_rows"]
 
 
 class FormHeadingSerializer(serializers.ModelSerializer):
@@ -101,7 +112,7 @@ class FormFieldSerializer(serializers.ModelSerializer):
             "id", "field_code", "label", "field_type", "unit", "heading", "heading_code",
             "is_required", "help_text", "formula",
             "conditional_on_field", "conditional_on_value",
-            "sort_order", "export_name", "options",
+            "sort_order", "export_name", "source_sheet", "source_row", "options",
         ]
 
 
@@ -135,7 +146,10 @@ class FormTemplateListSerializer(serializers.ModelSerializer):
     class Meta:
         model = FormTemplate
         fields = ["id", "family", "form_code", "name", "sector", "provider_category", "frequency", "version", "effective_from", "status", "kmz_required", "excel_backup_enabled", "mapping_complete", "mapping_basis", "approval_status", "source_reference", "source_sha256", "approved_by", "approved_at", "published_at"]
-        read_only_fields = ["family", "mapping_basis", "status", "approval_status", "approved_by", "approved_at", "published_at"]
+        read_only_fields = [
+            "family", "name", "sector", "provider_category", "mapping_basis",
+            "status", "approval_status", "approved_by", "approved_at", "published_at",
+        ]
 
     def validate_form_code(self, value):
         try:
@@ -146,9 +160,11 @@ class FormTemplateListSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         code = attrs.get("form_code", getattr(self.instance, "form_code", ""))
         version = attrs.get("version", getattr(self.instance, "version", ""))
-        frequency = attrs.get("frequency", getattr(self.instance, "frequency", ""))
-        if frequency not in {"MONTHLY", "QUARTERLY", "ANNUAL", "SEMI_ANNUAL"}:
-            raise serializers.ValidationError({"frequency": "Unsupported reporting frequency."})
+        catalog = FormCodeCatalog.objects.filter(code=code, is_active=True).first()
+        if not catalog:
+            raise serializers.ValidationError({"form_code": "Select an available governed form code."})
+        if not self.instance and version != catalog.next_version:
+            raise serializers.ValidationError({"version": f"The next available version is {catalog.next_version}. Refresh and try again."})
         family = FormFamily.objects.filter(code=code).first()
         if family and FormTemplate.objects.filter(family=family, version=version).exclude(pk=getattr(self.instance, "pk", None)).exists():
             raise serializers.ValidationError({"version": "This form family and version already exist."})
@@ -156,11 +172,17 @@ class FormTemplateListSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         code = validated_data["form_code"]
+        catalog = FormCodeCatalog.objects.get(code=code, is_active=True)
+        validated_data.update({
+            "name": catalog.name, "sector": catalog.sector,
+            "provider_category": catalog.provider_category,
+        })
         family, created = FormFamily.objects.get_or_create(
             code=code,
             defaults={
-                "name": validated_data["name"], "canonical_frequency": validated_data["frequency"],
+                "name": catalog.name, "canonical_frequency": validated_data["frequency"],
                 "frequency_decision_status": "APPROVED",
+                "code_status": catalog.code_status,
             },
         )
         if not created and family.canonical_frequency and family.canonical_frequency != validated_data["frequency"]:
@@ -200,6 +222,7 @@ class FormWorkbookImportSerializer(serializers.ModelSerializer):
             "created_by", "created_by_name", "resulting_template_id", "created_at", "updated_at",
         ]
         read_only_fields = [
+            "form_code", "name", "version", "sector", "provider_category",
             "file_name", "file_size", "sha256", "scan_status", "scan_engine", "scan_details",
             "parse_status", "parser_version", "warnings", "created_by", "created_at", "updated_at",
         ]

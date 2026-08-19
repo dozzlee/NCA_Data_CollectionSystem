@@ -14,8 +14,10 @@ class SubmissionKMZUpload(models.Model):
 
     submission = models.ForeignKey("submissions.Submission", on_delete=models.CASCADE, related_name="kmz_uploads")
     requirement = models.ForeignKey(
-        "forms_engine.KMZUploadRequirement", on_delete=models.PROTECT, related_name="uploads"
+        "forms_engine.KMZUploadRequirement", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="uploads"
     )
+    requirement_snapshot = models.JSONField(default=dict, blank=True)
     file_name = models.CharField(max_length=255)
     file_size = models.PositiveIntegerField(help_text="File size in bytes")
     storage_path = models.CharField(max_length=500)

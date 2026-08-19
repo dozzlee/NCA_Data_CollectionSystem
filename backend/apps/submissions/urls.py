@@ -22,6 +22,10 @@ urlpatterns = [
     path("submissions/<int:pk>/", v.SubmissionDetailView.as_view()),
     path("submissions/<int:pk>/review-data/", v.SubmissionReviewDataView.as_view()),
     path("submissions/<int:pk>/provider-review-data/", v.ProviderReviewDataView.as_view()),
+    path("submissions/<int:pk>/previous-month-values/", v.PreviousMonthValuesView.as_view()),
+    path("submissions/<int:pk>/monthly-report/", v.MonthlyReportView.as_view()),
+    path("submissions/<int:pk>/monthly-report/retry/", v.MonthlyReportRetryView.as_view()),
+    path("submissions/<int:pk>/monthly-report/download/", v.MonthlyReportDownloadView.as_view()),
     path("submissions/<int:pk>/sections/<str:section_code>/values/", v.SectionValuesView.as_view()),
     path("submissions/<int:pk>/completion/", v.SubmissionCompletionView.as_view()),
     path("submissions/<int:pk>/submit-for-approval/", v.SubmitForApprovalView.as_view()),
@@ -53,4 +57,7 @@ urlpatterns = [
     path("submission-overrides/<int:pk>/decision/", v.SubmissionOverrideDecisionView.as_view()),
     path("periods/<int:period_id>/reminder-policies/", v.ReminderPolicyListCreate.as_view()),
     path("reminder-policies/<int:pk>/approve/", v.ApproveReminderPolicyView.as_view()),
+    path("form-templates/<int:template_pk>/workbook-baselines/", v.ProviderWorkbookBaselineListCreateView.as_view()),
+    path("workbook-baselines/<int:pk>/", v.ProviderWorkbookBaselineDetailView.as_view()),
+    path("workbook-baselines/<int:pk>/approve/", v.ProviderWorkbookBaselineApproveView.as_view()),
 ]

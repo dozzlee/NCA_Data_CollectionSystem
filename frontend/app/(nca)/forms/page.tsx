@@ -8,12 +8,11 @@ import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { FormSendDialog } from "@/components/forms/FormSendDialog";
-import type { FormTemplate, FormWorkbookImport, ProviderCategory, Frequency, Sector } from "@/lib/types";
+import type { FormTemplate, FormWorkbookImport, FormCodeCatalogEntry, Frequency, ProviderCategory } from "@/lib/types";
 import { PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 
 const CATEGORIES: ProviderCategory[] = ["MNO","ISP","PAY_TV","TOWER_OPERATOR","TOWER_MAIN","DOMESTIC_FIBRE","SUBMARINE_FIBRE"];
-const FREQUENCIES: Frequency[] = ["MONTHLY","QUARTERLY","ANNUAL"];
-const FREQ_LABELS: Record<Frequency, string> = { MONTHLY:"Monthly", QUARTERLY:"Quarterly", SEMI_ANNUAL:"Semi-Annual (historical)", ANNUAL:"Annual" };
+const FREQ_LABELS: Record<Frequency, string> = { MONTHLY:"Monthly", QUARTERLY:"Quarterly", SEMI_ANNUAL:"Bi-annual", ANNUAL:"Annual" };
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: "bg-[#e5f4eb] text-[#1f7a4d]",
   DRAFT:  "bg-[#fff3bf] text-[#7a5c00]",
@@ -21,11 +20,12 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 interface NewFormState {
-  form_code: string; name: string; sector: Sector; provider_category: ProviderCategory;
-  frequency: Frequency; version: string;
+  form_code: string;
+  version: string;
+  frequency: Frequency | "";
 }
 const EMPTY: NewFormState = {
-  form_code:"", name:"", sector:"TELECOM", provider_category:"MNO", frequency:"MONTHLY", version:"1.0"
+  form_code:"", version:"", frequency:""
 };
 
 export default function FormsPage() {
@@ -38,6 +38,11 @@ export default function FormsPage() {
   const [filterCat, setFilterCat] = useState("");
   const [filterSector, setFilterSector] = useState("");
   const [sendTemplate, setSendTemplate] = useState<FormTemplate | null>(null);
+
+  const catalog = useQuery<{ results: FormCodeCatalogEntry[] }>({
+    queryKey: ["form-code-catalog"],
+    queryFn: () => api("/form-code-catalog/"),
+  });
 
   const { data, isLoading } = useQuery<{ results: FormTemplate[] }>({
     queryKey: ["form-templates", filterCat, filterSector],
@@ -75,6 +80,12 @@ export default function FormsPage() {
   });
 
   const templates = data?.results ?? [];
+  const selectedCode = catalog.data?.results.find(item => item.code === form.form_code);
+
+  function selectFormCode(code: string) {
+    const selected = catalog.data?.results.find(item => item.code === code);
+    setForm({ form_code: code, version: selected?.next_version ?? "", frequency: "" });
+  }
 
   return (
     <div className="space-y-6">
@@ -82,7 +93,7 @@ export default function FormsPage() {
         <div>
           <h1 className="text-[28px] font-semibold text-[#191c1e]">Form Templates</h1>
           <p className="mt-1 text-[14px] text-[#43474f]">
-            Manage data collection forms, sections, and indicators. Provider types are fixed; templates and fields are fully configurable.
+            Select a governed form code, then create its independent structure manually or from its source workbook.
           </p>
         </div>
         <button onClick={() => setShowCreate(v => !v)}
@@ -96,41 +107,32 @@ export default function FormsPage() {
           className="rounded-[16px] border border-[#eceef0] bg-white p-6 space-y-4">
           <h2 className="text-[15px] font-semibold text-[#191c1e]">New Form Template</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              { key:"form_code", label:"Form Code", placeholder:"e.g. DC-ISP07" },
-              { key:"name",      label:"Form Name",  placeholder:"e.g. ISP Annual Return v2" },
-              { key:"version",   label:"Version",    placeholder:"1.0" },
-            ].map(({ key, label, placeholder }) => (
-              <div key={key}>
-                <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">{label}</label>
-                <input type="text" placeholder={placeholder} required
-                  value={(form as any)[key]}
-                  onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-                  className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none" />
-              </div>
-            ))}
             <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Sector</label>
-              <select value={form.sector}
-                onChange={e => setForm(f => ({ ...f, sector: e.target.value as Sector }))}
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Form Code</label>
+              <select value={form.form_code} required onChange={e => selectFormCode(e.target.value)}
                 className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none">
-                {Object.entries(SECTOR_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                <option value="">Select a form code</option>
+                {catalog.data?.results.map(item => <option key={item.code} value={item.code}>{item.code}{item.code_status === "PROVISIONAL" ? " (Provisional)" : ""}</option>)}
               </select>
             </div>
             <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Provider Type</label>
-              <select value={form.provider_category}
-                onChange={e => setForm(f => ({ ...f, provider_category: e.target.value as ProviderCategory }))}
-                className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none">
-                {CATEGORIES.map(c => <option key={c} value={c}>{PROVIDER_CATEGORY_LABELS[c]}</option>)}
-              </select>
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Form Name</label>
+              <div className="mt-1 min-h-10 rounded-[8px] border border-[#d8dbe2] bg-[#f7f9fb] px-3 py-2 text-[13px] text-[#43474f]">
+                {selectedCode?.name ?? "Select a form code"}
+              </div>
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Version</label>
+              <div className="mt-1 min-h-10 rounded-[8px] border border-[#d8dbe2] bg-[#f7f9fb] px-3 py-2 text-[13px] text-[#43474f]">
+                {form.version || "Select a form code"}
+              </div>
             </div>
             <div>
               <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Frequency</label>
-              <select value={form.frequency}
-                onChange={e => setForm(f => ({ ...f, frequency: e.target.value as Frequency }))}
+              <select value={form.frequency} required onChange={e => setForm(v => ({ ...v, frequency: e.target.value as Frequency }))}
                 className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none">
-                {FREQUENCIES.map(f => <option key={f} value={f}>{FREQ_LABELS[f]}</option>)}
+                <option value="">Select frequency</option>
+                {(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL"] as Frequency[]).map(value => <option key={value} value={value}>{FREQ_LABELS[value]}</option>)}
               </select>
             </div>
             <div className="sm:col-span-2 lg:col-span-3 rounded-[10px] border border-dashed border-[#9aa5b1] bg-[#f7f9fb] p-4">
@@ -148,7 +150,7 @@ export default function FormsPage() {
               <p className="mt-1 text-xs">Each visible worksheet is being converted into a form section. Large workbooks with many formatted tabs can take up to two minutes; keep this page open.</p>
             </div>
           )}
-          <button type="submit" disabled={createMutation.isPending}
+          <button type="submit" disabled={createMutation.isPending || !selectedCode || !form.version}
             className="rounded-[8px] bg-[#001836] px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-[#002d5b] disabled:opacity-50">
             {createMutation.isPending ? (workbook ? "Analyzing workbook…" : "Creating…") : workbook ? "Upload & Preview" : "Create Template"}
           </button>

@@ -22,6 +22,7 @@ interface ComplianceSummary {
 interface ComplianceFlag {
   id: number;
   expected_submission: number;
+  latest_submission_id: number | null;
   provider: number;
   provider_name: string;
   form_code: string;
@@ -323,10 +324,10 @@ export default function CompliancePage() {
                     {/* Right: actions */}
                     <div className="flex items-start gap-2 shrink-0">
                       <div className="flex flex-col gap-1">
-                        <Link href={`/submissions/${flag.expected_submission}/review`}
+                        {flag.latest_submission_id ? <Link href={`/submissions/${flag.latest_submission_id}/review`}
                           className="rounded-[6px] border border-[#c3c6d0] px-3 py-1.5 text-[11px] font-medium text-[#43474f] hover:bg-[#f2f4f6] flex items-center gap-1 whitespace-nowrap">
                           View <ChevronRight size={11} />
-                        </Link>
+                        </Link> : <span title="No submission version exists for this obligation." className="px-3 py-1.5 text-[11px] text-[#737780]">Unavailable</span>}
                         {canManageCompliance && <div className="flex gap-1">
                           {(["OPEN", "ACKNOWLEDGED", "IN_PROGRESS", "RESOLVED"] as const).map((status) => (
                             <button

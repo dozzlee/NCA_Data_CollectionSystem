@@ -13,7 +13,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import (
-    FormFamily, FormTemplate, FormSection, FormHeading, FormField, FormGrid,
+    FormCodeCatalog, FormFamily, FormTemplate, FormSection, FormHeading, FormField, FormGrid,
     GridColumn, GridRow, SelectOption, KMZUploadRequirement, ValidationRule, FormRequirement, FormGapAssessment,
     FormWorkbookImport,
 )
@@ -22,7 +22,7 @@ from .serializers import (
     FormSectionSerializer, FormHeadingSerializer, FormFieldSerializer, FormGridSerializer,
     GridColumnSerializer, GridRowSerializer, SelectOptionSerializer, KMZRequirementSerializer,
     FormFamilySerializer, ValidationRuleSerializer, FormRequirementSerializer, FormGapAssessmentSerializer,
-    FormWorkbookImportSerializer,
+    FormWorkbookImportSerializer, FormCodeCatalogSerializer,
 )
 from .workbook_import import (
     PARSER_VERSION, STREAMING_THRESHOLD_BYTES, create_template_from_import,
@@ -87,7 +87,7 @@ class FormWorkbookImportListCreateView(generics.ListCreateAPIView):
             return Response({"detail": "Only .xlsx workbooks are accepted."}, status=400)
         if uploaded.size > 20 * 1024 * 1024:
             return Response({"detail": "The workbook exceeds the 20 MB limit."}, status=400)
-        required = ["form_code", "name", "version", "sector", "provider_category", "frequency"]
+        required = ["form_code", "version"]
         missing = [field for field in required if not str(request.data.get(field, "")).strip()]
         if missing:
             return Response({"detail": f"Required fields: {', '.join(missing)}."}, status=400)
@@ -95,9 +95,12 @@ class FormWorkbookImportListCreateView(generics.ListCreateAPIView):
             form_code = normalize_form_code(request.data["form_code"])
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=400)
-        frequency = request.data["frequency"]
-        if frequency not in {"MONTHLY", "QUARTERLY", "ANNUAL"}:
-            return Response({"detail": "New templates support monthly, quarterly or annual frequency."}, status=400)
+        catalog = FormCodeCatalog.objects.filter(code=form_code, is_active=True).first()
+        if not catalog:
+            return Response({"detail": "Select an available governed form code."}, status=400)
+        version = request.data["version"].strip()
+        if version != catalog.next_version:
+            return Response({"detail": f"The next available version is {catalog.next_version}. Refresh and try again."}, status=409)
         storage_dir = os.path.join(settings.PRIVATE_UPLOAD_ROOT, "form-workbooks")
         os.makedirs(storage_dir, exist_ok=True)
         storage_name = f"{uuid.uuid4().hex}.xlsx"
@@ -109,8 +112,8 @@ class FormWorkbookImportListCreateView(generics.ListCreateAPIView):
                 destination.write(chunk)
                 digest.update(chunk)
         workbook_import = FormWorkbookImport.objects.create(
-            form_code=form_code, name=request.data["name"].strip(), version=request.data["version"].strip(),
-            sector=request.data["sector"], provider_category=request.data["provider_category"], frequency=frequency,
+            form_code=form_code, name=catalog.name, version=version,
+            sector=catalog.sector, provider_category=catalog.provider_category, frequency=catalog.frequency,
             file_name=os.path.basename(uploaded.name), file_size=uploaded.size, storage_path=storage_path,
             sha256=digest.hexdigest(), created_by=request.user, parser_version=PARSER_VERSION,
         )
@@ -232,6 +235,12 @@ class FormFamilyListCreate(generics.ListCreateAPIView):
         code=serializer.validated_data["code"]
         serializer.save(frequency_decision_status="PENDING_DECISION" if code=="DC-DBS05" else "APPROVED",
             canonical_frequency="" if code=="DC-DBS05" else serializer.validated_data.get("canonical_frequency", ""))
+
+
+class FormCodeCatalogListView(generics.ListAPIView):
+    permission_classes = [IsNCAEditor]
+    serializer_class = FormCodeCatalogSerializer
+    queryset = FormCodeCatalog.objects.filter(is_active=True).order_by("sort_order", "code")
 
 
 class ApproveFrequencyDecisionView(APIView):

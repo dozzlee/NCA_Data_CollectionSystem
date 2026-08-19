@@ -93,8 +93,8 @@ function SubmissionsPageContent() {
               ? <tr><td colSpan={7} className="px-5 py-14 text-center text-[13px] text-[#737780]">No submissions match the current filters.</td></tr>
               : data.results.map((sub) => (
                   <tr key={sub.id}
-                    onClick={() => window.location.href = `/submissions/${sub.id}/review`}
-                    className={`border-b border-[#eceef0] last:border-0 hover:brightness-[0.97] transition-colors cursor-pointer group ${getDueStateRowBg(sub.due_state, sub.workflow_status)}`}>
+                    onClick={sub.latest_submission_id ? () => window.location.href = `/submissions/${sub.latest_submission_id}/review` : undefined}
+                    className={`border-b border-[#eceef0] last:border-0 transition-colors group ${sub.latest_submission_id ? "cursor-pointer hover:brightness-[0.97]" : "cursor-default"} ${getDueStateRowBg(sub.due_state, sub.workflow_status)}`}>
                     <td className="px-5 py-3">
                       <p className="text-[13px] font-medium text-[#191c1e] max-w-[160px] truncate">{sub.provider_name}</p>
                       <p className="text-[11px] text-[#737780]">
@@ -103,6 +103,7 @@ function SubmissionsPageContent() {
                     </td>
                     <td className="px-5 py-3">
                       <p className="text-[12px] font-mono font-medium text-[#002d5b]">{sub.form_code}</p>
+                      {sub.submission_reference&&<p className="mt-1 max-w-[240px] break-all font-mono text-[10px] text-[#737780]">{sub.submission_reference}</p>}
                     </td>
                     <td className="px-5 py-3 text-[12px] text-[#43474f]">{sub.period_name}</td>
                     <td className="px-5 py-3 text-[12px] tabular-nums text-[#43474f]">
@@ -111,10 +112,11 @@ function SubmissionsPageContent() {
                     <td className="px-5 py-3"><WorkflowBadge status={sub.workflow_status} /></td>
                     <td className="px-5 py-3"><DueStateBadge state={sub.due_state} /></td>
                     <td className="px-5 py-3">
-                      <Link href={`/submissions/${sub.id}/review`}
+                      {sub.latest_submission_id ? <Link href={`/submissions/${sub.latest_submission_id}/review`}
+                        onClick={(event) => event.stopPropagation()}
                         className="flex items-center gap-1 text-[12px] font-medium text-[#0066cc] hover:text-[#002d5b] transition-colors">
                         Review <ChevronRight size={12} />
-                      </Link>
+                      </Link> : <span title="No submission version exists for this obligation." className="text-[12px] text-[#737780]">Unavailable</span>}
                     </td>
                   </tr>
                 ))

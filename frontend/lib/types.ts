@@ -156,6 +156,7 @@ export type Sector = "TELECOM" | "BROADCASTING";
 export interface ProviderProfile {
   id: number;
   provider_id: string;
+  provider_code: string;
   organization_id: number | null;
   registered_name: string;
   trade_name: string;
@@ -279,6 +280,8 @@ export interface FormField {
   conditional_on_field: number | null;
   conditional_on_value: string;
   sort_order: number;
+  source_sheet?: string;
+  source_row?: number | null;
   options?: SelectOption[];
 }
 
@@ -295,6 +298,8 @@ export interface FormGrid {
   row_mode: "FIXED" | "REPEATABLE";
   min_rows: number;
   sort_order: number;
+  source_sheet?: string;
+  source_row?: number | null;
   columns: GridColumn[];
   fixed_rows?: GridRow[];
 }
@@ -306,12 +311,16 @@ export interface GridColumn {
   field_type: FieldType;
   unit: string;
   is_required: boolean;
+  source_sheet?: string;
+  source_row?: number | null;
 }
 
 export interface GridRow {
   id: number;
   row_label: string;
   sort_order: number;
+  source_sheet?: string;
+  source_rows?: number[];
 }
 
 // ─── Submissions ─────────────────────────────────────────────────────────────
@@ -348,12 +357,12 @@ export interface ExpectedSubmission {
   provider_name: string;
   provider_sector: Sector;
   provider_category: ProviderCategory;
-  form_template: number;
+  form_template: number | null;
   form_code: FormCode;
   form_name: string;
   form_sector: Sector;
   form_version: string;
-  form_created_at: string;
+  form_created_at: string | null;
   period: number;
   period_name: string;
   due_at: string;
@@ -364,6 +373,7 @@ export interface ExpectedSubmission {
   assigned_officer: number | null;
   assigned_officer_name: string | null;
   latest_submission_id: number | null;
+  submission_reference: string | null;
   latest_submission_version: number | null;
   completion_pct: number;
   last_edited_by: string | null;
@@ -401,17 +411,19 @@ export interface FormWorkbookImport {
   parser_version: string;
   detected_schema: {
     parser_version?: string;
-    grouping?: { strategy:"worksheet-tabs"; visible_worksheet_count:number; engine?:"streaming" };
+    grouping?: { strategy:"worksheet-tabs"; isolation?:"worksheet-isolated"; visible_worksheet_count:number; engine?:"streaming" };
     sections?: Array<{
       section_code: string;
       title: string;
       instructions: string;
       worksheet_order: number;
       source: { sheet:string; sheet_index:number };
+      row_visibility?: { policy:"visible-only"; visible_source_row_count:number; excluded_hidden_row_count:number };
+      counts?: { scalar_field_count:number; table_count:number; grid_input_count:number };
       column_mapping: { detected:boolean; header_row:number|null; indicator_column:number|null; definition_column:number|null; data_type_column:number|null; unit_column:number|null; required_column:number|null; options_column:number|null; candidates:Array<{row:number;columns:Array<{column:number;label:string}>}> };
       headings: Array<{ heading_code:string; title:string; level:1|2|3; source_order:number; source_row:number; source:{sheet:string;row:number}; parser_version:string }>;
       fields: Array<{ source_order:number; field_code:string; heading_code:string; label:string; field_type:FieldType; unit:string; is_required:boolean; help_text:string; formula:string; options:string[]; source:{sheet:string;row:number;heading:string}; parser_version:string }>;
-      grids: Array<{ source_order:number; grid_code:string; title:string; row_mode:"FIXED"|"REPEATABLE"; min_rows:number; instructions:string; columns:Array<{column_code:string;label:string;field_type:FieldType;unit:string;is_required:boolean}>; fixed_rows:string[]; source:{sheet:string;row:number;heading:string}; parser_version:string }>;
+      grids: Array<{ source_order:number; grid_code:string; title:string; row_mode:"FIXED"|"REPEATABLE"; min_rows:number; instructions:string; columns:Array<{column_code:string;label:string;field_type:FieldType;unit:string;is_required:boolean;source?:{sheet:string;row:number}}>; fixed_rows:string[]; fixed_row_sources?:Array<{label:string;source:{sheet:string;rows:number[]}}>; source:{sheet:string;row:number;heading:string}; parser_version:string }>;
     }>;
   };
   warnings: Array<{ code:string; severity:string; message:string }>;
@@ -419,6 +431,16 @@ export interface FormWorkbookImport {
   resulting_template_id: number | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface FormCodeCatalogEntry {
+  id: number;
+  code: string;
+  name: string;
+  frequency: Frequency;
+  source_filename: string;
+  code_status: "CONFIRMED" | "PROVISIONAL";
+  next_version: string;
 }
 
 export interface ProviderWorkspaceSummary {

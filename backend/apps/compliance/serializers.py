@@ -38,13 +38,23 @@ class EmailLogSerializer(serializers.ModelSerializer):
 
 class ComplianceFlagSerializer(serializers.ModelSerializer):
     provider_name = serializers.CharField(source="provider.registered_name", read_only=True)
-    form_code = serializers.CharField(source="expected_submission.form_template.form_code", read_only=True)
+    form_code = serializers.SerializerMethodField()
     period_name = serializers.CharField(source="expected_submission.period.name", read_only=True)
+    latest_submission_id = serializers.SerializerMethodField()
+
+    def get_latest_submission_id(self, obj):
+        versions = getattr(obj.expected_submission, "compliance_versions", None)
+        latest = versions[0] if versions else obj.expected_submission.versions.order_by("-version").first()
+        return latest.id if latest else None
+
+    def get_form_code(self, obj):
+        expected = obj.expected_submission
+        return expected.form_template.form_code if expected.form_template_id else expected.form_code_snapshot
 
     class Meta:
         model = ComplianceFlag
         fields = [
-            "id", "expected_submission", "provider", "provider_name",
+            "id", "expected_submission", "latest_submission_id", "provider", "provider_name",
             "form_code", "period_name", "flag_type", "description",
             "missing_field_count", "completion_percentage", "status",
             "created_at", "acknowledged_at", "resolved_at",

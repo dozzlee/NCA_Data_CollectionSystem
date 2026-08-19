@@ -21,6 +21,8 @@ interface GridRendererProps {
   issues?: Array<{ targetId:string; message:string }>;
   correctionInstructions?: Array<{ targetId:string; instruction:string }>;
   readOnlyPresentation?: boolean;
+  sectionCode: string;
+  previousValues?: Record<string, string | null>;
 }
 
 const cellInput =
@@ -28,7 +30,15 @@ const cellInput =
 
 const nonFilled = ["NOT_APPLICABLE", "NOT_AVAILABLE", "NOT_REQUIRED"];
 
-export function GridRenderer({ grid, values, onChange, disabled, issues = [], correctionInstructions = [], readOnlyPresentation = false }: GridRendererProps) {
+function numericGrowth(current: string | undefined, previous: string | null | undefined, fieldType: string) {
+  if (!["number", "currency", "percentage"].includes(fieldType) || previous == null || previous === "" || !current) return null;
+  const currentNumber = Number(current.replaceAll(",", ""));
+  const previousNumber = Number(previous.replaceAll(",", ""));
+  if (!Number.isFinite(currentNumber) || !Number.isFinite(previousNumber) || previousNumber === 0) return null;
+  return ((currentNumber - previousNumber) / previousNumber) * 100;
+}
+
+export function GridRenderer({ grid, values, onChange, disabled, issues = [], correctionInstructions = [], readOnlyPresentation = false, sectionCode, previousValues = {} }: GridRendererProps) {
   const [repeatableRows, setRepeatableRows] = useState<string[]>(() => {
     if (grid.row_mode === "FIXED") return [];
     const ids = [...new Set(values.map((value) => value.grid_row_id).filter(Boolean))];
@@ -104,9 +114,13 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
               <td className="px-3 py-2 text-[11px] font-medium text-[#43474f]">{row.label}</td>
               {grid.columns.map((column) => {
                 const current = cell(row.id, column.id);
+                const previousKey = `grid:${sectionCode}:${grid.grid_code}:${row.label}:${column.column_code}`.toLowerCase();
+                const previous = previousValues[previousKey];
+                const growth = numericGrowth(current?.value, previous, column.field_type);
                 return <td key={column.id} className="px-3 py-2 text-[12px] text-[#191c1e]">
                   {current?.value || current?.explanation || <span className="italic text-[#8a8f98]">— Not provided</span>}
                   {current?.value_status && !["PROVIDED", "MISSING"].includes(current.value_status) && <span className="mt-0.5 block text-[9px] uppercase tracking-wide text-[#7a5c00]">{current.value_status.split("_").join(" ")}</span>}
+                  <span className="mt-1 block text-[9px] text-[#737780]">Previous: {previous ?? "—"} · Growth: {growth === null ? "N/A" : `${growth > 0 ? "↑ +" : growth < 0 ? "↓ " : ""}${growth.toFixed(2)}%`}</span>
                 </td>;
               })}
             </tr>) : <tr><td colSpan={grid.columns.length + 1} className="px-4 py-8 text-center text-[12px] italic text-[#8a8f98]">No rows provided</td></tr>}</tbody>
@@ -146,6 +160,9 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
                   const current = cell(row.id, column.id);
                   const hasNonFilledStatus = nonFilled.includes(current?.value_status ?? "");
                   const targetId = `${grid.id}:${row.id}:${column.id}`;
+                  const previousKey = `grid:${sectionCode}:${grid.grid_code}:${row.label}:${column.column_code}`.toLowerCase();
+                  const previous = previousValues[previousKey];
+                  const growth = numericGrowth(current?.value, previous, column.field_type);
                   const cellIssues = issues.filter((item) => item.targetId === targetId);
                   const cellCorrections = correctionInstructions.filter((item) => item.targetId === targetId);
                   return (
@@ -160,6 +177,7 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
                           disabled={disabled} step={column.field_type === "percentage" ? "0.01" : undefined}
                           className={cn(cellInput, "text-right")} placeholder="—" />
                       )}
+                      <p className="px-1 pb-1 text-left text-[9px] text-[#737780]">Previous: {previous ?? "—"} · Growth: {growth === null ? "N/A" : `${growth > 0 ? "↑ +" : growth < 0 ? "↓ " : ""}${growth.toFixed(2)}%`}</p>
                       {column.is_required && !disabled && (
                         <select value={hasNonFilledStatus ? current?.value_status : ""}
                           onChange={(event) => setStatus(row.id, column.id, event.target.value as FieldStatus | "")}

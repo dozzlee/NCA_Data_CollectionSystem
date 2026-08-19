@@ -2,6 +2,7 @@ from rest_framework import serializers
 from .models import (
     ReportingPeriod, ExpectedSubmission, Submission, SubmissionValue, ReviewAction,
     SubmissionEvent, SubmissionNotification, ProviderApprovalDecision,
+    ProviderWorkbookBaseline, WorkbookIndicatorMapping, MonthlyReportArtifact,
 )
 
 
@@ -30,14 +31,15 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
     provider_name = serializers.CharField(source="provider.registered_name", read_only=True)
     provider_sector = serializers.CharField(source="provider.sector", read_only=True)
     provider_category = serializers.CharField(source="provider.category", read_only=True)
-    form_code = serializers.CharField(source="form_template.form_code", read_only=True)
-    form_name = serializers.CharField(source="form_template.name", read_only=True)
-    form_sector = serializers.CharField(source="form_template.sector", read_only=True)
+    form_code = serializers.SerializerMethodField()
+    form_name = serializers.SerializerMethodField()
+    form_sector = serializers.SerializerMethodField()
     period_name = serializers.CharField(source="period.name", read_only=True)
     due_at = serializers.DateTimeField(source="period.due_at", read_only=True)
     effective_due_at = serializers.DateTimeField(read_only=True)
     assigned_officer_name = serializers.CharField(source="assigned_officer.name", read_only=True, default=None)
     latest_submission_id = serializers.SerializerMethodField()
+    submission_reference = serializers.SerializerMethodField()
     latest_submission_version = serializers.SerializerMethodField()
     completion_pct = serializers.SerializerMethodField()
     last_edited_by = serializers.SerializerMethodField()
@@ -50,8 +52,8 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
     receipt_reference = serializers.SerializerMethodField()
     permitted_actions = serializers.SerializerMethodField()
     assignment_source = serializers.SerializerMethodField()
-    form_version = serializers.CharField(source="form_template.version", read_only=True)
-    form_created_at = serializers.DateTimeField(source="form_template.created_at", read_only=True)
+    form_version = serializers.SerializerMethodField()
+    form_created_at = serializers.SerializerMethodField()
     ownership_label = serializers.SerializerMethodField()
     data_entry_team = serializers.SerializerMethodField()
     last_data_entry_editor = serializers.SerializerMethodField()
@@ -61,9 +63,28 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
         prefetched = getattr(obj, "workspace_versions", None)
         return prefetched[0] if prefetched else obj.versions.select_related("last_edited_by").order_by("-version").first()
 
+    def get_form_code(self, obj):
+        return obj.form_template.form_code if obj.form_template_id else obj.form_code_snapshot
+
+    def get_form_name(self, obj):
+        return obj.form_template.name if obj.form_template_id else obj.form_name_snapshot
+
+    def get_form_sector(self, obj):
+        return obj.form_template.sector if obj.form_template_id else obj.form_sector_snapshot
+
+    def get_form_version(self, obj):
+        return obj.form_template.version if obj.form_template_id else obj.form_version_snapshot
+
+    def get_form_created_at(self, obj):
+        return obj.form_template.created_at if obj.form_template_id else obj.form_created_at_snapshot
+
     def get_latest_submission_id(self, obj):
         latest = self._latest(obj)
         return latest.id if latest else None
+
+    def get_submission_reference(self, obj):
+        latest = self._latest(obj)
+        return latest.submission_reference if latest else None
 
     def get_latest_submission_version(self, obj):
         latest = self._latest(obj)
@@ -164,7 +185,7 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
             "period", "period_name", "due_at", "effective_due_at", "due_at_override",
             "workflow_status", "due_state",
             "assigned_officer", "assigned_officer_name",
-            "latest_submission_id",
+            "latest_submission_id", "submission_reference",
             "latest_submission_version", "completion_pct", "last_edited_by", "last_edited_by_name",
             "last_edited_at", "submitted_at", "correction_count", "open_correction_count",
             "receipt_available", "receipt_reference", "permitted_actions", "assignment_source",
@@ -177,15 +198,15 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
 
 class SubmissionSerializer(serializers.ModelSerializer):
     provider_name = serializers.CharField(source="expected.provider.registered_name", read_only=True)
-    form_code = serializers.CharField(source="expected.form_template.form_code", read_only=True)
-    form_name = serializers.CharField(source="expected.form_template.name", read_only=True)
+    form_code = serializers.SerializerMethodField()
+    form_name = serializers.SerializerMethodField()
     period_name = serializers.CharField(source="expected.period.name", read_only=True)
     workflow_status = serializers.CharField(source="expected.workflow_status", read_only=True)
-    kmz_required = serializers.BooleanField(source="expected.form_template.kmz_required", read_only=True)
+    kmz_required = serializers.SerializerMethodField()
     form_template_id = serializers.IntegerField(source="expected.form_template_id", read_only=True)
-    form_version = serializers.CharField(source="expected.form_template.version", read_only=True)
-    mapping_basis = serializers.CharField(source="expected.form_template.mapping_basis", read_only=True)
-    source_reference = serializers.CharField(source="expected.form_template.source_reference", read_only=True)
+    form_version = serializers.SerializerMethodField()
+    mapping_basis = serializers.SerializerMethodField()
+    source_reference = serializers.SerializerMethodField()
     last_edited_by_name = serializers.CharField(source="last_edited_by.name", read_only=True, default=None)
     receipt_reference = serializers.SerializerMethodField()
     provider_approval = serializers.SerializerMethodField()
@@ -193,6 +214,24 @@ class SubmissionSerializer(serializers.ModelSerializer):
     def get_receipt_reference(self, obj):
         receipt = getattr(obj, "receipt", None)
         return receipt.reference if receipt else None
+
+    def _template_value(self, obj, key, default=""):
+        if obj.expected.form_template_id:
+            return getattr(obj.expected.form_template, key, default)
+        snapshots = {
+            "form_code": obj.expected.form_code_snapshot,
+            "name": obj.expected.form_name_snapshot,
+            "version": obj.expected.form_version_snapshot,
+            "source_reference": obj.expected.form_source_reference_snapshot,
+        }
+        return snapshots.get(key, obj.form_schema_snapshot.get(key, default))
+
+    def get_form_code(self, obj): return self._template_value(obj, "form_code")
+    def get_form_name(self, obj): return self._template_value(obj, "name")
+    def get_form_version(self, obj): return self._template_value(obj, "version")
+    def get_mapping_basis(self, obj): return self._template_value(obj, "mapping_basis")
+    def get_source_reference(self, obj): return self._template_value(obj, "source_reference")
+    def get_kmz_required(self, obj): return bool(self._template_value(obj, "kmz_required", False))
 
     def get_provider_approval(self, obj):
         decision = getattr(obj, "provider_approval", None)
@@ -203,7 +242,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Submission
         fields = [
-            "id", "expected", "version", "completion_pct",
+            "id", "submission_reference", "expected", "version", "completion_pct",
             "submitted_by", "submitted_at", "reviewed_by", "reviewed_at", "created_at",
             "provider_name", "form_code", "form_name", "period_name", "workflow_status", "kmz_required",
             "form_template_id", "form_version", "mapping_basis", "source_reference",
@@ -211,7 +250,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
             "last_edited_by", "last_edited_by_name", "last_edited_at", "receipt_reference",
             "provider_approval",
         ]
-        read_only_fields = ["version", "created_at"]
+        read_only_fields = ["submission_reference", "version", "created_at"]
 
 
 class ProviderApprovalDecisionSerializer(serializers.ModelSerializer):
@@ -226,6 +265,9 @@ class ProviderApprovalDecisionSerializer(serializers.ModelSerializer):
 
 
 class SubmissionValueSerializer(serializers.ModelSerializer):
+    field = serializers.SerializerMethodField()
+    grid = serializers.SerializerMethodField()
+    grid_column = serializers.SerializerMethodField()
     non_filled_disposition = serializers.SerializerMethodField()
     disposition_note = serializers.SerializerMethodField()
 
@@ -237,14 +279,82 @@ class SubmissionValueSerializer(serializers.ModelSerializer):
         disposition = getattr(obj, "non_filled_disposition", None)
         return disposition.note if disposition else ""
 
+    def get_field(self, obj):
+        if obj.field_id:
+            return obj.field_id
+        if obj.target_snapshot.get("target_type") == "FIELD":
+            return obj.target_snapshot.get("target_id")
+        return None
+
+    def _grid_target_parts(self, obj):
+        target = str(obj.target_snapshot.get("target_id", ""))
+        parts = target.split(":")
+        return parts if len(parts) == 3 else []
+
+    def get_grid(self, obj):
+        if obj.grid_id:
+            return obj.grid_id
+        parts = self._grid_target_parts(obj)
+        return int(parts[0]) if parts and parts[0].isdigit() else None
+
+    def get_grid_column(self, obj):
+        if obj.grid_column_id:
+            return obj.grid_column_id
+        parts = self._grid_target_parts(obj)
+        return int(parts[2]) if parts and parts[2].isdigit() else None
+
     class Meta:
         model = SubmissionValue
         fields = [
             "id", "submission", "field", "grid", "grid_row_id", "grid_column",
+            "target_key_snapshot", "target_snapshot",
             "value", "value_status", "explanation", "updated_by", "updated_at",
             "non_filled_disposition", "disposition_note",
         ]
         read_only_fields = ["id", "updated_at"]
+
+
+class WorkbookIndicatorMappingSerializer(serializers.ModelSerializer):
+    field_label = serializers.CharField(source="field.label", read_only=True, default=None)
+    grid_title = serializers.CharField(source="grid.title", read_only=True, default=None)
+    grid_row_label = serializers.CharField(source="grid_row.row_label", read_only=True, default=None)
+    grid_column_label = serializers.CharField(source="grid_column.label", read_only=True, default=None)
+
+    class Meta:
+        model = WorkbookIndicatorMapping
+        fields = "__all__"
+        read_only_fields = ["baseline", "created_at"]
+
+
+class ProviderWorkbookBaselineSerializer(serializers.ModelSerializer):
+    provider_name = serializers.CharField(source="provider.registered_name", read_only=True)
+    form_code = serializers.CharField(source="form_template.form_code", read_only=True)
+    form_version = serializers.CharField(source="form_template.version", read_only=True)
+    mappings = WorkbookIndicatorMappingSerializer(source="indicator_mappings", many=True, read_only=True)
+
+    class Meta:
+        model = ProviderWorkbookBaseline
+        fields = "__all__"
+        read_only_fields = [
+            "form_template", "file_name", "storage_path", "file_size", "sha256",
+            "scan_status", "scan_engine", "scan_details", "status", "mapping_summary",
+            "created_by", "approved_by", "approved_at", "created_at", "updated_at",
+        ]
+
+
+class MonthlyReportArtifactSerializer(serializers.ModelSerializer):
+    download_ready = serializers.SerializerMethodField()
+
+    def get_download_ready(self, obj):
+        return obj.status == "READY" and bool(obj.private_path)
+
+    class Meta:
+        model = MonthlyReportArtifact
+        fields = [
+            "id", "submission", "baseline", "status", "filename", "mime_type",
+            "file_size", "sha256", "submission_revision", "generation_metadata",
+            "error_message", "download_ready", "created_at", "completed_at", "updated_at",
+        ]
 
 
 class ReviewActionSerializer(serializers.ModelSerializer):
@@ -272,7 +382,7 @@ class SubmissionEventSerializer(serializers.ModelSerializer):
 
 
 class SubmissionNotificationSerializer(serializers.ModelSerializer):
-    form_code = serializers.CharField(source="submission.expected.form_template.form_code", read_only=True)
+    form_code = serializers.SerializerMethodField()
     provider_name = serializers.CharField(source="submission.expected.provider.registered_name", read_only=True)
     expected_submission = serializers.IntegerField(source="submission.expected_id", read_only=True)
 
@@ -282,3 +392,7 @@ class SubmissionNotificationSerializer(serializers.ModelSerializer):
             "id", "submission", "event", "title", "message", "is_read", "read_at",
             "created_at", "form_code", "provider_name", "expected_submission",
         ]
+
+    def get_form_code(self, obj):
+        expected = obj.submission.expected
+        return expected.form_template.form_code if expected.form_template_id else expected.form_code_snapshot

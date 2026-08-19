@@ -6,6 +6,7 @@ type FormTemplateDetail = FormTemplate & { sections: FormSection[] };
 
 interface Submission {
   id: number;
+  submission_reference: string;
   expected: number;
   version: number;
   completion_pct: string;
@@ -113,10 +114,10 @@ export function useSectionValues(submissionId: number | null, sectionCode: strin
 export function useSaveSectionValues(submissionId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ sectionCode, values, revision }: { sectionCode: string; values: SubmissionValue[]; revision?: number }) =>
-      api.put<{ saved: number; completion_pct: number; revision: number; last_edited_by_name:string; last_edited_at:string }>(
+    mutationFn: ({ sectionCode, values, revision, clientSaveId, changeVersion }: { sectionCode: string; values: SubmissionValue[]; revision?: number; clientSaveId: string; changeVersion: number }) =>
+      api.put<{ saved: number; completion_pct: number; revision: number; client_save_id:string; base_revision:number; resulting_revision:number; persisted_change_version:number; replayed:boolean; last_edited_by_name:string; last_edited_at:string }>(
         `/submissions/${submissionId}/sections/${sectionCode}/values/`,
-        { values, revision }
+        { values, revision, client_save_id:clientSaveId, change_version:changeVersion }
       ),
     onSuccess: (response, { sectionCode }) => {
       qc.invalidateQueries({ queryKey: ["section-values", submissionId, sectionCode] });

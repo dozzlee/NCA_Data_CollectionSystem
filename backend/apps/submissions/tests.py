@@ -1,7 +1,11 @@
-from datetime import timedelta
+from datetime import date, timedelta
 from tempfile import TemporaryDirectory
+from pathlib import Path
+import hashlib
+import uuid
 
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
@@ -23,6 +27,8 @@ from apps.uploads.models import SubmissionKMZUpload
 from .models import (
     CorrectionItem, ExpectedSubmission, ReportingPeriod, ReviewAction, Submission, SubmissionEvent,
     SubmissionNotification, SubmissionValue, ProviderApprovalDecision, ProviderEditBatch, PeriodFormAssignment,
+    SectionSaveReceipt,
+    ProviderWorkbookBaseline, WorkbookIndicatorMapping, MonthlyReportArtifact,
 )
 
 
@@ -289,12 +295,12 @@ class SubmissionRemediationTests(APITestCase):
             "viewer@nca.test", "password", name="Viewer", role="NCA_VIEWER",
         )
         self.provider_a = ProviderProfile.objects.create(
-            organization=self.org_a, registered_name="Provider A", sector="TELECOM",
+            organization=self.org_a, provider_code="PRA", registered_name="Provider A", sector="TELECOM",
             category="MNO", licence_type="MNO", licence_number="A-1",
             primary_email="a@example.com", primary_phone="1",
         )
         self.provider_b = ProviderProfile.objects.create(
-            organization=self.org_b, registered_name="Provider B", sector="TELECOM",
+            organization=self.org_b, provider_code="PRB", registered_name="Provider B", sector="TELECOM",
             category="MNO", licence_type="MNO", licence_number="B-1",
             primary_email="b@example.com", primary_phone="2",
         )
@@ -330,10 +336,70 @@ class SubmissionRemediationTests(APITestCase):
     def authenticate(self, user):
         self.client.force_authenticate(user)
 
+    def test_expected_submission_list_exposes_exact_latest_submission_id(self):
+        self.authenticate(self.officer)
+        response = self.client.get("/api/v1/expected-submissions/")
+        self.assertEqual(response.status_code, 200, response.data)
+        listed = {item["id"]: item for item in response.data["results"]}
+        self.assertEqual(listed[self.expected_a.id]["latest_submission_id"], self.submission_a.id)
+        self.assertEqual(listed[self.expected_b.id]["latest_submission_id"], self.submission_b.id)
+        self.assertEqual(listed[self.expected_a.id]["submission_reference"], self.submission_a.submission_reference)
+        self.assertEqual(
+            self.submission_a.submission_reference,
+            f"MNO-MONTHLY-PRA-2026-07-V1.0-S{self.submission_a.id}",
+        )
+
+    def test_complete_catalog_reset_preserves_snapshot_review(self):
+        SubmissionValue.objects.create(
+            submission=self.submission_a, field=self.required_field,
+            value="Historical answer", value_status="PROVIDED", updated_by=self.entry_a,
+        )
+        from apps.forms_engine.management.commands.reset_form_catalog import CONFIRMATION, _state
+
+        report = _state()[0]
+        with TemporaryDirectory() as directory:
+            evidence = Path(directory) / "backup.evidence"
+            evidence.write_text("test backup", encoding="utf-8")
+            with override_settings(DEBUG=True):
+                call_command(
+                    "reset_form_catalog", commit=True, confirm=CONFIRMATION,
+                    report_hash=report["report_hash"], backup_evidence=str(evidence),
+                    environment="test", verbosity=0,
+                )
+        self.assertEqual(FormTemplate.objects.count(), 0)
+        self.expected_a.refresh_from_db()
+        self.submission_a.refresh_from_db()
+        self.assertEqual(self.expected_a.workflow_status, "ARCHIVED")
+        self.assertIsNone(self.expected_a.form_template_id)
+        self.assertTrue(self.submission_a.form_schema_snapshot)
+        self.authenticate(self.officer)
+        response = self.client.get(f"/api/v1/submissions/{self.submission_a.id}/review-data/")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["template"]["form_code"], "MNO-MONTHLY")
+        self.assertEqual(response.data["values"][0]["value"], "Historical answer")
+
+    def test_submission_references_are_unique_immutable_and_provider_code_is_locked(self):
+        correction = Submission.objects.create(expected=self.expected_a, version=2, supersedes=self.submission_a)
+        self.assertNotEqual(correction.submission_reference, self.submission_a.submission_reference)
+        original_reference = self.submission_a.submission_reference
+        self.submission_a.submission_reference = "CHANGED"
+        with self.assertRaisesMessage(ValidationError, "Submission references are immutable"):
+            self.submission_a.save()
+        self.submission_a.refresh_from_db()
+        self.assertEqual(self.submission_a.submission_reference, original_reference)
+
+        self.authenticate(self.officer)
+        response = self.client.patch(
+            f"/api/v1/providers/{self.provider_a.id}/", {"provider_code": "NEW"}, format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+
     def test_review_data_uses_exact_immutable_template_and_includes_grid_cells(self):
         grid = FormGrid.objects.create(section=self.section, grid_code="traffic", title="Traffic", row_mode="REPEATABLE", min_rows=1)
         column = GridColumn.objects.create(grid=grid, column_code="minutes", label="Minutes", field_type="number", unit="minutes")
         SubmissionValue.objects.create(submission=self.submission_a, grid=grid, grid_row_id="row-1", grid_column=column, value="42", value_status="PROVIDED", updated_by=self.entry_a)
+        self.form.status = "ARCHIVED"
+        self.form.save(update_fields=["status"])
         newer = FormTemplate.objects.create(form_code="MNO-MONTHLY", name="Newer", sector="TELECOM", provider_category="MNO", frequency="MONTHLY", version="2.0", effective_from=timezone.localdate(), status="ACTIVE", mapping_basis="PRD_SECTION_11")
         FormSection.objects.create(form_template=newer, section_code="different", title="Different")
 
@@ -343,7 +409,10 @@ class SubmissionRemediationTests(APITestCase):
         self.assertEqual(response.data["template"]["id"], self.form.id)
         self.assertEqual(response.data["template"]["sections"][0]["section_code"], "main")
         self.assertEqual(response.data["values"][0]["grid_row_id"], "row-1")
-        self.assertIsNotNone(response.data["legacy_warning"])
+        self.assertIsNone(response.data["legacy_warning"])
+        self.assertIn("previous_month", response.data)
+        self.assertIn("values", response.data["previous_month"])
+        self.assertEqual(response.data["submission"]["submission_reference"], self.submission_a.submission_reference)
 
         self.authenticate(self.viewer)
         self.assertEqual(self.client.get(f"/api/v1/submissions/{self.submission_a.id}/review-data/").status_code, 403)
@@ -752,6 +821,69 @@ class SubmissionRemediationTests(APITestCase):
         stale = self.client.put(url, {"revision": 0, "values": []}, format="json")
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(stale.data["code"], "STALE_REVISION")
+
+    def test_section_save_idempotency_replays_without_incrementing_revision(self):
+        self.authenticate(self.entry_a)
+        url = f"/api/v1/submissions/{self.submission_a.id}/sections/main/values/"
+        save_id = str(uuid.uuid4())
+        payload = {
+            "revision": 0, "client_save_id": save_id, "change_version": 7,
+            "values": [{"field": self.required_field.id, "value": "latest", "value_status": "PROVIDED"}],
+        }
+        first = self.client.put(url, payload, format="json")
+        self.assertEqual(first.status_code, 200, first.data)
+        second = self.client.put(url, payload, format="json")
+        self.assertEqual(second.status_code, 200, second.data)
+        self.assertTrue(second.data["replayed"])
+        self.assertEqual(second.data["resulting_revision"], first.data["resulting_revision"])
+        self.submission_a.refresh_from_db()
+        self.assertEqual(self.submission_a.revision, 1)
+        self.assertEqual(SectionSaveReceipt.objects.filter(submission=self.submission_a).count(), 1)
+        changed = {**payload, "values": [{"field": self.required_field.id, "value": "different", "value_status": "PROVIDED"}]}
+        conflict = self.client.put(url, changed, format="json")
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.data["code"], "IDEMPOTENCY_KEY_REUSED")
+
+    def test_targeted_correction_accepts_unchanged_locked_snapshot(self):
+        locked = FormField.objects.create(
+            section=self.section, field_code="locked", label="Locked field", field_type="text",
+        )
+        SubmissionValue.objects.create(
+            submission=self.submission_a, field=self.required_field, value="old target",
+            value_status="PROVIDED", updated_by=self.entry_a,
+        )
+        SubmissionValue.objects.create(
+            submission=self.submission_a, field=locked, value="unchanged locked",
+            value_status="PROVIDED", updated_by=self.entry_a,
+        )
+        self.expected_a.workflow_status = "PROVIDER_CHANGES_REQUESTED"
+        self.expected_a.save(update_fields=["workflow_status"])
+        correction = CorrectionItem.objects.create(
+            source_submission=self.submission_a, resolution_submission=self.submission_a,
+            stage="PROVIDER_APPROVAL", target_type="FIELD", target_id=str(self.required_field.id),
+            instruction="Correct only the target.", created_by=self.approver_a,
+        )
+        self.authenticate(self.entry_a)
+        response = self.client.put(
+            f"/api/v1/submissions/{self.submission_a.id}/sections/main/values/",
+            {"revision": 0, "values": [
+                {"field": self.required_field.id, "value": "corrected target", "value_status": "PROVIDED"},
+                {"field": locked.id, "value": "unchanged locked", "value_status": "PROVIDED"},
+            ]}, format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        correction.refresh_from_db()
+        self.assertEqual(correction.status, "ADDRESSED")
+        self.assertEqual(self.submission_a.values.get(field=locked).value, "unchanged locked")
+        modified_locked = self.client.put(
+            f"/api/v1/submissions/{self.submission_a.id}/sections/main/values/",
+            {"revision": response.data["revision"], "values": [
+                {"field": self.required_field.id, "value": "corrected target", "value_status": "PROVIDED"},
+                {"field": locked.id, "value": "forbidden edit", "value_status": "PROVIDED"},
+            ]}, format="json",
+        )
+        self.assertEqual(modified_locked.status_code, 403)
+        self.assertEqual(modified_locked.data["code"], "CORRECTION_SCOPE_LOCKED")
 
     def test_provider_workspace_counts_every_record_beyond_first_page(self):
         for index in range(55):
@@ -1250,3 +1382,148 @@ class SubmissionRemediationTests(APITestCase):
             with self.subTest(method=method, url=url):
                 response = getattr(self.client, method)(url, payload, format="json")
                 self.assertEqual(response.status_code, 403)
+
+
+class MonthlyIndicatorReportTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user("monthly-admin@nca.test", "password", name="Admin", role="NCA_ADMIN")
+        self.org = Organization.objects.create(name="MTN Test", org_type="PROVIDER")
+        self.entry = User.objects.create_user(
+            "monthly-entry@mtn.test", "password", name="Entry", role="PROVIDER_DATA_ENTRY", organization=self.org,
+        )
+        self.approver = User.objects.create_user(
+            "monthly-approver@mtn.test", "password", name="Approver", role="PROVIDER_APPROVER", organization=self.org,
+        )
+        self.provider = ProviderProfile.objects.create(
+            organization=self.org, registered_name="MTN Test", trade_name="MTN", sector="TELECOM",
+            category="MNO", licence_type="MNO", licence_number="M", primary_email="mtn@test.test", primary_phone="123",
+        )
+        self.form = FormTemplate.objects.create(
+            form_code="MONTHLY-TEST", name="Monthly Test", sector="TELECOM", provider_category="MNO",
+            frequency="MONTHLY", effective_from=timezone.localdate(), status="ACTIVE",
+            approval_status="APPROVED", mapping_complete=True,
+        )
+        self.form.family.canonical_frequency = "MONTHLY"
+        self.form.family.frequency_decision_status = "APPROVED"
+        self.form.family.save()
+        self.section = FormSection.objects.create(form_template=self.form, section_code="SUBS", title="Subscriptions")
+        self.input_field = FormField.objects.create(
+            section=self.section, field_code="ACTIVE", label="Active subscriptions", field_type="number",
+            help_text="Total active subscriptions at the end of the reporting month.", is_required=True,
+        )
+        self.total_field = FormField.objects.create(
+            section=self.section, field_code="TOTAL", label="Total subscriptions", field_type="formula",
+            formula="ACTIVE", is_required=False,
+        )
+        self.april = ReportingPeriod.objects.create(
+            name="April 2026", frequency="MONTHLY", year=2026, month=4,
+            opens_at=timezone.now()-timedelta(days=60), due_at=timezone.now()-timedelta(days=30),
+            status="ACTIVE", created_by=self.admin,
+        )
+        self.may = ReportingPeriod.objects.create(
+            name="May 2026", frequency="MONTHLY", year=2026, month=5,
+            opens_at=timezone.now()-timedelta(days=20), due_at=timezone.now()+timedelta(days=10),
+            status="ACTIVE", created_by=self.admin,
+        )
+        self.prior_expected = ExpectedSubmission.objects.create(
+            provider=self.provider, form_template=self.form, period=self.april, workflow_status="APPROVED",
+        )
+        self.prior = Submission.objects.create(
+            expected=self.prior_expected, version=1, submitted_by=self.approver,
+            submitted_at=timezone.now()-timedelta(days=25), reviewed_by=self.admin,
+            reviewed_at=timezone.now()-timedelta(days=20),
+        )
+        SubmissionValue.objects.create(
+            submission=self.prior, field=self.input_field, value="1000", value_status="PROVIDED",
+        )
+        self.current_expected = ExpectedSubmission.objects.create(
+            provider=self.provider, form_template=self.form, period=self.may, workflow_status="SUBMITTED",
+        )
+        self.current = Submission.objects.create(
+            expected=self.current_expected, version=1, submitted_by=self.approver, submitted_at=timezone.now(),
+        )
+        SubmissionValue.objects.create(
+            submission=self.current, field=self.input_field, value="1100", value_status="PROVIDED",
+        )
+
+    def test_previous_month_uses_only_nca_approved_same_provider_values(self):
+        self.client.force_authenticate(self.entry)
+        response = self.client.get(f"/api/v1/submissions/{self.current.id}/previous-month-values/")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["period"]["month"], 4)
+        self.assertEqual(response.data["values"]["field:subs:active"], "1000")
+
+        other_org = Organization.objects.create(name="Other", org_type="PROVIDER")
+        other_entry = User.objects.create_user(
+            "other-monthly@test.test", "password", name="Other", role="PROVIDER_DATA_ENTRY", organization=other_org,
+        )
+        ProviderProfile.objects.create(
+            organization=other_org, registered_name="Other", sector="TELECOM", category="MNO",
+            licence_type="MNO", licence_number="O", primary_email="o@test.test", primary_phone="1",
+        )
+        self.client.force_authenticate(other_entry)
+        denied = self.client.get(f"/api/v1/submissions/{self.current.id}/previous-month-values/")
+        self.assertEqual(denied.status_code, 404)
+
+    def test_unapproved_previous_month_is_not_returned(self):
+        self.prior_expected.workflow_status = "UNDER_REVIEW"
+        self.prior_expected.save(update_fields=["workflow_status"])
+        self.client.force_authenticate(self.entry)
+        response = self.client.get(f"/api/v1/submissions/{self.current.id}/previous-month-values/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["values"], {})
+
+    def test_generation_adds_month_preserves_sheets_and_translates_formula(self):
+        from openpyxl import Workbook, load_workbook
+        from openpyxl.styles import PatternFill
+        from .monthly_reports import generate_monthly_report
+
+        with TemporaryDirectory() as upload_root, TemporaryDirectory() as export_root:
+            source = Path(upload_root) / "provider-report-baselines" / "mtn.xlsx"
+            source.parent.mkdir(parents=True)
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "REVISED MNOs MONTHLY DATA"
+            workbook.create_sheet("eSIM ACTIVATION REPORTS 2023")
+            workbook.create_sheet("eSIM ACTIVATION REPORTS 2024")
+            sheet["C10"] = "Active subscriptions"
+            sheet["C12"] = "Total subscriptions"
+            sheet["F8"] = date(2026, 4, 1)
+            sheet["F10"] = 1000
+            sheet["F11"] = 100
+            sheet["F12"] = "=F10+F11"
+            sheet["G17"] = "`"
+            sheet["F10"].fill = PatternFill("solid", fgColor="D9EAF7")
+            workbook.save(source)
+            baseline_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+
+            with override_settings(PRIVATE_UPLOAD_ROOT=upload_root, PRIVATE_EXPORT_ROOT=export_root):
+                baseline = ProviderWorkbookBaseline.objects.create(
+                    provider=self.provider, form_template=self.form, version=1, status="ACTIVE",
+                    file_name="mtn.xlsx", storage_path="provider-report-baselines/mtn.xlsx",
+                    file_size=source.stat().st_size, sha256=baseline_sha, scan_status="CLEAN",
+                    created_by=self.admin, approved_by=self.admin, approved_at=timezone.now(),
+                )
+                WorkbookIndicatorMapping.objects.create(
+                    baseline=baseline, target_key="field:subs:active", target_type="FIELD",
+                    field=self.input_field, sheet_name=sheet.title, excel_row=10,
+                    value_kind="INPUT", verified=True,
+                )
+                WorkbookIndicatorMapping.objects.create(
+                    baseline=baseline, target_key="field:subs:total", target_type="FIELD",
+                    field=self.total_field, sheet_name=sheet.title, excel_row=12,
+                    value_kind="CALCULATED", formula_seed_column=6, verified=True,
+                )
+                artifact = generate_monthly_report(self.current.id, self.admin)
+                generated = load_workbook(artifact.private_path, data_only=False, keep_links=True)
+                self.assertEqual(generated.sheetnames, [
+                    "REVISED MNOs MONTHLY DATA", "eSIM ACTIVATION REPORTS 2023", "eSIM ACTIVATION REPORTS 2024",
+                ])
+                result = generated["REVISED MNOs MONTHLY DATA"]
+                self.assertEqual(result["G10"].value, 1100)
+                self.assertEqual(result["G12"].value, "=G10+G11")
+                self.assertEqual(result["H17"].value, "`")
+                self.assertEqual(result["G10"].fill.fgColor.rgb, result["F10"].fill.fgColor.rgb)
+                self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), baseline_sha)
+                self.assertEqual(artifact.status, "READY")
+                self.assertTrue(MonthlyReportArtifact.objects.filter(submission=self.current).exists())

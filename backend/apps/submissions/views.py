@@ -1,4 +1,6 @@
+from django.conf import settings
 from django.db import transaction
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db.models import Count, Q
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
@@ -8,6 +10,9 @@ from django.utils import timezone
 from datetime import timedelta
 import hashlib
 import json
+import os
+from pathlib import Path
+import uuid
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -33,11 +38,14 @@ from .models import (
     DeadlineChangeRequest, SubmissionOverride, ReminderPolicy,
     SubmissionEvent, SubmissionNotification,
     ProviderEditBatch, ProviderEditItem, ProviderApprovalDecision,
+    SectionSaveReceipt,
+    ProviderWorkbookBaseline, MonthlyReportArtifact,
 )
 from .serializers import (
     ReportingPeriodSerializer, ExpectedSubmissionSerializer,
     SubmissionSerializer, SubmissionValueSerializer, ReviewActionSerializer,
     SubmissionEventSerializer, SubmissionNotificationSerializer,
+    ProviderWorkbookBaselineSerializer, MonthlyReportArtifactSerializer,
 )
 from .workflow import (
     audit_transition, clone_for_nca_correction, complete_submission_revision,
@@ -46,6 +54,10 @@ from .workflow import (
 from .provider_workspace import (
     apply_workspace_queue, filter_workspace_queryset, provider_can_edit,
     permitted_actions, summary_for_user, workspace_queryset,
+)
+from .monthly_reports import (
+    baseline_readiness, previous_month_values, replace_baseline_mappings,
+    suggest_exact_baseline_mappings,
 )
 
 
@@ -375,22 +387,26 @@ class SubmissionReviewDataView(APIView):
 
         submission = get_submission_for_user(request.user, pk=pk)
         template = submission.expected.form_template
-        readiness = refresh_submission_completion(submission)
-        assessments = recalculate_form_gaps(template, request.user)
+        archived = template is None
+        readiness = {
+            "can_submit": False, "blocking_issues": [], "completeness_warnings": [],
+            "missing_indicator_count": 0, "archived": True,
+        } if archived else refresh_submission_completion(submission)
+        assessments = [] if archived else recalculate_form_gaps(template, request.user)
         values = submission.values.select_related("field", "grid", "grid_column", "non_filled_disposition")
         uploads = submission.kmz_uploads.select_related("requirement", "reviewed_by")
         validation_run = submission.validation_runs.prefetch_related("results").order_by("-started_at").first()
         correction_items = CorrectionItem.objects.filter(
             Q(source_submission=submission) | Q(resolution_submission=submission)
         ).distinct()
-        high_gaps = [item for item in assessments if item.status != "MATCHED" and item.requirement.severity in {"BLOCKER", "HIGH"}]
         return Response({
             "submission": SubmissionSerializer(submission).data,
-            "template": FormTemplateDetailSerializer(template).data,
+            "template": submission.form_schema_snapshot if archived else FormTemplateDetailSerializer(template).data,
             "values": SubmissionValueSerializer(values, many=True).data,
             "requirements": FormGapAssessmentSerializer(assessments, many=True).data,
             "uploads": [{
-                "id": item.id, "requirement": item.requirement_id, "category": item.requirement.category,
+                "id": item.id, "requirement": item.requirement_id,
+                "category": item.requirement.category if item.requirement_id else item.requirement_snapshot.get("category", ""),
                 "file_name": item.file_name, "file_size": item.file_size, "sha256": item.sha256,
                 "scan_status": item.scan_status, "review_status": item.review_status,
                 "review_note": item.review_note, "uploaded_at": item.uploaded_at,
@@ -405,11 +421,10 @@ class SubmissionReviewDataView(APIView):
             "approval_blockers": readiness.get("blocking_issues", []),
             "correction_items": [{"id": item.id, "stage": item.stage, "target_type": item.target_type, "target_id": item.target_id,
                 "instruction": item.instruction, "status": item.status} for item in correction_items],
-            "legacy_warning": None if template.mapping_basis == "PRD_SECTION_11" and not high_gaps else {
-                "title": "Legacy or incomplete form mapping",
-                "message": f"This submission remains bound to {template.form_code} v{template.version}. It is missing {len(high_gaps)} blocker/high Section 11 requirement(s) and will not be remapped to a newer version.",
-                "missing_requirement_count": len(high_gaps),
-            },
+            # Deprecated response key retained for API compatibility. Exact-version
+            # review remains in force without presenting a misleading legacy banner.
+            "legacy_warning": None,
+            "previous_month": previous_month_values(submission),
         })
 
 
@@ -422,7 +437,11 @@ class ProviderReviewDataView(APIView):
         from apps.uploads.models import SubmissionKMZUpload, SubmissionExcelBackup
 
         submission = get_submission_for_user(request.user, pk=pk)
-        readiness = refresh_submission_completion(submission)
+        archived = submission.expected.form_template_id is None
+        readiness = {
+            "can_submit": False, "blocking_issues": [], "completeness_warnings": [],
+            "missing_indicator_count": 0, "archived": True,
+        } if archived else refresh_submission_completion(submission)
         corrections = CorrectionItem.objects.filter(
             Q(source_submission=submission) | Q(resolution_submission=submission)
         ).select_related("created_by").distinct()
@@ -433,7 +452,7 @@ class ProviderReviewDataView(APIView):
         edit_batches = submission.provider_edit_batches.select_related("actor").prefetch_related("items")
         return Response({
             "submission": SubmissionSerializer(submission).data,
-            "template": FormTemplateDetailSerializer(submission.expected.form_template).data,
+            "template": submission.form_schema_snapshot if archived else FormTemplateDetailSerializer(submission.expected.form_template).data,
             "values": SubmissionValueSerializer(
                 submission.values.select_related("field", "grid", "grid_column", "non_filled_disposition"),
                 many=True,
@@ -451,7 +470,7 @@ class ProviderReviewDataView(APIView):
             "uploads": {
                 "kmz": [{
                     "id": item.id, "requirement_id": item.requirement_id,
-                    "category": item.requirement.get_category_display(), "file_name": item.file_name,
+                    "category": item.requirement.get_category_display() if item.requirement_id else item.requirement_snapshot.get("category", ""), "file_name": item.file_name,
                     "file_size": item.file_size, "sha256": item.sha256,
                     "scan_status": item.scan_status, "review_status": item.review_status,
                     "review_note": item.review_note, "uploaded_at": item.uploaded_at,
@@ -478,6 +497,7 @@ class ProviderReviewDataView(APIView):
                 } for item in batch.items.all()],
             } for batch in edit_batches],
             "permitted_actions": permitted_actions(request.user, submission.expected, submission),
+            "previous_month": previous_month_values(submission),
         })
 
 
@@ -500,6 +520,32 @@ class SectionValuesView(APIView):
     def put(self, request, pk, section_code):
         visible = get_submission_for_user(request.user, pk=pk)
         submission = lock_submission(visible.pk)
+        values_payload = request.data.get("values", [])
+        if not isinstance(values_payload, list):
+            return Response({"detail": "values must be a list."}, status=400)
+        try:
+            client_save_id = uuid.UUID(str(request.data.get("client_save_id") or uuid.uuid4()))
+        except (TypeError, ValueError, AttributeError):
+            return Response({"detail": "client_save_id must be a valid UUID."}, status=400)
+        try:
+            persisted_change_version = max(0, int(request.data.get("change_version") or 0))
+        except (TypeError, ValueError):
+            return Response({"detail": "change_version must be a non-negative integer."}, status=400)
+        canonical_payload = json.dumps(
+            {"section_code": section_code, "values": values_payload},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+        payload_sha256 = hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
+        replay = SectionSaveReceipt.objects.filter(
+            submission=submission, client_save_id=client_save_id,
+        ).first()
+        if replay:
+            if replay.payload_sha256 != payload_sha256 or replay.section_code != section_code or replay.actor_id != request.user.id:
+                return Response({
+                    "code": "IDEMPOTENCY_KEY_REUSED",
+                    "detail": "This client_save_id was already used for a different section save.",
+                }, status=409)
+            return Response({**replay.response, "replayed": True})
         if submission.expected.workflow_status == "CORRECTION_REQUESTED" and not submission.supersedes_id:
             return Response({"detail": "Official historical versions are immutable. Edit the linked correction version."}, status=409)
         if not provider_can_edit(request.user, submission):
@@ -508,7 +554,11 @@ class SectionValuesView(APIView):
                 "detail": "Your provider role cannot edit this submission at its current workflow stage.",
             }, status=403)
         supplied_revision = request.data.get("revision")
-        if supplied_revision is not None and int(supplied_revision) != submission.revision:
+        try:
+            supplied_revision_value = int(supplied_revision) if supplied_revision is not None else None
+        except (TypeError, ValueError):
+            return Response({"detail": "revision must be an integer."}, status=400)
+        if supplied_revision_value is not None and supplied_revision_value != submission.revision:
             return Response({
                 "code": "STALE_REVISION",
                 "detail": "A newer version was saved. Your unsaved values were not overwritten; reload before reapplying them.",
@@ -520,9 +570,6 @@ class SectionValuesView(APIView):
 
         template = submission.expected.form_template
         section = get_object_or_404(template.sections.all(), section_code=section_code)
-        values_payload = request.data.get("values", [])
-        if not isinstance(values_payload, list):
-            return Response({"detail": "values must be a list."}, status=400)
         correction_items = list(
             CorrectionItem.objects.filter(
                 Q(source_submission=submission, stage="PROVIDER_APPROVAL")
@@ -572,8 +619,10 @@ class SectionValuesView(APIView):
             explanation = str(v.get("explanation", ""))
             if grid_id and not str(v.get("grid_row_id", "")).strip():
                 return Response({"detail": "Every grid cell requires a row identifier."}, status=400)
+            target_type = "FIELD" if field_id else "GRID_CELL"
+            target = str(field_id or f"{grid_id}:{v.get('grid_row_id','')}:{v.get('grid_column','')}")
+            allowed = True
             if restrict_to_corrections and correction_items:
-                target = str(field_id or f"{grid_id}:{v.get('grid_row_id','')}:{v.get('grid_column','')}")
                 allowed = any(
                     item.target_type == "SUBMISSION"
                     or (item.target_type == "SECTION" and item.target_id == section_code)
@@ -581,12 +630,24 @@ class SectionValuesView(APIView):
                     or (item.target_type == "GRID_CELL" and item.target_id == target)
                     for item in correction_items
                 )
-                if not allowed: return Response({"detail": "This value is locked because it was not included in the correction request."}, status=403)
             if field_id:
-                keep_scalar_ids.add(int(field_id)); target_keys.add(str(field_id))
+                keep_scalar_ids.add(int(field_id))
             else:
                 key = (int(grid_id), str(v.get("grid_row_id", "")), int(v.get("grid_column")))
-                keep_grid_keys.add(key); target_keys.add(f"{key[0]}:{key[1]}:{key[2]}")
+                keep_grid_keys.add(key)
+            incoming_snapshot = {
+                "value": value, "value_status": value_status, "explanation": explanation,
+            }
+            existing_key = (target_type, target)
+            if not allowed:
+                if before.get(existing_key, {}) != incoming_snapshot:
+                    return Response({
+                        "code": "CORRECTION_SCOPE_LOCKED",
+                        "detail": "A locked value outside the correction request was changed.",
+                        "target_type": target_type, "target_id": target,
+                    }, status=403)
+                continue
+            target_keys.add(target)
             obj, _ = SubmissionValue.objects.update_or_create(
                 submission=submission,
                 field_id=field_id,
@@ -623,10 +684,6 @@ class SectionValuesView(APIView):
                         continue
                 current.delete()
 
-        if restrict_to_corrections and correction_items:
-            mark_matching_corrections_addressed(
-                submission, section_code=section_code, target_keys=target_keys,
-            )
         if submission.expected.workflow_status == "NOT_STARTED":
             submission.expected.workflow_status = "DRAFT"
             submission.expected.save(update_fields=["workflow_status"])
@@ -651,6 +708,11 @@ class SectionValuesView(APIView):
                     "target_type": key[0], "target_id": key[1],
                     "before": previous, "after": current,
                 })
+        changed_target_keys = {change["target_id"] for change in changes}
+        if restrict_to_corrections and correction_items and changed_target_keys:
+            mark_matching_corrections_addressed(
+                submission, section_code=section_code, target_keys=changed_target_keys,
+            )
         edit_batch = None
         if request.user.role == "PROVIDER_APPROVER" and changes:
             canonical = json.dumps(changes, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -674,13 +736,25 @@ class SectionValuesView(APIView):
                 "changes_sha256": edit_batch.changes_sha256,
             })
         write_audit(request, "SECTION_VALUES_SAVED", "Submission", submission.id, after=audit_metadata)
-        return Response({
+        response_data = {
             "saved": len(saved), "revision": revision,
+            "client_save_id": str(client_save_id), "base_revision": base_revision,
+            "resulting_revision": revision, "persisted_change_version": persisted_change_version,
+            "replayed": False,
             "last_edited_by": request.user.id, "last_edited_by_name": request.user.name,
-            "last_edited_at": submission.last_edited_at,
+            "last_edited_at": submission.last_edited_at.isoformat() if submission.last_edited_at else None,
             "provider_edit_batch_id": edit_batch.id if edit_batch else None,
             **readiness,
-        })
+        }
+        replay_response = json.loads(json.dumps(response_data, cls=DjangoJSONEncoder))
+        SectionSaveReceipt.objects.create(
+            submission=submission, client_save_id=client_save_id,
+            section_code=section_code, actor=request.user,
+            payload_sha256=payload_sha256, base_revision=base_revision,
+            resulting_revision=revision, persisted_change_version=persisted_change_version,
+            response=replay_response,
+        )
+        return Response(response_data)
 
 
 class SubmissionCompletionView(APIView):
@@ -836,12 +910,234 @@ class OfficialSubmitView(APIView):
                 "provider_edit_batch_count": edit_batch_count,
             },
         )
+        baseline = ProviderWorkbookBaseline.objects.filter(
+            provider_id=submission.expected.provider_id,
+            form_template_id=submission.expected.form_template_id,
+            status="ACTIVE", scan_status="CLEAN",
+        ).first()
+        if baseline:
+            if was_correction and submission.supersedes_id:
+                MonthlyReportArtifact.objects.filter(
+                    submission_id=submission.supersedes_id, status="READY",
+                ).update(status="SUPERSEDED")
+            MonthlyReportArtifact.objects.update_or_create(
+                submission=submission,
+                defaults={
+                    "baseline": baseline, "status": "PREPARING", "error_message": "",
+                    "submission_revision": submission.revision,
+                },
+            )
+
+            def queue_monthly_report():
+                from .tasks import generate_monthly_report_task
+                try:
+                    generate_monthly_report_task.delay(submission.id)
+                except Exception as exc:
+                    MonthlyReportArtifact.objects.filter(submission=submission).update(
+                        status="FAILED", error_message=f"Generation could not be queued: {exc}",
+                    )
+
+            transaction.on_commit(queue_monthly_report)
         return Response({
             "detail": "Officially submitted to NCA.",
             "workflow_status": submission.expected.workflow_status,
             "receipt_reference": receipt.reference,
             "provider_approval_decision_id": decision.id,
+            "monthly_report_status": "PREPARING" if baseline else "NOT_CONFIGURED",
         })
+
+
+class PreviousMonthValuesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        submission = get_submission_for_user(request.user, pk=pk)
+        return Response(previous_month_values(submission))
+
+
+class MonthlyReportView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        submission = get_submission_for_user(request.user, pk=pk)
+        artifact = MonthlyReportArtifact.objects.filter(submission=submission).first()
+        if artifact:
+            return Response(MonthlyReportArtifactSerializer(artifact).data)
+        baseline = ProviderWorkbookBaseline.objects.filter(
+            provider_id=submission.expected.provider_id,
+            form_template_id=submission.expected.form_template_id,
+            status="ACTIVE",
+        ).first()
+        return Response({
+            "status": "NOT_SUBMITTED" if baseline else "NOT_CONFIGURED",
+            "download_ready": False,
+            "detail": (
+                "The Provider Approver must officially submit this form before the Excel report is generated."
+                if baseline else "NCA has not configured an approved provider-specific workbook baseline for this form."
+            ),
+        })
+
+
+class MonthlyReportRetryView(APIView):
+    permission_classes = [IsNCAEditor]
+
+    def post(self, request, pk):
+        submission = get_submission_for_user(request.user, pk=pk)
+        artifact = get_object_or_404(MonthlyReportArtifact, submission=submission)
+        if artifact.status != "FAILED":
+            return Response({"detail": "Only a failed monthly report can be retried."}, status=409)
+        artifact.status = "PREPARING"
+        artifact.error_message = ""
+        artifact.save(update_fields=["status", "error_message", "updated_at"])
+        from .tasks import generate_monthly_report_task
+        try:
+            generate_monthly_report_task.delay(submission.id)
+        except Exception as exc:
+            artifact.status = "FAILED"
+            artifact.error_message = f"Generation could not be queued: {exc}"
+            artifact.save(update_fields=["status", "error_message", "updated_at"])
+            return Response({"detail": artifact.error_message}, status=503)
+        write_audit(request, "MONTHLY_REPORT_RETRY", "MonthlyReportArtifact", artifact.id)
+        return Response({"detail": "Monthly report generation restarted."}, status=202)
+
+
+class MonthlyReportDownloadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        submission = get_submission_for_user(request.user, pk=pk)
+        artifact = get_object_or_404(MonthlyReportArtifact, submission=submission)
+        if artifact.status != "READY" or not artifact.private_path:
+            return Response({"detail": "The monthly Excel report is not ready."}, status=409)
+        path = Path(artifact.private_path)
+        try:
+            path.resolve().relative_to(Path(settings.PRIVATE_EXPORT_ROOT).resolve())
+        except ValueError:
+            return Response({"detail": "The report path is invalid."}, status=410)
+        if not path.exists():
+            return Response({"detail": "The private report file is missing."}, status=410)
+        write_audit(
+            request, "MONTHLY_REPORT_DOWNLOADED", "MonthlyReportArtifact", artifact.id,
+            after={"submission_id": submission.id, "sha256": artifact.sha256},
+        )
+        return FileResponse(
+            open(path, "rb"), as_attachment=True, filename=artifact.filename,
+            content_type=artifact.mime_type,
+        )
+
+
+class ProviderWorkbookBaselineListCreateView(APIView):
+    permission_classes = [IsNCAEditor]
+
+    def get(self, request, template_pk):
+        rows = ProviderWorkbookBaseline.objects.filter(form_template_id=template_pk).select_related(
+            "provider", "form_template", "contact", "created_by", "approved_by",
+        )
+        return Response(ProviderWorkbookBaselineSerializer(rows, many=True).data)
+
+    @transaction.atomic
+    def post(self, request, template_pk):
+        from apps.forms_engine.models import FormTemplate
+        from apps.providers.models import ProviderProfile, ProviderContact
+        from apps.uploads.scanner import scan_path
+
+        template = get_object_or_404(FormTemplate, pk=template_pk)
+        provider = get_object_or_404(ProviderProfile, pk=request.data.get("provider"), status="ACTIVE")
+        upload = request.FILES.get("file")
+        if not upload or not upload.name.lower().endswith(".xlsx"):
+            return Response({"detail": "A private .xlsx workbook is required."}, status=400)
+        if upload.size > 20 * 1024 * 1024:
+            return Response({"detail": "Workbook files may not exceed 20 MB."}, status=400)
+        contact = None
+        if request.data.get("contact"):
+            contact = get_object_or_404(ProviderContact, pk=request.data["contact"], provider=provider, is_active=True)
+        version = (
+            ProviderWorkbookBaseline.objects.filter(provider=provider, form_template=template)
+            .order_by("-version").values_list("version", flat=True).first() or 0
+        ) + 1
+        relative = Path("provider-report-baselines") / str(provider.provider_id) / f"{uuid.uuid4().hex}.xlsx"
+        full_path = Path(settings.PRIVATE_UPLOAD_ROOT) / relative
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256()
+        with open(full_path, "wb") as destination:
+            for chunk in upload.chunks():
+                destination.write(chunk)
+                digest.update(chunk)
+        scan = scan_path(full_path)
+        row = ProviderWorkbookBaseline.objects.create(
+            provider=provider, form_template=template, contact=contact, version=version,
+            file_name=os.path.basename(upload.name), storage_path=str(relative), file_size=upload.size,
+            sha256=digest.hexdigest(), scan_status=scan["status"], scan_engine=scan["engine"],
+            scan_details=scan["details"], main_sheet=request.data.get("main_sheet") or "REVISED MNOs MONTHLY DATA",
+            created_by=request.user,
+        )
+        if row.scan_status == "CLEAN":
+            try:
+                suggest_exact_baseline_mappings(row)
+            except Exception as exc:
+                row.mapping_summary = {"total": 0, "error": str(exc)}
+                row.save(update_fields=["mapping_summary", "updated_at"])
+        write_audit(request, "PROVIDER_WORKBOOK_BASELINE_UPLOADED", "ProviderWorkbookBaseline", row.id,
+            after={"provider_id": provider.id, "form_template_id": template.id, "sha256": row.sha256})
+        return Response(ProviderWorkbookBaselineSerializer(row).data, status=201)
+
+
+class ProviderWorkbookBaselineDetailView(APIView):
+    permission_classes = [IsNCAEditor]
+
+    def get(self, request, pk):
+        row = get_object_or_404(ProviderWorkbookBaseline, pk=pk)
+        return Response(ProviderWorkbookBaselineSerializer(row).data)
+
+    @transaction.atomic
+    def patch(self, request, pk):
+        row = get_object_or_404(ProviderWorkbookBaseline.objects.select_for_update(), pk=pk)
+        if row.status != "DRAFT":
+            return Response({"detail": "Only draft workbook baselines can be changed."}, status=409)
+        if "mappings" in request.data:
+            try:
+                replace_baseline_mappings(row, request.data.get("mappings") or [])
+            except (TypeError, ValueError) as exc:
+                return Response({"detail": str(exc)}, status=400)
+        for field in ("main_sheet", "month_header_row", "first_month_column", "contact_cells"):
+            if field in request.data:
+                setattr(row, field, request.data[field])
+        row.save()
+        write_audit(request, "PROVIDER_WORKBOOK_BASELINE_UPDATED", "ProviderWorkbookBaseline", row.id,
+            after={"mapping_summary": row.mapping_summary})
+        return Response(ProviderWorkbookBaselineSerializer(row).data)
+
+
+class ProviderWorkbookBaselineApproveView(APIView):
+    permission_classes = [IsNCAEditor]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        row = get_object_or_404(ProviderWorkbookBaseline.objects.select_for_update(), pk=pk)
+        if row.status != "DRAFT":
+            return Response({"detail": "Only a draft baseline can be approved."}, status=409)
+        issues = [issue for issue in baseline_readiness(row) if "not active" not in issue]
+        required_field_ids = set(row.form_template.sections.filter(
+            fields__is_required=True,
+        ).values_list("fields__id", flat=True))
+        mapped_required_ids = set(row.indicator_mappings.filter(
+            field_id__in=required_field_ids,
+        ).values_list("field_id", flat=True))
+        missing_required = sorted(required_field_ids - mapped_required_ids)
+        if missing_required:
+            issues.append(f"Required form fields are not mapped: {missing_required}.")
+        if issues:
+            return Response({"detail": "Workbook baseline approval is blocked.", "issues": issues}, status=409)
+        ProviderWorkbookBaseline.objects.filter(
+            provider=row.provider, form_template=row.form_template, status="ACTIVE",
+        ).exclude(pk=row.pk).update(status="ARCHIVED")
+        row.status = "ACTIVE"
+        row.approved_by = request.user
+        row.approved_at = timezone.now()
+        row.save(update_fields=["status", "approved_by", "approved_at", "updated_at"])
+        write_audit(request, "PROVIDER_WORKBOOK_BASELINE_APPROVED", "ProviderWorkbookBaseline", row.id,
+            after={"sha256": row.sha256, "mapping_summary": row.mapping_summary})
+        return Response(ProviderWorkbookBaselineSerializer(row).data)
 
 
 # ── NCA Review ────────────────────────────────────────────────────────────────

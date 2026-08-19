@@ -2,14 +2,14 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { FormSendDialog } from "@/components/forms/FormSendDialog";
-import type { FormTemplate, FormSection, FormHeading, FormField, FormGrid, FieldType, ProviderProfile, ReportingPeriod } from "@/lib/types";
-import { ChevronDown, ChevronRight, Plus, Trash2, GripVertical } from "lucide-react";
+import type { FormTemplate, FormSection, FormHeading, FormField, FormGrid, FormWorkbookImport, FieldType, ProviderProfile, ReportingPeriod } from "@/lib/types";
+import { ChevronDown, ChevronRight, Plus, Trash2, GripVertical, FileSpreadsheet } from "lucide-react";
 
 const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value:"text",        label:"Text" },
@@ -28,6 +28,12 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
 
 const inp = "w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20";
 const lbl = "block text-[11px] font-semibold uppercase tracking-wide text-[#737780] mb-1";
+
+function nextVersion(version: string) {
+  const match = version.trim().match(/^(\d+)(?:\.(\d+))?$/);
+  if (!match) return "";
+  return `${Number(match[1]) + 1}.0`;
+}
 
 function AssignmentPanel({ template }: { template: FormTemplate }) {
   const { toast } = useToast();
@@ -58,6 +64,29 @@ function AssignmentPanel({ template }: { template: FormTemplate }) {
     <div className="mt-3 flex justify-end"><button onClick={()=>send.mutate()} disabled={!selected.length||send.isPending||(mode==="MANUAL"&&!periodId)||(Boolean(preview.data?.summary.mismatches)&&!overrideReason.trim())} className="rounded-lg bg-[#001836] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{mode==="MANUAL"?"Confirm & send":"Configure recurring schedule"}</button></div>
     {(assignments.data?.recurring.length||assignments.data?.manual.length)?<div className="mt-5 border-t pt-4 text-xs text-[#43474f]"><p className="font-semibold">Current assignments</p>{assignments.data?.recurring.map(a=><p key={`r${a.id}`} className="mt-1">Recurring · {a.provider_name} · from {a.effective_from}{a.effective_to?` to ${a.effective_to}`:""}</p>)}{assignments.data?.manual.map(a=><p key={`m${a.id}`} className="mt-1">Manual · {a.provider_name} · {a.period_name}</p>)}</div>:null}
   </section><FormSendDialog template={template} open={sendOpen} onClose={()=>setSendOpen(false)}/></>;
+}
+
+type WorkbookBaseline = {
+  id:number; provider:number; provider_name:string; version:number; status:"DRAFT"|"ACTIVE"|"ARCHIVED";
+  file_name:string; file_size:number; sha256:string; scan_status:string;
+  mapping_summary:{total?:number;verified?:number;calculated?:number;unmatched_count?:number;error?:string};
+  approved_at:string|null;
+};
+
+function ExcelReportPanel({ template }: { template: FormTemplate }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [providerId,setProviderId]=useState("");
+  const [file,setFile]=useState<File|null>(null);
+  const providers=useQuery<{results:ProviderProfile[]}>({queryKey:["providers-for-report-baseline"],queryFn:()=>api("/providers/?status=ACTIVE")});
+  const baselines=useQuery<WorkbookBaseline[]>({queryKey:["workbook-baselines",template.id],queryFn:()=>api(`/form-templates/${template.id}/workbook-baselines/`)});
+  const upload=useMutation({mutationFn:async()=>{if(!file||!providerId)throw new Error("Select a provider and workbook.");const body=new FormData();body.append("provider",providerId);body.append("file",file);return api.upload<WorkbookBaseline>(`/form-templates/${template.id}/workbook-baselines/`,body);},onSuccess:()=>{toast("Private workbook uploaded and exact row reconciliation completed.","success");setFile(null);qc.invalidateQueries({queryKey:["workbook-baselines",template.id]});},onError:(error:Error)=>toast(error.message,"error")});
+  const approve=useMutation({mutationFn:(id:number)=>api.post(`/workbook-baselines/${id}/approve/`,{}),onSuccess:()=>{toast("Provider workbook baseline approved.","success");qc.invalidateQueries({queryKey:["workbook-baselines",template.id]});},onError:(error:Error)=>toast(error.message,"error")});
+  return <section className="rounded-xl border border-[#eceef0] bg-white p-5">
+    <div className="flex items-start gap-3"><span className="rounded-lg bg-[#e8f1fb] p-2 text-[#004999]"><FileSpreadsheet size={18}/></span><div><h2 className="text-sm font-semibold text-[#191c1e]">Provider-specific Excel reports</h2><p className="mt-1 text-xs text-[#737780]">Each provider requires its own private historical workbook. Exact indicator-row mappings are saved and validated; report generation never matches labels at download time.</p></div></div>
+    <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]"><select className={inp} value={providerId} onChange={e=>setProviderId(e.target.value)}><option value="">Select provider</option>{(providers.data?.results??[]).map(provider=><option key={provider.id} value={provider.id}>{provider.registered_name}</option>)}</select><input className={inp} type="file" accept=".xlsx" onChange={e=>setFile(e.target.files?.[0]??null)}/><button type="button" disabled={!file||!providerId||upload.isPending} onClick={()=>upload.mutate()} className="rounded-lg bg-[#001836] px-4 py-2 text-xs font-semibold text-white disabled:opacity-50">{upload.isPending?"Uploading…":"Upload baseline"}</button></div>
+    <div className="mt-5 space-y-3">{baselines.isLoading?<Skeleton className="h-20"/>:(baselines.data??[]).length===0?<div className="rounded-lg border border-dashed p-6 text-center text-xs text-[#737780]">No provider workbook baseline configured for this form.</div>:(baselines.data??[]).map(row=><article key={row.id} className="rounded-lg border border-[#e6e8ea] p-4"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start"><div><div className="flex flex-wrap items-center gap-2"><h3 className="text-xs font-semibold text-[#191c1e]">{row.provider_name} · baseline v{row.version}</h3><span className={`rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase ${row.status==="ACTIVE"?"bg-green-100 text-green-800":row.status==="DRAFT"?"bg-amber-100 text-amber-800":"bg-gray-100 text-gray-600"}`}>{row.status}</span><span className="rounded-full bg-[#f2f4f6] px-2 py-0.5 text-[9px] font-semibold uppercase text-[#5e6269]">Scan: {row.scan_status}</span></div><p className="mt-1 text-[11px] text-[#737780]">{row.file_name} · {(row.file_size/1024/1024).toFixed(1)} MB · SHA-256 {row.sha256.slice(0,12)}…</p><p className="mt-2 text-[11px] text-[#43474f]">{row.mapping_summary.total??0} exact mappings · {row.mapping_summary.calculated??0} calculated rows · {row.mapping_summary.unmatched_count??0} unmatched indicators</p>{row.mapping_summary.error&&<p className="mt-1 text-[11px] text-red-700">{row.mapping_summary.error}</p>}</div>{row.status==="DRAFT"&&<button type="button" onClick={()=>approve.mutate(row.id)} disabled={approve.isPending||row.scan_status!=="CLEAN"||(row.mapping_summary.unmatched_count??0)>0} className="rounded-lg bg-[#1f7a4d] px-3 py-2 text-[11px] font-semibold text-white disabled:opacity-40">Approve baseline</button>}</div></article>)}</div>
+  </section>;
 }
 
 function AddFieldForm({ templateId, sectionId, headings, availableFields, onDone }: { templateId: string; sectionId: number; headings: FormHeading[]; availableFields: FormField[]; onDone: () => void }) {
@@ -426,11 +455,14 @@ function SectionBlock({ section, templateId, editable }: { section: FormSection;
 
 export default function FormBuilderPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const { toast } = useToast();
   const qc = useQueryClient();
   const [addingSection, setAddingSection] = useState(false);
-  const [activeTab, setActiveTab] = useState<"structure"|"workbook"|"validation"|"assignments"|"gaps"|"publication">("structure");
+  const [activeTab, setActiveTab] = useState<"structure"|"workbook"|"excel-report"|"validation"|"assignments"|"gaps"|"publication">("structure");
   const [newSection, setNewSection] = useState({ section_code:"", title:"", instructions:"" });
+  const [replacementWorkbook, setReplacementWorkbook] = useState<File | null>(null);
+  const [replacementVersion, setReplacementVersion] = useState("");
 
   const { data: template, isLoading } = useQuery<FormTemplate & { sections: (FormSection & { grids: unknown[] })[] }>({
     queryKey: ["form-template", id],
@@ -454,6 +486,7 @@ export default function FormBuilderPage() {
     onSuccess: () => { toast("Source map recorded.", "success"); qc.invalidateQueries({ queryKey: ["form-template", id] }); },
     onError: (error: Error) => toast(error.message, "error"),
   });
+
   const approveMut = useMutation({
     mutationFn: () => api.post(`/form-templates/${id}/approve/`, {}),
     onSuccess: () => { toast("Form version approved and published.", "success"); qc.invalidateQueries({ queryKey: ["form-template", id] }); },
@@ -463,6 +496,28 @@ export default function FormBuilderPage() {
     mutationFn: (version: string) => api.post(`/form-templates/${id}/clone/`, { version }),
     onSuccess: () => toast("Draft version cloned.", "success"),
     onError: (error: Error) => toast(error.message, "error"),
+  });
+  const workbookImportMut = useMutation({
+    mutationFn: async () => {
+      if (!replacementWorkbook) throw new Error("Select an Excel workbook to import.");
+      const version = replacementVersion.trim() || nextVersion(template!.version);
+      if (!version) throw new Error("Enter a new version for the replacement draft.");
+      if (version === template?.version) throw new Error("The new draft must use a different version.");
+      const payload = new FormData();
+      payload.append("form_code", template!.form_code);
+      payload.append("name", template!.name);
+      payload.append("version", version);
+      payload.append("sector", template!.sector);
+      payload.append("provider_category", template!.provider_category);
+      payload.append("frequency", template!.frequency);
+      payload.append("file", replacementWorkbook);
+      return api.upload<FormWorkbookImport>("/form-workbook-imports/", payload);
+    },
+    onSuccess: imported => {
+      toast("Workbook uploaded. Review its generated structure before creating the new draft.", "success");
+      router.push(`/forms/imports/${imported.id}`);
+    },
+    onError: (error: Error) => toast(error.message || "Workbook import failed.", "error"),
   });
 
   function captureSource() {
@@ -517,7 +572,7 @@ export default function FormBuilderPage() {
       </div>
 
       <div role="tablist" aria-label="Form Builder sections" className="flex gap-1 overflow-x-auto rounded-xl border border-[#eceef0] bg-white p-1">
-        {([['structure','Structure'],['workbook','Workbook Import'],['validation','Validation'],['assignments','Assignments'],['gaps','Gap Analysis'],['publication','Publication']] as const).map(([value,label])=><button key={value} role="tab" aria-selected={activeTab===value} onClick={()=>setActiveTab(value)} className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-semibold ${activeTab===value?'bg-[#001836] text-white':'text-[#43474f] hover:bg-[#f2f4f6]'}`}>{label}</button>)}
+        {([['structure','Structure'],['workbook','Workbook Import'],['excel-report','Excel Report'],['validation','Validation'],['assignments','Assignments'],['gaps','Gap Analysis'],['publication','Publication']] as const).map(([value,label])=><button key={value} role="tab" aria-selected={activeTab===value} onClick={()=>setActiveTab(value)} className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-semibold ${activeTab===value?'bg-[#001836] text-white':'text-[#43474f] hover:bg-[#f2f4f6]'}`}>{label}</button>)}
       </div>
 
       {activeTab==="publication"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-4 text-[12px] text-[#43474f]">
@@ -529,7 +584,27 @@ export default function FormBuilderPage() {
         <a href={`/forms/${id}/gaps`} className="ml-2 inline-flex rounded-[8px] bg-[#0066cc] px-3 py-1.5 text-[11px] font-semibold text-white">Gap Analysis</a>
       </div>}
 
-      {activeTab==="workbook"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-5 text-sm text-[#43474f]"><h2 className="font-semibold text-[#191c1e]">Workbook provenance</h2><p className="mt-2">{template.source_reference||"This version was created manually and has no workbook source."}</p><p className="mt-2 break-all font-mono text-xs text-[#737780]">{template.source_sha256||"No workbook SHA-256 recorded"}</p><Link href="/forms" className="mt-4 inline-flex rounded-lg bg-[#001836] px-4 py-2 text-xs font-semibold text-white">Import a workbook as a new draft</Link></div>}
+      {activeTab==="workbook"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-5 text-sm text-[#43474f]">
+        <h2 className="font-semibold text-[#191c1e]">Workbook provenance</h2>
+        <p className="mt-2">{template.source_reference||"This version was created manually and has no workbook source."}</p>
+        <p className="mt-2 break-all font-mono text-xs text-[#737780]">{template.source_sha256||"No workbook SHA-256 recorded"}</p>
+        <div className="mt-5 rounded-xl border border-[#d9dde2] bg-[#f7f9fb] p-4">
+          <h3 className="text-sm font-semibold text-[#191c1e]">Replace with a new workbook version</h3>
+          <p className="mt-1 text-xs text-[#5e6269]">The current v{template.version} remains unchanged for history. The workbook will generate a new draft in the same {template.form_code} family.</p>
+          <div className="mt-4 grid gap-4 sm:grid-cols-[10rem_1fr]">
+            <div>
+              <label className={lbl}>New version</label>
+              <input value={replacementVersion} onChange={event=>setReplacementVersion(event.target.value)} placeholder={nextVersion(template.version)||"e.g. 2.0"} className={inp}/>
+            </div>
+            <div>
+              <label className={lbl}>Replacement workbook</label>
+              <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event=>setReplacementWorkbook(event.target.files?.[0]??null)} className="block w-full text-xs text-[#43474f] file:mr-3 file:rounded-lg file:border-0 file:bg-[#e8f1fb] file:px-3 file:py-2 file:font-semibold file:text-[#004999]"/>
+            </div>
+          </div>
+          <button type="button" onClick={()=>workbookImportMut.mutate()} disabled={!replacementWorkbook||workbookImportMut.isPending} className="mt-4 rounded-lg bg-[#001836] px-4 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{workbookImportMut.isPending?"Uploading and analyzing…":"Upload workbook & preview new draft"}</button>
+        </div>
+      </div>}
+      {activeTab==="excel-report"&&<ExcelReportPanel template={template}/>}
 
       {activeTab==="gaps"&&<div className="rounded-[12px] border border-[#eceef0] bg-white p-5"><h2 className="text-sm font-semibold">Gap Analysis</h2><p className="mt-1 text-xs text-[#737780]">{template.mapping_basis==="PRD_SECTION_11"?"Review objective Section 11 requirements and publication blockers for this immutable version.":"Section 11 matching is not applicable to this custom/source-derived form. Publication uses its configured structure, validation and source approval checks."}</p>{template.mapping_basis==="PRD_SECTION_11"&&<Link href={`/forms/${id}/gaps`} className="mt-4 inline-flex rounded-lg bg-[#0066cc] px-4 py-2 text-xs font-semibold text-white">Open Gap Analysis</Link>}</div>}
 

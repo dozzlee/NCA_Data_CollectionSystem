@@ -1,3 +1,5 @@
+import re
+
 from django.db import models
 
 FIELD_TYPES = [
@@ -27,6 +29,42 @@ FORM_CODES = [
 
 # Section 11 only requires KMZ route/topology evidence for the domestic fibre form.
 KMZ_ELIGIBLE_FORMS = {"DC-DBS05"}
+
+
+class FormCodeCatalog(models.Model):
+    """Governed form identity; exists independently of created template versions."""
+
+    code = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=255)
+    sector = models.CharField(max_length=20, choices=[("TELECOM", "Telecom"), ("BROADCASTING", "Broadcasting")])
+    provider_category = models.CharField(max_length=30)
+    frequency = models.CharField(
+        max_length=15,
+        choices=[("MONTHLY", "Monthly"), ("QUARTERLY", "Quarterly"), ("SEMI_ANNUAL", "Semi-Annual"), ("ANNUAL", "Annual")],
+    )
+    source_filename = models.CharField(max_length=255)
+    code_status = models.CharField(
+        max_length=15, choices=[("CONFIRMED", "Confirmed"), ("PROVISIONAL", "Provisional")],
+        default="CONFIRMED",
+    )
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "code"]
+
+    def __str__(self):
+        return self.code
+
+    @property
+    def next_version(self):
+        versions = FormTemplate.objects.filter(form_code=self.code).values_list("version", flat=True)
+        majors = []
+        for version in versions:
+            match = re.fullmatch(r"(\d+)(?:\.\d+)?", version.strip())
+            if match:
+                majors.append(int(match.group(1)))
+        return f"{max(majors, default=0) + 1}.0"
 
 
 class FormFamily(models.Model):
@@ -132,7 +170,13 @@ class FormTemplate(models.Model):
 
     class Meta:
         ordering = ["form_code"]
-        constraints = [models.UniqueConstraint(fields=["family", "version"], name="unique_form_family_version")]
+        constraints = [
+            models.UniqueConstraint(fields=["family", "version"], name="unique_form_family_version"),
+            models.UniqueConstraint(
+                fields=["family"], condition=models.Q(status="ACTIVE"),
+                name="one_active_version_per_form_family",
+            ),
+        ]
 
 
 class ValidationRule(models.Model):
@@ -257,6 +301,8 @@ class FormField(models.Model):
     conditional_on_value = models.CharField(max_length=100, blank=True)
     sort_order = models.PositiveIntegerField(default=0)
     export_name = models.CharField(max_length=100, blank=True)
+    source_sheet = models.CharField(max_length=255, blank=True)
+    source_row = models.PositiveIntegerField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.section.section_code} / {self.field_code}"
@@ -289,6 +335,8 @@ class FormGrid(models.Model):
     sort_order = models.PositiveIntegerField(default=0)
     instructions = models.TextField(blank=True)
     min_rows = models.PositiveIntegerField(default=0)
+    source_sheet = models.CharField(max_length=255, blank=True)
+    source_row = models.PositiveIntegerField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.section.section_code} / {self.grid_code}"
@@ -306,6 +354,8 @@ class GridColumn(models.Model):
     unit = models.CharField(max_length=50, blank=True)
     is_required = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
+    source_sheet = models.CharField(max_length=255, blank=True)
+    source_row = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ["sort_order"]
@@ -317,6 +367,8 @@ class GridRow(models.Model):
     grid = models.ForeignKey(FormGrid, null=True, blank=True, on_delete=models.CASCADE, related_name="fixed_rows")
     row_label = models.CharField(max_length=255)
     sort_order = models.PositiveIntegerField(default=0)
+    source_sheet = models.CharField(max_length=255, blank=True)
+    source_rows = models.JSONField(default=list, blank=True)
 
     class Meta:
         ordering = ["sort_order"]
@@ -361,7 +413,7 @@ class FormWorkbookImport(models.Model):
     scan_engine = models.CharField(max_length=100, blank=True)
     scan_details = models.TextField(blank=True)
     parse_status = models.CharField(max_length=20, choices=PARSE_STATUSES, default="PENDING")
-    parser_version = models.CharField(max_length=50, default="xlsx-worksheet-v4-definition-headings")
+    parser_version = models.CharField(max_length=50, default="xlsx-worksheet-v6-visible-rows-matrix-grids")
     detected_schema = models.JSONField(default=dict, blank=True)
     warnings = models.JSONField(default=list, blank=True)
     mapping_decisions = models.JSONField(default=dict, blank=True)

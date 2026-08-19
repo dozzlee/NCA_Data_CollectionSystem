@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     # Form Templates
     path("form-templates/",                                         views.FormTemplateListView.as_view()),
+    path("form-code-catalog/",                                    views.FormCodeCatalogListView.as_view()),
     path("form-workbook-imports/",                                views.FormWorkbookImportListCreateView.as_view()),
     path("form-workbook-imports/<int:pk>/",                       views.FormWorkbookImportDetailView.as_view()),
     path("form-workbook-imports/<int:pk>/reparse/",               views.ReparseFormWorkbookImportView.as_view()),

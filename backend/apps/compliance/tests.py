@@ -5,7 +5,7 @@ from rest_framework.test import APITestCase
 
 from apps.forms_engine.models import FormTemplate
 from apps.providers.models import ProviderProfile
-from apps.submissions.models import ExpectedSubmission, ReportingPeriod
+from apps.submissions.models import ExpectedSubmission, ReportingPeriod, Submission
 from apps.users.models import Organization, User
 
 from .models import ComplianceFlag, EmailLog, EmailTemplate
@@ -88,6 +88,8 @@ class ComplianceWorkflowTests(APITestCase):
             workflow_status="DRAFT",
             due_state="DUE_SOON",
         )
+        self.submission_a = Submission.objects.create(expected=self.expected_a, version=1)
+        self.submission_b = Submission.objects.create(expected=self.expected_b, version=1)
         self.flag_a = ComplianceFlag.objects.create(
             expected_submission=self.expected_a,
             provider=self.provider_a,
@@ -117,6 +119,9 @@ class ComplianceWorkflowTests(APITestCase):
         listing = self.client.get("/api/v1/compliance/flags/?status=OPEN")
         self.assertEqual(listing.status_code, 200)
         self.assertEqual(listing.data["count"], 2)
+        listed = {item["expected_submission"]: item for item in listing.data["results"]}
+        self.assertEqual(listed[self.expected_a.id]["latest_submission_id"], self.submission_a.id)
+        self.assertEqual(listed[self.expected_b.id]["latest_submission_id"], self.submission_b.id)
 
         acknowledged = self.client.patch(
             f"/api/v1/compliance/flags/{self.flag_a.id}/acknowledge/",

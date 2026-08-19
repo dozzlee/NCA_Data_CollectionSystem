@@ -1,4 +1,5 @@
 from django.db.models import Q
+import re
 from rest_framework import serializers
 from .models import ProviderProfile, ProviderContact, ProviderFormAssignment
 
@@ -21,13 +22,27 @@ class ProviderProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProviderProfile
         fields = [
-            "id", "provider_id", "organization_id", "registered_name", "trade_name", "sector", "category",
+            "id", "provider_id", "provider_code", "organization_id", "registered_name", "trade_name", "sector", "category",
             "licence_type", "licence_number", "licence_issue_date", "licence_expiry_date",
             "physical_address", "digital_address", "postal_address", "website",
             "primary_email", "primary_phone", "status",
             "created_at", "updated_at", "contacts",
         ]
         read_only_fields = ["id", "provider_id", "organization_id", "created_at", "updated_at"]
+        extra_kwargs = {"provider_code": {"required": True}}
+
+    def validate_provider_code(self, value):
+        value = value.strip().upper()
+        if not re.fullmatch(r"[A-Z0-9]{2,12}", value):
+            raise serializers.ValidationError("Use 2-12 uppercase letters or numbers.")
+        return value
+
+    def validate(self, attrs):
+        instance = self.instance
+        if instance and "provider_code" in attrs and attrs["provider_code"] != instance.provider_code:
+            if instance.expected_submissions.exists():
+                raise serializers.ValidationError({"provider_code": "The provider code cannot change after submissions exist."})
+        return attrs
 
 
 class ProviderProfileListSerializer(serializers.ModelSerializer):
@@ -35,7 +50,7 @@ class ProviderProfileListSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProviderProfile
         fields = [
-            "id", "provider_id", "organization_id", "registered_name", "trade_name", "sector", "category",
+            "id", "provider_id", "provider_code", "organization_id", "registered_name", "trade_name", "sector", "category",
             "licence_type", "licence_number", "primary_email", "primary_phone",
             "status", "created_at",
         ]

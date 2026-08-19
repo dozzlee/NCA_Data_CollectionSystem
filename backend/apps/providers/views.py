@@ -27,7 +27,7 @@ class ProviderListView(generics.ListCreateAPIView):
     POST — NCA staff only. Providers cannot self-register or add other providers.
     """
     filterset_fields = ["sector", "category", "status"]
-    search_fields = ["registered_name", "trade_name", "licence_number", "primary_email"]
+    search_fields = ["provider_code", "registered_name", "trade_name", "licence_number", "primary_email"]
     ordering_fields = ["registered_name", "category", "status", "created_at"]
     ordering = ["registered_name"]
 

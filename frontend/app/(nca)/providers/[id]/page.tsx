@@ -181,7 +181,7 @@ export default function ProviderDetailPage() {
             {editMode ? (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 {([
-                  ["registered_name","Registered Name"],["trade_name","Trade Name"],
+                  ["provider_code","Provider Code"],["registered_name","Registered Name"],["trade_name","Trade Name"],
                   ["primary_email","Primary Email"],["primary_phone","Primary Phone"],
                   ["website","Website"],["physical_address","Physical Address"],
                   ["digital_address","Digital Address"],["postal_address","Postal Address"],
@@ -209,6 +209,7 @@ export default function ProviderDetailPage() {
             <h2 className="text-[15px] font-semibold text-[#191c1e] mb-5">Licence</h2>
             <dl className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
               <Field label="Licence Type"   value={provider.licence_type} />
+              <Field label="Provider Code" value={provider.provider_code} />
               <Field label="Licence Number" value={provider.licence_number} />
               <Field label="Issue Date"     value={provider.licence_issue_date??undefined} />
               <Field label="Expiry Date"    value={provider.licence_expiry_date??undefined} />
@@ -260,6 +261,7 @@ export default function ProviderDetailPage() {
                       <td className="px-5 py-3.5">
                         <p className="text-[13px] text-[#191c1e]">{s.form_name}</p>
                         <p className="text-[11px] font-mono text-[#737780]">{s.form_code}</p>
+                        {s.submission_reference&&<p className="mt-1 max-w-[250px] break-all font-mono text-[10px] text-[#004999]">{s.submission_reference}</p>}
                       </td>
                       <td className="px-5 py-3.5 text-[12px] text-[#737780]">
                         {s.due_at ? new Date(s.due_at).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}) : "—"}
@@ -268,8 +270,9 @@ export default function ProviderDetailPage() {
                       <td className="px-5 py-3.5"><DueStateBadge state={s.due_state}/></td>
                       <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{s.assigned_officer_name??"—"}</td>
                       <td className="px-5 py-3.5">
-                        <Link href={`/submissions/${s.id}/review`}
+                        {s.latest_submission_id ? <Link href={`/submissions/${s.latest_submission_id}/review`}
                           className="text-[13px] font-medium text-[#0066cc] hover:underline">Review →</Link>
+                          : <span title="No submission version exists for this obligation." className="text-[13px] text-[#737780]">Unavailable</span>}
                       </td>
                     </tr>
                   ))}

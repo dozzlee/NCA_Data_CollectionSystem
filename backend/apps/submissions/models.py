@@ -1,4 +1,5 @@
 import uuid
+import re
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -155,7 +156,19 @@ class ReminderPolicy(models.Model):
 
 class ExpectedSubmission(models.Model):
     provider = models.ForeignKey("providers.ProviderProfile", on_delete=models.PROTECT, related_name="expected_submissions")
-    form_template = models.ForeignKey("forms_engine.FormTemplate", on_delete=models.PROTECT)
+    form_template = models.ForeignKey(
+        "forms_engine.FormTemplate", null=True, blank=True, on_delete=models.SET_NULL,
+        help_text="Null only for archived obligations whose immutable form identity/schema was snapshotted.",
+    )
+    form_code_snapshot = models.CharField(max_length=50, blank=True)
+    form_name_snapshot = models.CharField(max_length=255, blank=True)
+    form_version_snapshot = models.CharField(max_length=20, blank=True)
+    form_frequency_snapshot = models.CharField(max_length=15, blank=True)
+    form_sector_snapshot = models.CharField(max_length=20, blank=True)
+    form_provider_category_snapshot = models.CharField(max_length=30, blank=True)
+    form_source_reference_snapshot = models.CharField(max_length=500, blank=True)
+    form_created_at_snapshot = models.DateTimeField(null=True, blank=True)
+    workflow_status_snapshot = models.CharField(max_length=30, blank=True)
     period = models.ForeignKey(ReportingPeriod, on_delete=models.PROTECT, related_name="expected_submissions")
     workflow_status = models.CharField(max_length=30, choices=WORKFLOW_STATUSES, default="NOT_STARTED")
     due_state = models.CharField(max_length=15, choices=DUE_STATES, default="NOT_OPEN")
@@ -228,7 +241,8 @@ class ExpectedSubmission(models.Model):
             self.save(update_fields=["due_state"])
 
     def __str__(self):
-        return f"{self.provider} / {self.form_template.form_code} / {self.period.name}"
+        code = self.form_template.form_code if self.form_template_id else self.form_code_snapshot
+        return f"{self.provider} / {code or 'ARCHIVED-FORM'} / {self.period.name}"
 
     class Meta:
         unique_together = [["provider", "form_template", "period"]]
@@ -269,6 +283,10 @@ class SubmissionOverride(models.Model):
 
 class Submission(models.Model):
     expected = models.ForeignKey(ExpectedSubmission, on_delete=models.PROTECT, related_name="versions")
+    submission_reference = models.CharField(max_length=180, unique=True, editable=False)
+    form_schema_snapshot = models.JSONField(default=dict, blank=True)
+    form_schema_sha256 = models.CharField(max_length=64, blank=True, editable=False)
+    form_schema_snapshot_version = models.PositiveSmallIntegerField(default=1)
     version = models.PositiveIntegerField(default=1)
     completion_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     submitted_by = models.ForeignKey(
@@ -294,6 +312,39 @@ class Submission(models.Model):
 
     def __str__(self):
         return f"{self.expected} v{self.version}"
+
+    def build_submission_reference(self):
+        period = self.expected.period
+        if period.frequency == "MONTHLY":
+            period_token = f"{period.year}-{period.month:02d}"
+        elif period.frequency == "QUARTERLY":
+            period_token = f"{period.year}-Q{period.quarter}"
+        elif period.frequency == "ANNUAL":
+            period_token = str(period.year)
+        else:
+            period_token = f"{period.year}-SA-{period.id}"
+        template = self.expected.form_template
+        form_code_value = template.form_code if template else self.expected.form_code_snapshot
+        version_value = template.version if template else self.expected.form_version_snapshot
+        form_code = re.sub(r"[^A-Z0-9-]+", "-", form_code_value.upper()).strip("-")
+        version = re.sub(r"[^A-Z0-9.-]+", "-", version_value.upper()).strip("-")
+        return f"{form_code}-{self.expected.provider.provider_code}-{period_token}-V{version}-S{self.id}"
+
+    def save(self, *args, **kwargs):
+        creating = self._state.adding
+        if creating and not self.submission_reference:
+            # The final component is the database ID, so persist once to obtain it,
+            # then store the immutable human-facing reference in the same call path.
+            self.submission_reference = f"PENDING-{uuid.uuid4().hex}"
+            super().save(*args, **kwargs)
+            self.submission_reference = self.build_submission_reference()
+            type(self).objects.filter(pk=self.pk).update(submission_reference=self.submission_reference)
+            return
+        if self.pk:
+            original = type(self).objects.filter(pk=self.pk).values_list("submission_reference", flat=True).first()
+            if original and self.submission_reference != original:
+                raise ValidationError({"submission_reference": "Submission references are immutable."})
+        super().save(*args, **kwargs)
 
     class Meta:
         ordering = ["-version"]
@@ -369,6 +420,8 @@ class SubmissionValue(models.Model):
     grid = models.ForeignKey("forms_engine.FormGrid", null=True, blank=True, on_delete=models.SET_NULL)
     grid_row_id = models.CharField(max_length=100, blank=True)   # Fixed label or repeatable UUID
     grid_column = models.ForeignKey("forms_engine.GridColumn", null=True, blank=True, on_delete=models.SET_NULL)
+    target_key_snapshot = models.CharField(max_length=255, blank=True, db_index=True)
+    target_snapshot = models.JSONField(default=dict, blank=True)
     value = models.TextField(blank=True)
     value_status = models.CharField(max_length=30, choices=FIELD_STATUSES, default="MISSING")
     explanation = models.TextField(blank=True)
@@ -385,6 +438,10 @@ class SubmissionValue(models.Model):
                 check=(
                     models.Q(field__isnull=False, grid__isnull=True, grid_column__isnull=True)
                     | models.Q(field__isnull=True, grid__isnull=False, grid_column__isnull=False)
+                    | models.Q(
+                        field__isnull=True, grid__isnull=True, grid_column__isnull=True,
+                        target_key_snapshot__gt="",
+                    )
                 ),
                 name="submission_value_exactly_one_target",
             ),
@@ -395,6 +452,30 @@ class SubmissionValue(models.Model):
             models.UniqueConstraint(
                 fields=["submission", "grid", "grid_row_id", "grid_column"],
                 condition=models.Q(grid__isnull=False), name="unique_submission_grid_cell",
+            ),
+        ]
+
+
+class SectionSaveReceipt(models.Model):
+    """Idempotency evidence for one authoritative provider section save."""
+
+    submission = models.ForeignKey(Submission, on_delete=models.CASCADE, related_name="section_save_receipts")
+    client_save_id = models.UUIDField()
+    section_code = models.CharField(max_length=50)
+    actor = models.ForeignKey("users.User", on_delete=models.PROTECT, related_name="section_save_receipts")
+    payload_sha256 = models.CharField(max_length=64)
+    base_revision = models.PositiveIntegerField()
+    resulting_revision = models.PositiveIntegerField()
+    persisted_change_version = models.PositiveIntegerField(default=0)
+    response = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["submission", "client_save_id"],
+                name="unique_submission_client_section_save",
             ),
         ]
 
@@ -499,3 +580,145 @@ class SubmissionReceipt(models.Model):
     file_size = models.PositiveBigIntegerField(default=0)
     sha256 = models.CharField(max_length=64)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class ProviderWorkbookBaseline(models.Model):
+    """Private provider-specific workbook used to render one monthly form family."""
+
+    STATUS_CHOICES = [
+        ("DRAFT", "Draft"), ("ACTIVE", "Active"), ("ARCHIVED", "Archived"),
+    ]
+    SCAN_CHOICES = [
+        ("PENDING", "Pending"), ("CLEAN", "Clean"),
+        ("INFECTED", "Infected"), ("ERROR", "Error"),
+    ]
+
+    provider = models.ForeignKey(
+        "providers.ProviderProfile", on_delete=models.PROTECT, related_name="workbook_baselines",
+    )
+    form_template = models.ForeignKey(
+        "forms_engine.FormTemplate", on_delete=models.PROTECT, related_name="provider_workbook_baselines",
+    )
+    contact = models.ForeignKey(
+        "providers.ProviderContact", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="workbook_baselines",
+    )
+    version = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="DRAFT")
+    file_name = models.CharField(max_length=255)
+    storage_path = models.CharField(max_length=500)
+    file_size = models.PositiveBigIntegerField(default=0)
+    sha256 = models.CharField(max_length=64)
+    scan_status = models.CharField(max_length=20, choices=SCAN_CHOICES, default="PENDING")
+    scan_engine = models.CharField(max_length=100, blank=True)
+    scan_details = models.TextField(blank=True)
+    main_sheet = models.CharField(max_length=255, default="REVISED MNOs MONTHLY DATA")
+    month_header_row = models.PositiveIntegerField(default=8)
+    first_month_column = models.PositiveIntegerField(default=6)
+    contact_cells = models.JSONField(default=dict, blank=True)
+    mapping_summary = models.JSONField(default=dict, blank=True)
+    created_by = models.ForeignKey(
+        "users.User", on_delete=models.PROTECT, related_name="workbook_baselines_created",
+    )
+    approved_by = models.ForeignKey(
+        "users.User", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="workbook_baselines_approved",
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "form_template", "version"],
+                name="unique_provider_form_workbook_baseline_version",
+            ),
+            models.UniqueConstraint(
+                fields=["provider", "form_template"], condition=models.Q(status="ACTIVE"),
+                name="unique_active_provider_form_workbook_baseline",
+            ),
+        ]
+
+
+class WorkbookIndicatorMapping(models.Model):
+    """Verified target-to-row mapping; generation never performs fuzzy matching."""
+
+    baseline = models.ForeignKey(
+        ProviderWorkbookBaseline, on_delete=models.CASCADE, related_name="indicator_mappings",
+    )
+    target_key = models.CharField(max_length=300)
+    target_type = models.CharField(
+        max_length=20, choices=[("FIELD", "Field"), ("GRID_CELL", "Grid cell")],
+    )
+    field = models.ForeignKey(
+        "forms_engine.FormField", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="workbook_mappings",
+    )
+    grid = models.ForeignKey(
+        "forms_engine.FormGrid", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="workbook_mappings",
+    )
+    grid_row = models.ForeignKey(
+        "forms_engine.GridRow", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="workbook_mappings",
+    )
+    grid_column = models.ForeignKey(
+        "forms_engine.GridColumn", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="workbook_mappings",
+    )
+    sheet_name = models.CharField(max_length=255)
+    excel_row = models.PositiveIntegerField()
+    value_kind = models.CharField(
+        max_length=20, choices=[("INPUT", "Input"), ("CALCULATED", "Calculated")],
+        default="INPUT",
+    )
+    source_indicator = models.CharField(max_length=500, blank=True)
+    source_definition = models.TextField(blank=True)
+    source_data_type = models.CharField(max_length=100, blank=True)
+    formula_seed_column = models.PositiveIntegerField(null=True, blank=True)
+    verified = models.BooleanField(default=False)
+    provenance = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["sheet_name", "excel_row", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["baseline", "target_key"], name="unique_baseline_indicator_target",
+            ),
+            models.UniqueConstraint(
+                fields=["baseline", "sheet_name", "excel_row"],
+                name="unique_baseline_sheet_indicator_row",
+            ),
+        ]
+
+
+class MonthlyReportArtifact(models.Model):
+    STATUS_CHOICES = [
+        ("PREPARING", "Preparing"), ("READY", "Ready"),
+        ("FAILED", "Failed"), ("SUPERSEDED", "Superseded"),
+    ]
+
+    submission = models.OneToOneField(
+        Submission, on_delete=models.PROTECT, related_name="monthly_report_artifact",
+    )
+    baseline = models.ForeignKey(
+        ProviderWorkbookBaseline, null=True, blank=True, on_delete=models.SET_NULL, related_name="artifacts",
+    )
+    baseline_snapshot = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="PREPARING")
+    filename = models.CharField(max_length=255, blank=True)
+    private_path = models.CharField(max_length=500, blank=True)
+    mime_type = models.CharField(
+        max_length=100, default="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    file_size = models.PositiveBigIntegerField(default=0)
+    sha256 = models.CharField(max_length=64, blank=True)
+    submission_revision = models.PositiveIntegerField(default=0)
+    generation_metadata = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)

@@ -17,7 +17,7 @@ from .models import (
     GridColumn, GridRow, SelectOption, FormWorkbookImport,
 )
 from apps.uploads.scanner import scan_path
-PARSER_VERSION = "xlsx-worksheet-v4-definition-headings"
+PARSER_VERSION = "xlsx-worksheet-v6-visible-rows-matrix-grids"
 FIXED_ROW_HEADERS = {"region", "category", "country", "operator", "brand", "service", "item", "location"}
 STREAMING_THRESHOLD_BYTES = 5 * 1024 * 1024
 MAX_SOURCE_ROWS = 2000
@@ -308,6 +308,7 @@ def _column_candidates(rows):
             {"column": column, "label": str(cell.get("value", "")).strip()[:100]}
             for column, cell in sorted(rows[row_number].items())
             if isinstance(cell.get("value"), str) and str(cell.get("value")).strip()
+            and not str(cell.get("value")).strip().startswith("=")
         ]
         if len(labels) >= 2:
             candidates.append({"row": row_number, "columns": labels})
@@ -324,7 +325,7 @@ def _definition_content(rows, sheet_title, sheet_index, warnings, override=None)
             "severity": "BLOCKING",
             "message": f'{sheet_title} does not contain recognizable Indicator and Definition columns. Select the columns before confirming.',
         })
-        return [], [], {
+        return [], [], [], {
             "detected": False, "header_row": None, "indicator_column": None,
             "definition_column": None, "data_type_column": None, "unit_column": None,
             "required_column": None, "options_column": None,
@@ -333,6 +334,7 @@ def _definition_content(rows, sheet_title, sheet_index, warnings, override=None)
 
     headings = []
     fields = []
+    grids = []
     used_heading_codes = set()
     used_field_codes = set()
     current_heading_code = ""
@@ -340,7 +342,84 @@ def _definition_content(rows, sheet_title, sheet_index, warnings, override=None)
     last_kind = ""
     current_level = 0
 
-    for row_number in sorted(row for row in rows if row > mapping["header_row"]):
+    # Some NCA workbooks represent a two-dimensional matrix as consecutive
+    # metadata rows. Device brands are encoded as a brand row labelled
+    # "Smart Phones", followed by a blank-indicator continuation row labelled
+    # "Feature and Basic Phones". Preserve that structure as one fixed grid
+    # instead of losing the continuation row or creating duplicate scalars.
+    ordered_rows = sorted(row for row in rows if row > mapping["header_row"])
+    indicator_column = mapping["indicator_column"]
+    definition_column = mapping["definition_column"]
+    heading_text = " ".join(
+        str(rows[row].get(indicator_column, {}).get("value") or "")
+        for row in ordered_rows
+        if not str(rows[row].get(definition_column, {}).get("value") or "").strip()
+    )
+    device_brand_context = "brand" in _metadata_key(f"{sheet_title} {heading_text}")
+    consumed_matrix_rows = set()
+    brand_pairs = []
+    if device_brand_context:
+        for position, row_number in enumerate(ordered_rows):
+            row = rows[row_number]
+            brand = str(row.get(indicator_column, {}).get("value") or "").strip()
+            category = _metadata_key(row.get(definition_column, {}).get("value") or "")
+            if not brand or category not in {"smartphone", "smartphones"}:
+                continue
+            next_row_number = ordered_rows[position + 1] if position + 1 < len(ordered_rows) else None
+            next_row = rows.get(next_row_number, {}) if next_row_number else {}
+            continuation_brand = str(next_row.get(indicator_column, {}).get("value") or "").strip()
+            continuation_category = _metadata_key(next_row.get(definition_column, {}).get("value") or "")
+            if continuation_brand or continuation_category not in {
+                "featureandbasicphone", "featureandbasicphones", "featurebasicphone", "featurebasicphones",
+            }:
+                warnings.append({
+                    "code": f"INCOMPLETE_DEVICE_BRAND_PAIR_{sheet_index}_{row_number}",
+                    "severity": "BLOCKING",
+                    "message": f'{sheet_title} row {row_number} defines Smart Phones for "{brand}" without the required Feature and Basic Phones continuation row.',
+                })
+                continue
+            brand_pairs.append({
+                "label": brand[:255], "smart_row": row_number,
+                "feature_row": next_row_number,
+            })
+            consumed_matrix_rows.update({row_number, next_row_number})
+
+    if brand_pairs:
+        grid_source_row = min(pair["smart_row"] for pair in brand_pairs)
+        grids.append({
+            "source_order": grid_source_row,
+            "grid_code": "PHONE_COUNTS_BY_BRAND",
+            "title": "Smart and Feature/Basic Phone Counts by Brand",
+            "row_mode": "FIXED",
+            "min_rows": len(brand_pairs),
+            "instructions": "Enter Smart Phone and Feature/Basic Phone counts independently for every brand.",
+            "columns": [
+                {
+                    "column_code": "SMART_PHONES", "label": "Smart Phones",
+                    "field_type": "number", "unit": "count", "is_required": False,
+                    "source": {"sheet": sheet_title, "row": grid_source_row},
+                },
+                {
+                    "column_code": "FEATURE_BASIC_PHONES", "label": "Feature and Basic Phones",
+                    "field_type": "number", "unit": "count", "is_required": False,
+                    "source": {"sheet": sheet_title, "row": brand_pairs[0]["feature_row"]},
+                },
+            ],
+            "fixed_rows": [pair["label"] for pair in brand_pairs],
+            "fixed_row_sources": [
+                {
+                    "label": pair["label"],
+                    "source": {"sheet": sheet_title, "rows": [pair["smart_row"], pair["feature_row"]]},
+                }
+                for pair in brand_pairs
+            ],
+            "source": {"sheet": sheet_title, "row": grid_source_row, "heading": "Device Brands"},
+            "parser_version": PARSER_VERSION,
+        })
+
+    for row_number in ordered_rows:
+        if row_number in consumed_matrix_rows:
+            continue
         row = rows[row_number]
         indicator = str(row.get(mapping["indicator_column"], {}).get("value") or "").strip()
         if not indicator:
@@ -394,13 +473,14 @@ def _definition_content(rows, sheet_title, sheet_index, warnings, override=None)
         last_kind = "field"
 
     mapping["candidates"] = _column_candidates(rows)
-    return headings, fields, mapping
+    return headings, fields, grids, mapping
 
 
 def _parse_stream_sheet(archive, sheet_path, shared_strings, styles):
     cells = {}
     merged_ranges = []
     table_relationship_ids = []
+    hidden_rows = set()
     with archive.open(sheet_path) as source:
         for _event, element in ET.iterparse(source, events=("end",)):
             if element.tag == f"{SHEET_NS}c":
@@ -428,7 +508,14 @@ def _parse_stream_sheet(archive, sheet_path, shared_strings, styles):
                 if relationship_id:
                     table_relationship_ids.append(relationship_id)
                 element.clear()
-    return cells, merged_ranges, table_relationship_ids
+            elif element.tag == f"{SHEET_NS}row":
+                if element.attrib.get("hidden", "0").lower() in {"1", "true"}:
+                    try:
+                        hidden_rows.add(int(element.attrib.get("r", "0")))
+                    except ValueError:
+                        pass
+                element.clear()
+    return cells, merged_ranges, table_relationship_ids, hidden_rows
 
 
 def _streaming_table(archive, table_path, cells, sheet_title, used_grid_codes):
@@ -526,15 +613,19 @@ def _parse_workbook_streaming(path, column_mappings=None):
         sections = []
         used_section_codes = set()
         for sheet_index, (sheet_title, sheet_path) in enumerate(visible_sheets, start=1):
-            cells, _merged_ranges, _table_ids = _parse_stream_sheet(archive, sheet_path, shared_strings, styles)
-            rows = {}
+            cells, _merged_ranges, _table_ids, hidden_rows = _parse_stream_sheet(
+                archive, sheet_path, shared_strings, styles,
+            )
+            all_rows = {}
             for (row, column), cell_data in cells.items():
-                rows.setdefault(row, {})[column] = cell_data
+                all_rows.setdefault(row, {})[column] = cell_data
+            excluded_hidden_rows = sorted(set(all_rows) & hidden_rows)
+            rows = {row: values for row, values in all_rows.items() if row not in hidden_rows}
             override = (column_mappings or {}).get(sheet_title)
-            headings, fields, column_mapping = _definition_content(
+            headings, fields, grids, column_mapping = _definition_content(
                 rows, sheet_title, sheet_index, warnings, override,
             )
-            if not fields and not headings:
+            if not fields and not headings and not grids:
                 warnings.append({
                     "code": f"EMPTY_WORKSHEET_SECTION_{sheet_index}",
                     "severity": "WARNING",
@@ -546,15 +637,26 @@ def _parse_workbook_streaming(path, column_mappings=None):
                 "instructions": f'Generated from worksheet "{sheet_title}".',
                 "worksheet_order": sheet_index,
                 "source": {"sheet": sheet_title, "sheet_index": sheet_index},
+                "row_visibility": {
+                    "policy": "visible-only",
+                    "visible_source_row_count": len(rows),
+                    "excluded_hidden_row_count": len(excluded_hidden_rows),
+                },
                 "column_mapping": column_mapping,
                 "headings": sorted(headings, key=lambda item: item["source_order"]),
                 "fields": sorted(fields, key=lambda item: item["source_order"]),
-                "grids": [],
+                "grids": sorted(grids, key=lambda item: item["source_order"]),
+                "counts": {
+                    "scalar_field_count": len(fields),
+                    "table_count": len(grids),
+                    "grid_input_count": sum(len(grid.get("fixed_rows", [])) * len(grid.get("columns", [])) for grid in grids),
+                },
             })
     return {
         "parser_version": PARSER_VERSION,
         "grouping": {
             "strategy": "worksheet-tabs",
+            "isolation": "worksheet-isolated",
             "visible_worksheet_count": len(sections),
             "engine": "streaming",
         },
@@ -567,11 +669,13 @@ def parse_workbook(path, column_mappings=None):
     if Path(path).stat().st_size >= STREAMING_THRESHOLD_BYTES:
         return _parse_workbook_streaming(path, column_mappings=column_mappings)
     try:
+        with zipfile.ZipFile(path) as archive:
+            has_external_links = any(name.startswith("xl/externalLinks/") for name in archive.namelist())
         workbook = load_workbook(path, read_only=False, data_only=False, keep_links=False)
     except Exception as exc:
         raise ValueError(f"The workbook could not be read: {exc}") from exc
 
-    if getattr(workbook, "_external_links", None):
+    if has_external_links or getattr(workbook, "_external_links", None):
         warnings.append({
             "code": "EXTERNAL_LINKS_REMOVED",
             "severity": "BLOCKING",
@@ -586,21 +690,26 @@ def parse_workbook(path, column_mappings=None):
     used_section_codes = set()
     for sheet_index, sheet in enumerate(visible_sheets, start=1):
         max_row, max_col = min(sheet.max_row, MAX_SOURCE_ROWS), min(sheet.max_column, MAX_SOURCE_COLUMNS)
-        rows = {}
+        all_rows = {}
         for row in range(1, max_row + 1):
             for column in range(1, max_col + 1):
                 cell = sheet.cell(row, column)
                 if cell.value not in (None, ""):
-                    rows.setdefault(row, {})[column] = {
+                    all_rows.setdefault(row, {})[column] = {
                         "value": cell.value,
                         "formula": str(cell.value)[1:] if isinstance(cell.value, str) and cell.value.startswith("=") else "",
                         "style": {},
                     }
+        hidden_rows = {
+            row for row in all_rows
+            if bool(sheet.row_dimensions[row].hidden)
+        }
+        rows = {row: values for row, values in all_rows.items() if row not in hidden_rows}
         override = (column_mappings or {}).get(sheet.title)
-        headings, fields, column_mapping = _definition_content(
+        headings, fields, grids, column_mapping = _definition_content(
             rows, sheet.title, sheet_index, warnings, override,
         )
-        if not fields and not headings:
+        if not fields and not headings and not grids:
             warnings.append({
                 "code": f"EMPTY_WORKSHEET_SECTION_{sheet_index}",
                 "severity": "WARNING",
@@ -614,16 +723,27 @@ def parse_workbook(path, column_mappings=None):
             "instructions": f'Generated from worksheet "{sheet.title}".',
             "worksheet_order": sheet_index,
             "source": {"sheet": sheet.title, "sheet_index": sheet_index},
+            "row_visibility": {
+                "policy": "visible-only",
+                "visible_source_row_count": len(rows),
+                "excluded_hidden_row_count": len(hidden_rows),
+            },
             "column_mapping": column_mapping,
             "headings": sorted(headings, key=lambda item: item["source_order"]),
             "fields": sorted(fields, key=lambda item: item["source_order"]),
-            "grids": [],
+            "grids": sorted(grids, key=lambda item: item["source_order"]),
+            "counts": {
+                "scalar_field_count": len(fields),
+                "table_count": len(grids),
+                "grid_input_count": sum(len(grid.get("fixed_rows", [])) * len(grid.get("columns", [])) for grid in grids),
+            },
         })
 
     return {
         "parser_version": PARSER_VERSION,
         "grouping": {
             "strategy": "worksheet-tabs",
+            "isolation": "worksheet-isolated",
             "visible_worksheet_count": len(visible_sheets),
         },
         "sections": sections,
@@ -649,6 +769,34 @@ def validate_schema(schema):
                 raise ValueError(
                     f"Section {code} requires explicit Indicator and Definition column mappings."
                 )
+            source_sheet = str((section.get("source") or {}).get("sheet") or "").strip()
+            if not source_sheet:
+                raise ValueError(f"Section {code} requires a source worksheet.")
+            for item_kind in ("headings", "fields", "grids"):
+                for item in section.get(item_kind, []):
+                    item_sheet = str((item.get("source") or {}).get("sheet") or "").strip()
+                    if item_sheet != source_sheet:
+                        item_code = (
+                            item.get("heading_code") or item.get("field_code")
+                            or item.get("grid_code") or "unknown"
+                        )
+                        raise ValueError(
+                            f"{item_kind[:-1].title()} {item_code} belongs to worksheet "
+                            f'"{item_sheet or "unknown"}", not section worksheet "{source_sheet}".'
+                        )
+            for grid in section.get("grids", []):
+                for column in grid.get("columns", []):
+                    column_sheet = str((column.get("source") or {}).get("sheet") or "").strip()
+                    if column_sheet != source_sheet:
+                        raise ValueError(
+                            f"Grid column {column.get('column_code') or 'unknown'} does not belong to section worksheet \"{source_sheet}\"."
+                        )
+                for fixed_row in grid.get("fixed_row_sources", []):
+                    row_sheet = str((fixed_row.get("source") or {}).get("sheet") or "").strip()
+                    if row_sheet != source_sheet:
+                        raise ValueError(
+                            f"Grid row {fixed_row.get('label') or 'unknown'} does not belong to section worksheet \"{source_sheet}\"."
+                        )
         heading_codes, field_codes, grid_codes = set(), set(), set()
         for heading in section.get("headings", []):
             heading["heading_code"] = _unique_code(
@@ -756,6 +904,8 @@ def create_template_from_import(workbook_import, user):
                 field_type=field_data.get("field_type", "text"), unit=str(field_data.get("unit", ""))[:50],
                 is_required=bool(field_data.get("is_required", False)), help_text=field_data.get("help_text", ""),
                 formula=field_data.get("formula", ""), sort_order=int(field_data.get("source_order", field_order)),
+                source_sheet=str((field_data.get("source") or {}).get("sheet") or "")[:255],
+                source_row=(field_data.get("source") or {}).get("row"),
             )
             SelectOption.objects.bulk_create([
                 SelectOption(field=field, value=str(option)[:100], label=str(option)[:255], sort_order=index)
@@ -766,16 +916,28 @@ def create_template_from_import(workbook_import, user):
                 section=section, grid_code=grid_data["grid_code"], title=str(grid_data.get("title") or grid_data["grid_code"])[:255],
                 row_mode=grid_data.get("row_mode", "REPEATABLE"), min_rows=max(0, int(grid_data.get("min_rows", 0))),
                 instructions=grid_data.get("instructions", ""), sort_order=grid_order,
+                source_sheet=str((grid_data.get("source") or {}).get("sheet") or "")[:255],
+                source_row=(grid_data.get("source") or {}).get("row"),
             )
             GridColumn.objects.bulk_create([
                 GridColumn(
                     grid=grid, column_code=normalize_code(column.get("column_code") or column.get("label"), fallback=f"COLUMN_{index}"),
                     label=str(column.get("label") or f"Column {index}")[:255], field_type=column.get("field_type", "text"),
                     unit=str(column.get("unit", ""))[:50], is_required=bool(column.get("is_required", False)), sort_order=index,
+                    source_sheet=str((column.get("source") or {}).get("sheet") or "")[:255],
+                    source_row=(column.get("source") or {}).get("row"),
                 ) for index, column in enumerate(grid_data.get("columns", []), start=1)
             ])
+            row_sources = {
+                str(item.get("label")): item.get("source") or {}
+                for item in grid_data.get("fixed_row_sources", [])
+            }
             GridRow.objects.bulk_create([
-                GridRow(grid=grid, row_label=str(label)[:255], sort_order=index)
+                GridRow(
+                    grid=grid, row_label=str(label)[:255], sort_order=index,
+                    source_sheet=str(row_sources.get(str(label), {}).get("sheet") or grid.source_sheet)[:255],
+                    source_rows=list(row_sources.get(str(label), {}).get("rows") or []),
+                )
                 for index, label in enumerate(grid_data.get("fixed_rows", []), start=1)
             ])
     workbook_import.resulting_template = form

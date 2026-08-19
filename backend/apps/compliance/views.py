@@ -1,4 +1,5 @@
 from django.utils import timezone
+from django.db.models import Prefetch
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from apps.users.permissions import IsNCAEditor, IsNCAUser
@@ -86,11 +87,16 @@ class ComplianceFlagListView(generics.ListAPIView):
     filterset_fields = ["status", "flag_type", "provider"]
 
     def get_queryset(self):
+        from apps.submissions.models import Submission
         return ComplianceFlag.objects.select_related(
             "provider",
             "expected_submission__form_template",
             "expected_submission__period",
-        )
+        ).prefetch_related(Prefetch(
+            "expected_submission__versions",
+            queryset=Submission.objects.order_by("-version"),
+            to_attr="compliance_versions",
+        ))
 
 
 class UpdateFlagStatusView(APIView):

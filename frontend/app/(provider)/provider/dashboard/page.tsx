@@ -49,7 +49,7 @@ export default function ProviderDashboardPage() {
     </div>
 
     {summary?.overdue ? <div className="rounded-xl border border-[#e31937]/30 bg-[#ffe8e8] px-5 py-4 text-sm text-[#9b1c1c]">
-      <strong>{summary.overdue} overdue return{summary.overdue === 1 ? "" : "s"}.</strong> Open the work item to see its current blocker and next action.
+      <strong>{summary.overdue} overdue return{summary.overdue === 1 ? "" : "s"}.</strong> Open the work item to see its current errors and next action.
     </div> : null}
 
     <div className={`grid grid-cols-2 gap-4 ${isApprover ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}>
@@ -69,7 +69,7 @@ export default function ProviderDashboardPage() {
       : <div className="divide-y divide-[#eceef0]">{rows.map((row) => <article key={row.id} className="grid gap-4 px-6 py-4 md:grid-cols-[1fr_auto] md:items-center">
         <div>
           <div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-[#191c1e]">{row.form_name}</h3><WorkflowBadge status={row.workflow_status} /><DueStateBadge state={row.due_state} /></div>
-          <p className="mt-1 text-xs text-[#737780]">{row.period_name} · Effective deadline {displayDate(row.effective_due_at)}</p>
+          <p className="mt-1 text-xs text-[#737780]">{row.period_name} · Effective deadline {displayDate(row.effective_due_at)}</p>{row.submission_reference&&<p className="mt-1 break-all font-mono text-[10px] text-[#004999]">{row.submission_reference}</p>}
           <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-[#43474f]">
             <span>{Number(row.completion_pct).toFixed(0)}% complete</span>
             <span>{row.open_correction_count} open correction{row.open_correction_count === 1 ? "" : "s"}</span>
@@ -87,7 +87,7 @@ export default function ProviderDashboardPage() {
       {awaitingDataEntry.isLoading ? <div className="space-y-3 p-6">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
       : !(awaitingDataEntry.data?.results.length) ? <div className="p-10 text-center text-sm text-[#737780]">No forms are currently awaiting Data Entry.</div>
       : <div className="divide-y divide-[#eceef0]">{awaitingDataEntry.data.results.map(row => <article key={row.id} className="grid gap-4 px-6 py-4 md:grid-cols-[1fr_auto] md:items-center">
-        <div><div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-[#191c1e]">{row.form_name}</h3><WorkflowBadge status={row.workflow_status} /><DueStateBadge state={row.due_state} /></div><p className="mt-1 text-xs text-[#737780]">{row.period_name} · {Number(row.completion_pct).toFixed(0)}% complete · Data Entry action required</p></div>
+        <div><div className="flex flex-wrap items-center gap-2"><h3 className="font-medium text-[#191c1e]">{row.form_name}</h3><WorkflowBadge status={row.workflow_status} /><DueStateBadge state={row.due_state} /></div><p className="mt-1 text-xs text-[#737780]">{row.period_name} · {Number(row.completion_pct).toFixed(0)}% complete · Data Entry action required</p>{row.submission_reference&&<p className="mt-1 break-all font-mono text-[10px] text-[#004999]">{row.submission_reference}</p>}</div>
         <Link href={`/provider/submissions/${row.id}`} className="rounded-lg border border-[#c3c6d0] px-4 py-2 text-center text-sm font-semibold text-[#43474f]">View progress</Link>
       </article>)}</div>}
     </section>}

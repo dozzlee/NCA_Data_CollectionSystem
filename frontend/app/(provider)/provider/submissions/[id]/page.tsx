@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
-import { useParams } from "next/navigation";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { SectionStepper } from "@/components/forms/SectionStepper";
@@ -22,7 +22,7 @@ import {
   useFormTemplate,
 } from "@/hooks/useFormEntry";
 import { api, ApiError } from "@/lib/api";
-import { Save, Send, ChevronRight, ChevronLeft, AlertTriangle } from "lucide-react";
+import { Save, Send, ChevronRight, ChevronLeft, AlertTriangle, FileSpreadsheet, RefreshCw } from "lucide-react";
 import type { ExpectedSubmission, FormSection, FieldStatus } from "@/lib/types";
 
 // ─── Local value state for one section ───────────────────────────────────────
@@ -34,7 +34,9 @@ type ProviderReviewData = {
   correction_items:Array<{id:number;stage:string;target_type:string;target_id:string;instruction:string;status:string}>;
   provider_edits:Array<{id:number;actor_name:string;section_code:string;item_count:number;created_at:string}>;
   permitted_actions:string[];
+  previous_month?: { period:{id?:number;name?:string;year:number;month:number;submission_id?:number}|null; values:Record<string,string|null> };
 };
+type MonthlyReport = { id?:number; status:string; filename?:string; file_size?:number; sha256?:string; error_message?:string; detail?:string; download_ready:boolean };
 
 function formatDate(value: string | null | undefined) {
   if (!value) return "Not yet";
@@ -44,6 +46,7 @@ function formatDate(value: string | null | undefined) {
 function AssignmentSummary({ expected }: { expected: ExpectedSubmission }) {
   const team = (expected.data_entry_team ?? []).map((member) => member.name).join(", ") || "No active Data Entry users";
   const items = [
+    ["Submission ID", expected.submission_reference || "Pending"],
     ["Organisation", expected.provider_name],
     ["Reporting period", expected.period_name],
     ["Data Entry ownership", expected.ownership_label || "Shared Data Entry queue"],
@@ -104,6 +107,8 @@ function SectionContent({
   submissionRevision,
   validationIssues,
   correctionItems,
+  registerSaveController,
+  previousValues,
 }: {
   section: FormSection;
   submissionId: number;
@@ -112,6 +117,8 @@ function SectionContent({
   submissionRevision: number;
   validationIssues: Array<{target_type:string;target_id:string;message:string}>;
   correctionItems: Array<{target_type:string;target_id:string;instruction:string;status:string}>;
+  registerSaveController: (controller: { flush:()=>Promise<boolean>; hasUnsaved:()=>boolean } | null) => void;
+  previousValues: Record<string, string | null>;
 }) {
   const serverValues = useSectionValues(submissionId, section.section_code);
   const saveMutation = useSaveSectionValues(submissionId);
@@ -119,21 +126,36 @@ function SectionContent({
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<"saved" | "error" | null>(null);
   const [saveError, setSaveError] = useState("");
+  const [uploadError, setUploadError] = useState("");
   const [conflict, setConflict] = useState<{current_revision:number;last_edited_by_name?:string;last_edited_at?:string} | null>(null);
   const autosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dirtyRef = useRef(false);
+  const savingRef = useRef(false);
+  const fieldValuesRef = useRef<FieldValues>({});
+  const gridValuesRef = useRef<Record<number, GridCellValue[]>>({});
+  const revisionRef = useRef(submissionRevision);
+  const localChangeVersion = useRef(0);
+  const inFlightSave = useRef<Promise<boolean> | null>(null);
+  const saveRunnerRef = useRef<() => Promise<boolean>>(async () => false);
 
-  const [fieldValues, setFieldValues] = useSectionFieldState(section.fields, serverValues.data ?? [], !dirty);
+  const [fieldValues, setFieldValues] = useSectionFieldState(section.fields, serverValues.data, !dirty && !saving);
   const [gridValues, setGridValues] = useState<Record<number, GridCellValue[]>>({});
   const [excelUploads, setExcelUploads] = useState<any[]>([]);
   const [kmzUploads, setKmzUploads] = useState<any[]>([]);
   const queryClient = useQueryClient();
+
+  useEffect(() => { fieldValuesRef.current = fieldValues; }, [fieldValues]);
+  useEffect(() => { gridValuesRef.current = gridValues; }, [gridValues]);
+  useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+  useEffect(() => { savingRef.current = saving; }, [saving]);
+  useEffect(() => { if (!dirtyRef.current && !savingRef.current) revisionRef.current = submissionRevision; }, [submissionRevision]);
 
   useEffect(() => {
     const fetchExcelUploads = async () => {
       try {
         setExcelUploads(await api.get<any[]>(`/submissions/${submissionId}/excel-backups/`));
       } catch (err) {
-        console.error("Failed to fetch Excel uploads:", err);
+        setUploadError(err instanceof ApiError ? err.message : "Excel backup files could not be loaded.");
       }
     };
     if (submissionId) fetchExcelUploads();
@@ -151,39 +173,60 @@ function SectionContent({
         explanation: value.explanation ?? "",
       });
     }
-    setGridValues(grouped);
+    if (!dirtyRef.current && !savingRef.current) setGridValues(grouped);
   }, [serverValues.data]);
 
   useEffect(() => {
     if (!kmzRequired) return;
     api.get<any[]>(`/submissions/${submissionId}/kmz-uploads/`)
       .then(setKmzUploads)
-      .catch((err) => console.error("Failed to fetch KMZ uploads:", err));
+      .catch((err) => setUploadError(err instanceof ApiError ? err.message : "KMZ files could not be loaded."));
   }, [kmzRequired, submissionId]);
 
   function handleFieldChange(fieldId: number, value: string, status: FieldStatus | "", explanation: string) {
     setFieldValues((prev) => ({ ...prev, [fieldId]: { value, status, explanation } }));
+    localChangeVersion.current += 1;
+    dirtyRef.current = true;
     setDirty(true);
   }
 
-  async function handleSave() {
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    if (!isEditable || conflict) return !dirtyRef.current;
+    if (inFlightSave.current) {
+      const succeeded = await inFlightSave.current;
+      if (!succeeded) return false;
+      return dirtyRef.current ? saveRunnerRef.current() : true;
+    }
+    if (!dirtyRef.current) return true;
+    if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
+    const savedChangeVersion = localChangeVersion.current;
+    const savedFields = fieldValuesRef.current;
+    const savedGrids = gridValuesRef.current;
+    const clientSaveId = crypto.randomUUID();
     setSaving(true);
+    savingRef.current = true;
     setSaveMsg(null);
     setSaveError("");
-    try {
-      const fieldPayload = Object.entries(fieldValues).filter(([, v]) => Boolean(v.status || v.value || v.explanation)).map(([fid, v]) => ({
+    const operation = (async () => {
+      try {
+      const fieldPayload = Object.entries(savedFields).filter(([, v]) => Boolean(v.status || v.value || v.explanation)).map(([fid, v]) => ({
         field: Number(fid),
         value: v.value,
         value_status: v.status || (v.value ? "PROVIDED" : "MISSING"),
         explanation: v.explanation,
       }));
-      const gridPayload = Object.entries(gridValues).flatMap(([gid, rows]) =>
+      const gridPayload = Object.entries(savedGrids).flatMap(([gid, rows]) =>
         rows.map((r) => ({ grid: Number(gid), grid_row_id: r.grid_row_id, grid_column: r.grid_column_id, value: r.value, value_status: r.value_status, explanation: r.explanation ?? "" }))
       );
-      await saveMutation.mutateAsync({ sectionCode: section.section_code, values: [...fieldPayload, ...gridPayload], revision: submissionRevision });
-      setDirty(false);
-      setSaveMsg("saved");
-      setTimeout(() => setSaveMsg(null), 2000);
+      const response = await saveMutation.mutateAsync({ sectionCode: section.section_code, values: [...fieldPayload, ...gridPayload], revision: revisionRef.current, clientSaveId, changeVersion:savedChangeVersion });
+      revisionRef.current = response.resulting_revision;
+      if (localChangeVersion.current === savedChangeVersion) {
+        dirtyRef.current = false;
+        setDirty(false);
+        setSaveMsg("saved");
+        setTimeout(() => setSaveMsg(null), 2000);
+      }
+      return true;
     } catch (error) {
       setSaveMsg("error");
       if (error instanceof ApiError) {
@@ -191,12 +234,23 @@ function SectionContent({
         const data = error.data as {code?:string;current_revision?:number;last_edited_by_name?:string;last_edited_at?:string} | undefined;
         if (data?.code === "STALE_REVISION" && data.current_revision !== undefined) setConflict({ current_revision:data.current_revision, last_edited_by_name:data.last_edited_by_name, last_edited_at:data.last_edited_at });
       } else setSaveError("Save failed. Your local values are still on this page.");
+      return false;
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
-  }
+    })();
+    inFlightSave.current = operation;
+    const succeeded = await operation;
+    inFlightSave.current = null;
+    if (succeeded && dirtyRef.current && localChangeVersion.current > savedChangeVersion) return saveRunnerRef.current();
+    return succeeded && !dirtyRef.current;
+  }, [conflict, isEditable, saveMutation, section.section_code]);
+
+  useEffect(() => { saveRunnerRef.current = handleSave; }, [handleSave]);
 
   async function handleKMZUpload(file: File, requirementId: number) {
+    setUploadError("");
     const form = new FormData();
     form.append("file", file);
     form.append("requirement_id", String(requirementId));
@@ -207,15 +261,19 @@ function SectionContent({
 
   useEffect(() => () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); }, []);
   useEffect(() => {
-    if (!dirty || saving || conflict || !isEditable) return;
+    if (!dirty || conflict || !isEditable) return;
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     autosaveTimer.current = setTimeout(() => { void handleSave(); }, 1200);
     return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
-    // handleSave intentionally runs against the latest field/grid render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fieldValues, gridValues, dirty, saving, conflict, isEditable]);
+  }, [fieldValues, gridValues, dirty, conflict, isEditable, handleSave]);
+
+  useEffect(() => {
+    registerSaveController({ flush:handleSave, hasUnsaved:()=>dirtyRef.current || savingRef.current });
+    return () => registerSaveController(null);
+  }, [handleSave, registerSaveController]);
 
   async function handleExcelUpload(file: File) {
+    setUploadError("");
     const form = new FormData();
     form.append("file", file);
     await api.upload(`/submissions/${submissionId}/excel-backups/upload/`, form);
@@ -308,6 +366,7 @@ function SectionContent({
                   issues={validationIssues.filter((issue) => issue.target_type === "FIELD" && String(issue.target_id) === String(field.id)).map((issue) => issue.message)}
                   correctionInstructions={correctionItems.filter((item) => item.status === "OPEN" && item.target_type === "FIELD" && String(item.target_id) === String(field.id)).map((item) => item.instruction)}
                   onBlur={() => { if (dirty && !saving && !conflict) void handleSave(); }}
+                  previousValue={previousValues[`field:${section.section_code}:${field.field_code}`.toLowerCase()]}
                 />
               </div>
             );
@@ -323,12 +382,16 @@ function SectionContent({
             values={gridValues[grid.id] ?? []}
             onChange={(vals) => {
               setGridValues((prev) => ({ ...prev, [grid.id]: vals }));
+              localChangeVersion.current += 1;
+              dirtyRef.current = true;
               setDirty(true);
             }}
             disabled={!isEditable}
             readOnlyPresentation={!isEditable}
             issues={validationIssues.filter((issue) => issue.target_type === "GRID_CELL").map((issue) => ({ targetId:String(issue.target_id), message:issue.message }))}
             correctionInstructions={correctionItems.filter((item) => item.status === "OPEN" && item.target_type === "GRID_CELL").map((item) => ({ targetId:String(item.target_id), instruction:item.instruction }))}
+            sectionCode={section.section_code}
+            previousValues={previousValues}
           />
         </div>
       ))}
@@ -344,6 +407,12 @@ function SectionContent({
         />
       </div>
 
+      {correctionItems.filter((item) => item.status === "OPEN" && item.target_type === "SECTION" && item.target_id === section.section_code).map((item, index) => (
+        <div key={`${item.target_id}-${index}`} className="rounded-[9px] border border-[#ffd100] bg-[#fff8d8] px-4 py-3 text-[12px] text-[#6c5100]">
+          <span className="font-semibold">Section correction:</span> {item.instruction}
+        </div>
+      ))}
+
       {/* Auto-save prompt when dirty */}
       {dirty && isEditable && (
         <div className="flex items-center gap-2 rounded-[8px] border border-[#ffd100] bg-[#fff3bf]/60 px-3 py-2 text-[12px] text-[#7a5c00]">
@@ -351,7 +420,8 @@ function SectionContent({
           Changes are waiting to autosave. You can also use Save progress.
         </div>
       )}
-      {saveError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{saveError}</div>}
+      {saveError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{saveError}<button type="button" onClick={() => void handleSave()} className="ml-3 font-semibold underline">Retry</button></div>}
+      {uploadError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{uploadError}<button type="button" onClick={() => window.location.reload()} className="ml-3 font-semibold underline">Retry loading</button></div>}
       {conflict && <div role="alert" className="rounded-lg border border-[#ffd100] bg-[#fff3bf] p-3 text-xs text-[#7a5c00]">
         A newer revision was saved by {conflict.last_edited_by_name || "another provider user"}{conflict.last_edited_at ? ` at ${new Date(conflict.last_edited_at).toLocaleString()}` : ""}. Your unsaved values remain visible. Reload the latest revision before manually reapplying them.
         <button onClick={() => window.location.reload()} className="ml-3 font-semibold underline">Reload latest</button>
@@ -364,7 +434,22 @@ function SectionContent({
 
 export default function FormEntryPage() {
   const params = useParams();
+  const router = useRouter();
+  const workflowQueryClient = useQueryClient();
   const expectedId = Number(params.id);
+  const saveControllerRef = useRef<{flush:()=>Promise<boolean>;hasUnsaved:()=>boolean} | null>(null);
+  const registerSaveController = useCallback((controller:{flush:()=>Promise<boolean>;hasUnsaved:()=>boolean} | null) => {
+    saveControllerRef.current = controller;
+  }, []);
+
+  useEffect(() => {
+    const warnBeforeUnload = (event:BeforeUnloadEvent) => {
+      if (!saveControllerRef.current?.hasUnsaved()) return;
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, []);
 
   // Current user — to gate actions by role
   const { data: currentUser } = useQuery<import("@/lib/types").User>({
@@ -397,6 +482,12 @@ export default function FormEntryPage() {
     queryKey: ["provider-review-data", latestSubmissionId],
     queryFn: () => api(`/submissions/${latestSubmissionId}/provider-review-data/`),
     enabled: Boolean(latestSubmissionId),
+  });
+  const monthlyReportQ = useQuery<MonthlyReport>({
+    queryKey: ["monthly-report", latestSubmissionId],
+    queryFn: () => api(`/submissions/${latestSubmissionId}/monthly-report/`),
+    enabled: Boolean(latestSubmissionId),
+    refetchInterval: (query) => query.state.data?.status === "PREPARING" ? 2500 : false,
   });
 
   const formQ = useFormTemplate(expected?.form_template ?? 0);
@@ -441,12 +532,22 @@ export default function FormEntryPage() {
   const correctionOptions = useMemo(() => sections.flatMap((section) => [
     { key:`SECTION:${section.section_code}`, label:`Section: ${section.title}` },
     ...section.fields.map((field) => ({ key:`FIELD:${field.id}`, label:`${section.title} · ${field.label}` })),
-    ...section.grids.map((grid) => ({ key:`SECTION:${section.section_code}`, label:`${section.title} · ${grid.title} (whole grid)` })),
+    ...section.grids.flatMap((grid) => [
+      { key:`SECTION:${section.section_code}`, label:`${section.title} · ${grid.title} (whole grid)` },
+      ...(grid.fixed_rows ?? []).flatMap((row) => grid.columns.map((column) => ({
+        key:`GRID_CELL:${grid.id}:${row.id}:${column.id}`,
+        label:`${section.title} · ${grid.title} · ${row.row_label} · ${column.label}`,
+      }))),
+    ]),
   ]).filter((option, index, all) => all.findIndex((candidate) => candidate.key === option.key) === index), [sections]);
 
   async function handleSubmitForApproval() {
     setSubmitError(null);
     try {
+      if (saveControllerRef.current && !(await saveControllerRef.current.flush())) {
+        setSubmitError("Your latest changes could not be saved. Retry the save before submitting.");
+        return;
+      }
       await submitMutation.mutateAsync();
       await Promise.all([
         expectedQ.refetch(), providerReviewQ.refetch(), completionQ.refetch(), periodFormsQ.refetch(),
@@ -455,6 +556,30 @@ export default function FormEntryPage() {
       setSubmitError(error instanceof ApiError ? error.message : "Submission failed. Please try again.");
       completionQ.refetch();
     }
+  }
+
+  async function navigateToSection(sectionCode:string | undefined) {
+    if (!sectionCode || sectionCode === activeSection) return;
+    if (saveControllerRef.current && !(await saveControllerRef.current.flush())) return;
+    setActiveSection(sectionCode);
+  }
+
+  async function leaveForm(href:string) {
+    if (saveControllerRef.current && !(await saveControllerRef.current.flush())) return;
+    router.push(href);
+  }
+
+  async function refreshProviderWorkflow() {
+    await Promise.all([
+      expectedQ.refetch(), providerReviewQ.refetch(), completionQ.refetch(),
+      periodFormsQ.refetch(), timelineQ.refetch(), submissionQ.refetch(),
+      workflowQueryClient.invalidateQueries({queryKey:["provider-workspace"]}),
+      workflowQueryClient.invalidateQueries({queryKey:["provider-workspace-summary"]}),
+      workflowQueryClient.invalidateQueries({queryKey:["provider-approval-queue"]}),
+      workflowQueryClient.invalidateQueries({queryKey:["submission-notifications"]}),
+      workflowQueryClient.invalidateQueries({queryKey:["submission-notification-summary"]}),
+      monthlyReportQ.refetch(),
+    ]);
   }
 
   if (expectedQ.isLoading || formQ.isLoading) {
@@ -515,10 +640,10 @@ export default function FormEntryPage() {
   return (
     <div className="space-y-4">
       {/* Back navigation */}
-      <Link href="/provider/dashboard"
+      <button type="button" onClick={() => void leaveForm("/provider/dashboard")}
         className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#737780] hover:text-[#0066cc] transition-colors">
         <ChevronLeft size={14} /> Back to My Forms
-      </Link>
+      </button>
 
       {/* Page header */}
       <div className="flex items-start justify-between gap-4">
@@ -540,10 +665,10 @@ export default function FormEntryPage() {
               onClick={handleSubmitForApproval}
               disabled={submitMutation.isPending || !completion?.transition_ready}
               className="flex items-center gap-2 rounded-[8px] bg-[#1f7a4d] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#185e3b] disabled:opacity-50 transition-colors"
-              title="Blank indicators are allowed; only genuine blockers prevent submission"
+              title="Blank indicators are allowed; only genuine errors prevent submission"
             >
               <Send size={13} />
-              {submitMutation.isPending ? "Submitting…" : "Submit to Approver"}
+              {submitMutation.isPending ? "Submitting…" : expected.workflow_status === "PROVIDER_CHANGES_REQUESTED" ? "Resubmit to Approver" : "Submit to Approver"}
             </button>
           )}
           {/* APPROVER: can return to data entry or officially submit to NCA */}
@@ -608,9 +733,9 @@ export default function FormEntryPage() {
               onClick={async () => {
                 await api.post(`/submissions/${submission?.id}/provider-review/request-correction/`, {
                   reason: correctionReason,
-                  targets: correctionTargets.map((target) => { const [type, id] = target.split(":", 2); return { type, id, instruction: correctionReason }; }),
+                  targets: correctionTargets.map((target) => { const separator = target.indexOf(":"); return { type:target.slice(0, separator), id:target.slice(separator + 1), instruction: correctionReason }; }),
                 });
-                setCorrectionOpen(false); setCorrectionReason(""); await expectedQ.refetch();
+                setCorrectionOpen(false); setCorrectionReason(""); await refreshProviderWorkflow();
               }}
               className="rounded-[8px] bg-[#002d5b] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">Send correction request</button>
           </div>
@@ -619,15 +744,29 @@ export default function FormEntryPage() {
 
       {approvalOpen && <div className="rounded-xl border border-[#0066cc] bg-[#f7fbff] p-5">
         <h2 className="font-semibold">Final provider approval</h2><p className="mt-1 text-xs text-[#43474f]">A fresh readiness check is performed before NCA receives the official version.</p>
-        <div className="mt-4 grid gap-3 md:grid-cols-2"><div className="rounded-lg bg-white p-3 text-xs"><strong>Readiness</strong><p className="mt-1">{completion?.blocking_issues.length ?? 0} blockers · {completion?.missing_indicator_count ?? 0} blank indicators · {completion?.open_correction_item_count ?? 0} open corrections</p></div><div className="rounded-lg bg-white p-3 text-xs"><strong>Approver edits</strong><p className="mt-1">{providerReviewQ.data?.provider_edits.length ?? 0} edit batches are recorded for this version.</p></div></div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2"><div className="rounded-lg bg-white p-3 text-xs"><strong>Readiness</strong><p className="mt-1">{completion?.blocking_issues.length ?? 0} errors · {completion?.missing_indicator_count ?? 0} blank indicators · {completion?.open_correction_item_count ?? 0} open corrections</p></div><div className="rounded-lg bg-white p-3 text-xs"><strong>Approver edits</strong><p className="mt-1">{providerReviewQ.data?.provider_edits.length ?? 0} edit batches are recorded for this version.</p></div></div>
         <label className="mt-4 block text-xs font-medium">Approval note (optional)<textarea value={approvalNote} onChange={(e) => setApprovalNote(e.target.value)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2" rows={2} /></label>
         {(providerReviewQ.data?.provider_edits.length ?? 0) > 0 && <label className="mt-3 block text-xs font-medium">Required change summary<textarea value={changeSummary} onChange={(e) => setChangeSummary(e.target.value)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2" rows={3} placeholder="Summarize what you changed and why." /></label>}
         <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={attestation} onChange={(e) => setAttestation(e.target.checked)} className="mt-1" /><span>I attest that I reviewed this return and that the information supplied is accurate to the best of my knowledge. Any blank indicators will remain visible to NCA.</span></label>
         {actionError && <p role="alert" className="mt-3 text-xs text-red-700">{actionError}</p>}
-        <div className="mt-4 flex justify-end gap-2"><button onClick={() => setApprovalOpen(false)} className="rounded-lg border px-4 py-2 text-xs">Cancel</button><button disabled={!attestation || ((providerReviewQ.data?.provider_edits.length ?? 0) > 0 && !changeSummary.trim()) || !completion?.transition_ready} onClick={async () => { try { setActionError(""); const response = await api.post<{receipt_reference:string}>(`/submissions/${submission?.id}/provider-review/approve/`, { attestation, approval_note:approvalNote, change_summary:changeSummary }); setReceiptReference(response.receipt_reference); setApprovalOpen(false); await Promise.all([expectedQ.refetch(), providerReviewQ.refetch(), completionQ.refetch(), periodFormsQ.refetch(), timelineQ.refetch(), submissionQ.refetch()]); } catch (error) { setActionError(error instanceof ApiError ? error.message : "Official submission failed."); } }} className="rounded-lg bg-[#001836] px-5 py-2 text-xs font-semibold text-white disabled:opacity-50">Submit officially to NCA</button></div>
+        <div className="mt-4 flex justify-end gap-2"><button onClick={() => setApprovalOpen(false)} className="rounded-lg border px-4 py-2 text-xs">Cancel</button><button disabled={!attestation || ((providerReviewQ.data?.provider_edits.length ?? 0) > 0 && !changeSummary.trim()) || !completion?.transition_ready} onClick={async () => { try { setActionError(""); const response = await api.post<{receipt_reference:string}>(`/submissions/${submission?.id}/provider-review/approve/`, { attestation, approval_note:approvalNote, change_summary:changeSummary }); setReceiptReference(response.receipt_reference); setApprovalOpen(false); await refreshProviderWorkflow(); } catch (error) { setActionError(error instanceof ApiError ? error.message : "Official submission failed."); } }} className="rounded-lg bg-[#001836] px-5 py-2 text-xs font-semibold text-white disabled:opacity-50">Submit officially to NCA</button></div>
       </div>}
 
       {(receiptReference || submission?.receipt_reference) && <div className="flex items-center justify-between rounded-xl border border-green-200 bg-green-50 p-4 text-sm"><span>Official receipt: <strong>{receiptReference || submission?.receipt_reference}</strong></span><button onClick={() => import("@/lib/api").then(({downloadAuthenticated}) => downloadAuthenticated(`/submissions/${submission?.id}/receipt/`, {}, `submission-receipt-${submission?.id}.pdf`))} className="font-semibold text-[#0066cc]">Download receipt</button></div>}
+
+      {submission && <section className="rounded-xl border border-[#dce3e9] bg-white p-4">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <div className="flex items-start gap-3">
+            <span className="rounded-lg bg-[#e8f1fb] p-2 text-[#004999]"><FileSpreadsheet size={18} aria-hidden="true" /></span>
+            <div><h2 className="text-[13px] font-semibold text-[#191c1e]">NCA monthly Excel report</h2>
+              <p className="mt-0.5 text-[11px] text-[#737780]">{monthlyReportQ.data?.status === "READY" ? "Generated from the approved provider-specific NCA workbook baseline." : monthlyReportQ.data?.detail || (monthlyReportQ.data?.status === "PREPARING" ? "The submitted report is being prepared." : monthlyReportQ.data?.status === "FAILED" ? monthlyReportQ.data.error_message : "Available after the Provider Approver officially submits to NCA.")}</p>
+            </div>
+          </div>
+          {monthlyReportQ.data?.download_ready ? <button type="button" onClick={() => import("@/lib/api").then(({downloadAuthenticated}) => downloadAuthenticated(`/submissions/${submission.id}/monthly-report/download/`, {}, monthlyReportQ.data?.filename || `monthly-report-${submission.id}.xlsx`))} className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#1f7a4d] px-4 py-2 text-[12px] font-semibold text-white"><FileSpreadsheet size={14} /> Download Excel Report</button>
+          : monthlyReportQ.data?.status === "PREPARING" ? <span className="inline-flex items-center gap-2 text-[11px] font-medium text-[#004999]"><RefreshCw size={13} className="animate-spin" /> Preparing</span>
+          : <span className="rounded-full bg-[#f2f4f6] px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#737780]">{monthlyReportQ.data?.status?.replaceAll("_", " ") || "Unavailable"}</span>}
+        </div>
+      </section>}
 
       {timelineQ.data && timelineQ.data.length > 0 && (
         <section className="rounded-[12px] border border-[#e6e8ea] bg-white p-4">
@@ -651,7 +790,7 @@ export default function FormEntryPage() {
 
       {isEditable && completion && !completion.transition_ready && (
         <div className="rounded-[8px] border border-[#e6a5ae] bg-[#fff1f2] px-4 py-3 text-[12px] text-[#8f1d2c]">
-          Resolve {completion.blocking_issues.length} blocking issue{completion.blocking_issues.length === 1 ? "" : "s"} before submitting.
+          Resolve {completion.blocking_issues.length} error{completion.blocking_issues.length === 1 ? "" : "s"} before submitting.
           {completion.blocking_issues.slice(0, 3).map((issue) => (
             <span key={`${issue.type}-${issue.id}`} className="ml-2">• {issue.label}</span>
           ))}
@@ -674,9 +813,9 @@ export default function FormEntryPage() {
             {periodForms.map((item) => {
               const active = item.id === expected.id;
               return (
-                <Link
+                <button type="button"
                   key={item.id}
-                  href={`/provider/submissions/${item.id}`}
+                  onClick={() => void leaveForm(`/provider/submissions/${item.id}`)}
                   className={`rounded-[8px] border px-3 py-2 text-[12px] transition-colors ${
                     active
                       ? "border-[#0066cc] bg-[#e8f1fb] text-[#004999]"
@@ -685,7 +824,7 @@ export default function FormEntryPage() {
                 >
                   <span className="font-semibold">{item.form_code}</span>
                   <span className="ml-2 text-[11px] opacity-75">{item.workflow_status.split("_").join(" ")}</span>
-                </Link>
+                </button>
               );
             })}
           </div>
@@ -704,13 +843,13 @@ export default function FormEntryPage() {
             complete: false,
           }))}
           activeSection={activeSection}
-          onSelect={setActiveSection}
+                  onSelect={(sectionCode) => void navigateToSection(sectionCode)}
           completionPct={completion?.completion_pct ?? 0}
         /></div>
 
         <label className="block lg:hidden">
           <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.05em] text-[#737780]">Form section</span>
-          <select value={activeSection} onChange={(event) => setActiveSection(event.target.value)} className="w-full rounded-[9px] border border-[#c3c6d0] bg-white px-3 py-2.5 text-[13px] text-[#191c1e]">
+          <select value={activeSection} onChange={(event) => void navigateToSection(event.target.value)} className="w-full rounded-[9px] border border-[#c3c6d0] bg-white px-3 py-2.5 text-[13px] text-[#191c1e]">
             {sections.map((section, index) => <option key={section.section_code} value={section.section_code}>{index + 1}. {section.title}</option>)}
           </select>
         </label>
@@ -727,13 +866,15 @@ export default function FormEntryPage() {
               submissionRevision={submission.revision}
               validationIssues={completion?.validation_issues ?? []}
               correctionItems={providerReviewQ.data?.correction_items ?? []}
+              registerSaveController={registerSaveController}
+              previousValues={providerReviewQ.data?.previous_month?.values ?? {}}
             />
           )}
 
           {/* Prev / Next navigation */}
           <div className="flex items-center justify-between mt-8 pt-5 border-t border-[#eceef0]">
             <button
-              onClick={() => setActiveSection(sections[currentSectionIndex - 1]?.section_code)}
+              onClick={() => void navigateToSection(sections[currentSectionIndex - 1]?.section_code)}
               disabled={currentSectionIndex === 0}
               className="flex items-center gap-1.5 rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[12px] font-medium text-[#43474f] hover:bg-[#f2f4f6] disabled:opacity-40 transition-colors"
             >
@@ -744,7 +885,7 @@ export default function FormEntryPage() {
               {currentSectionIndex + 1} of {sections.length}
             </p>
             <button
-              onClick={() => setActiveSection(sections[currentSectionIndex + 1]?.section_code)}
+              onClick={() => void navigateToSection(sections[currentSectionIndex + 1]?.section_code)}
               disabled={currentSectionIndex >= sections.length - 1}
               className="flex items-center gap-1.5 rounded-[8px] bg-[#002d5b] px-3 py-2 text-[12px] font-medium text-white hover:bg-[#001836] disabled:opacity-40 transition-colors"
             >

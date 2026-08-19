@@ -29,6 +29,7 @@ backend/private_exports/
 
 # Node / Next.js
 node_modules/
+.dependency-backups/
 .next/
 out/
 *.tsbuildinfo
