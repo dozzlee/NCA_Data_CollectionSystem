@@ -451,7 +451,7 @@ class CustomFormPublicationTests(APITestCase):
         self.assertEqual(created.status_code, 201, created.data)
         form = FormTemplate.objects.get(pk=created.data["id"])
         self.assertEqual((form.name, form.sector, form.provider_category, form.frequency), (
-            "Custom Return", "TELECOM", "MNO", "MONTHLY",
+            "Custom Return", "TELECOM", "MNO", "ANNUAL",
         ))
         self.assertEqual(form.mapping_basis, "CUSTOM")
         self._make_publishable(form)

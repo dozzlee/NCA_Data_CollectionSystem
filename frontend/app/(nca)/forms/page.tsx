@@ -136,11 +136,12 @@ export default function FormsPage() {
               </select>
             </div>
             <div className="sm:col-span-2 lg:col-span-3 rounded-[10px] border border-dashed border-[#9aa5b1] bg-[#f7f9fb] p-4">
-              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Generate from workbook (optional)</label>
-              <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Generate from source file (optional)</label>
+              <input type="file" accept=".xlsx,.pdf,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 onChange={e => setWorkbook(e.target.files?.[0] ?? null)}
                 className="mt-2 block w-full text-[13px] text-[#43474f] file:mr-3 file:rounded-[8px] file:border-0 file:bg-[#e8f1fb] file:px-3 file:py-2 file:font-semibold file:text-[#004999]" />
-              <p className="mt-2 text-[11px] text-[#737780]">Up to 20 MB. Only the workbook structure is imported; cell values never become provider answers.</p>
+              <p className="mt-2 text-[11px] text-[#737780]">Up to 20 MB. Excel structure, or PDF/Word text, is imported for review; source values never become provider answers.</p>
+              {selectedCode?.code === "MNO-MONTHLY" && <p className="mt-2 text-[11px] font-medium text-[#8a4b08]">MNO-MONTHLY uses its dedicated workbook-driven creation workflow. Upload the approved MNO workbook to continue.</p>}
               {workbook && <p className="mt-2 text-xs font-medium text-[#191c1e]">Selected: {workbook.name} · {(workbook.size / 1024 / 1024).toFixed(1)} MB</p>}
             </div>
           </div>
@@ -150,7 +151,7 @@ export default function FormsPage() {
               <p className="mt-1 text-xs">Each visible worksheet is being converted into a form section. Large workbooks with many formatted tabs can take up to two minutes; keep this page open.</p>
             </div>
           )}
-          <button type="submit" disabled={createMutation.isPending || !selectedCode || !form.version}
+          <button type="submit" disabled={createMutation.isPending || !selectedCode || !form.version || !form.frequency || (selectedCode?.code === "MNO-MONTHLY" && !workbook)}
             className="rounded-[8px] bg-[#001836] px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-[#002d5b] disabled:opacity-50">
             {createMutation.isPending ? (workbook ? "Analyzing workbook…" : "Creating…") : workbook ? "Upload & Preview" : "Create Template"}
           </button>
@@ -176,7 +177,7 @@ export default function FormsPage() {
         <table className="w-full text-left">
           <thead className="border-b border-[#eceef0] bg-[#f7f9fb]">
             <tr>
-              {["Code","Name","Sector","Provider Type","Frequency","Version","Status","Sections",""].map(h => (
+              {["Code","Name","Sector","Provider Type","Frequency","Version","Status",""].map(h => (
                 <th key={h} className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-[#43474f]">{h}</th>
               ))}
             </tr>
@@ -184,7 +185,7 @@ export default function FormsPage() {
           <tbody className="divide-y divide-[#eceef0]">
             {isLoading
               ? Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 9 }).map((_, j) => (
+                  <tr key={i}>{Array.from({ length: 8 }).map((_, j) => (
                     <td key={j} className="px-5 py-3.5"><Skeleton className="h-3.5 w-full" /></td>
                   ))}</tr>
                 ))
@@ -201,7 +202,6 @@ export default function FormsPage() {
                       {t.status}
                     </span>
                   </td>
-                  <td className="px-5 py-3.5 text-[13px] text-[#737780]">—</td>
                   <td className="px-5 py-3.5">
                     <div className="flex items-center gap-2">
                       <Link href={`/forms/${t.id}`} className="rounded-lg border border-[#c3c6d0] px-3 py-1.5 text-[12px] font-semibold text-[#43474f] hover:bg-[#f2f4f6]">Open</Link>

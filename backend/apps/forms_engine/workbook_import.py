@@ -1,6 +1,9 @@
 import re
 import posixpath
 import os
+import re
+import zipfile
+import xml.etree.ElementTree as ET
 import zipfile
 from datetime import date, datetime
 from pathlib import Path
@@ -18,6 +21,30 @@ from .models import (
 )
 from apps.uploads.scanner import scan_path
 PARSER_VERSION = "xlsx-worksheet-v6-visible-rows-matrix-grids"
+
+def parse_document_source(path):
+    """Create a schema-only draft from a PDF or Word source document.
+
+    These formats do not carry a reliable spreadsheet schema, so text lines are
+    presented as optional indicators for NCA review rather than being treated as
+    provider answers.
+    """
+    extension = os.path.splitext(path)[1].lower()
+    text = ""
+    if extension == ".docx":
+        with zipfile.ZipFile(path) as archive:
+            root = ET.fromstring(archive.read("word/document.xml"))
+        text = "\n".join(node.text or "" for node in root.iter() if node.tag.endswith("}t"))
+    else:
+        raw = open(path, "rb").read().decode("latin1", errors="ignore")
+        text = "\n".join(re.findall(r"\(([^()]*)\)", raw))
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+    lines = [line for line in lines if len(line) >= 3]
+    fields = []
+    for index, line in enumerate(dict.fromkeys(lines), start=1):
+        code = re.sub(r"[^A-Za-z0-9]+", "_", line).strip("_").lower()[:80] or f"indicator_{index}"
+        fields.append({"field_code": f"DOC_{index}_{code}", "label": line[:255], "field_type": "text", "is_required": False, "help_text": "Imported from source document; verify before publishing.", "source": {"sheet": "Document", "row": index}, "source_order": index})
+    return {"parser_version": "document-text-v1", "grouping": {"strategy": "document-text"}, "sections": [{"section_code": "DOCUMENT_CONTENT", "title": "Document content", "instructions": "Review and refine imported indicators before publishing.", "fields": fields, "grids": [], "headings": []}]}, ["PDF/Word sources were converted to optional text indicators; verify the generated structure before confirmation."]
 FIXED_ROW_HEADERS = {"region", "category", "country", "operator", "brand", "service", "item", "location"}
 STREAMING_THRESHOLD_BYTES = 5 * 1024 * 1024
 MAX_SOURCE_ROWS = 2000
@@ -835,10 +862,10 @@ def process_workbook_import_record(import_id):
             workbook_import.scan_engine = scan["engine"]
             workbook_import.scan_details = scan["details"]
             if scan["status"] == "CLEAN":
-                schema, warnings = parse_workbook(
-                    full_path,
-                    column_mappings=(workbook_import.mapping_decisions or {}).get("column_mappings", {}),
-                )
+                if os.path.splitext(workbook_import.file_name)[1].lower() == ".xlsx":
+                    schema, warnings = parse_workbook(full_path, column_mappings=(workbook_import.mapping_decisions or {}).get("column_mappings", {}))
+                else:
+                    schema, warnings = parse_document_source(full_path)
                 workbook_import.detected_schema = schema
                 workbook_import.warnings = warnings
                 workbook_import.parser_version = PARSER_VERSION

@@ -160,6 +160,8 @@ class FormTemplateListSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         code = attrs.get("form_code", getattr(self.instance, "form_code", ""))
         version = attrs.get("version", getattr(self.instance, "version", ""))
+        if not self.instance and code == "MNO-MONTHLY":
+            raise serializers.ValidationError({"form_code": "MNO-MONTHLY is created only through its dedicated workbook import workflow."})
         catalog = FormCodeCatalog.objects.filter(code=code, is_active=True).first()
         if not catalog:
             raise serializers.ValidationError({"form_code": "Select an available governed form code."})

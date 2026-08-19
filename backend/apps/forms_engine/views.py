@@ -82,9 +82,9 @@ class FormWorkbookImportListCreateView(generics.ListCreateAPIView):
     def create(self, request, *args, **kwargs):
         uploaded = request.FILES.get("file")
         if not uploaded:
-            return Response({"detail": "Attach an .xlsx workbook."}, status=400)
-        if not uploaded.name.lower().endswith(".xlsx"):
-            return Response({"detail": "Only .xlsx workbooks are accepted."}, status=400)
+            return Response({"detail": "Attach an .xlsx, .pdf, or .docx source file."}, status=400)
+        if not uploaded.name.lower().endswith((".xlsx", ".pdf", ".docx")):
+            return Response({"detail": "Only .xlsx, .pdf, and .docx source files are accepted."}, status=400)
         if uploaded.size > 20 * 1024 * 1024:
             return Response({"detail": "The workbook exceeds the 20 MB limit."}, status=400)
         required = ["form_code", "version"]
@@ -103,7 +103,8 @@ class FormWorkbookImportListCreateView(generics.ListCreateAPIView):
             return Response({"detail": f"The next available version is {catalog.next_version}. Refresh and try again."}, status=409)
         storage_dir = os.path.join(settings.PRIVATE_UPLOAD_ROOT, "form-workbooks")
         os.makedirs(storage_dir, exist_ok=True)
-        storage_name = f"{uuid.uuid4().hex}.xlsx"
+        extension = os.path.splitext(uploaded.name)[1].lower()
+        storage_name = f"{uuid.uuid4().hex}{extension}"
         storage_path = os.path.join("form-workbooks", storage_name)
         full_path = os.path.join(settings.PRIVATE_UPLOAD_ROOT, storage_path)
         digest = hashlib.sha256()
