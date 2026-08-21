@@ -20,7 +20,7 @@ from .models import (
     GridColumn, GridRow, SelectOption, FormWorkbookImport,
 )
 from apps.uploads.scanner import scan_path
-PARSER_VERSION = "xlsx-worksheet-v6-visible-rows-matrix-grids"
+PARSER_VERSION = "xlsx-worksheet-v7-data-entry-tables"
 
 def parse_document_source(path):
     """Create a schema-only draft from a PDF or Word source document.
@@ -285,6 +285,8 @@ def _metadata_field_type(value):
         "coordinate": "coordinate", "coordinates": "coordinate", "latlong": "coordinate",
         "declaration": "declaration", "attestation": "declaration",
         "formula": "formula", "calculated": "formula",
+        "attachment": "attachment", "file": "attachment", "document": "attachment",
+        "upload": "attachment", "fileupload": "attachment", "documentupload": "attachment",
     }
     return exact.get(key, "text"), key not in exact
 
@@ -364,6 +366,7 @@ def _definition_content(rows, sheet_title, sheet_index, warnings, override=None)
     grids = []
     used_heading_codes = set()
     used_field_codes = set()
+    used_grid_codes = set()
     current_heading_code = ""
     current_heading_title = ""
     last_kind = ""
@@ -384,6 +387,72 @@ def _definition_content(rows, sheet_title, sheet_index, warnings, override=None)
     )
     device_brand_context = "brand" in _metadata_key(f"{sheet_title} {heading_text}")
     consumed_matrix_rows = set()
+
+    # NCA source forms mark structured input blocks with a heading containing
+    # "Data Entry".  The next populated row contains the table headers and the
+    # contiguous rows beneath it contain fixed labels plus blank input cells.
+    # Filled columns become immutable row labels; only columns containing blank
+    # cells are generated as editable grid columns.
+    for position, row_number in enumerate(ordered_rows):
+        row = rows[row_number]
+        row_text = " ".join(str(cell.get("value") or "") for cell in row.values())
+        if "dataentry" not in _metadata_key(row_text):
+            continue
+        if position + 1 >= len(ordered_rows):
+            continue
+        header_row_number = ordered_rows[position + 1]
+        if header_row_number != row_number + 1:
+            continue
+        header_row = rows[header_row_number]
+        header_columns = [column for column, cell in sorted(header_row.items()) if str(cell.get("value") or "").strip()]
+        if len(header_columns) < 2:
+            continue
+        data_row_numbers = []
+        candidate = header_row_number + 1
+        while candidate in rows:
+            candidate_text = " ".join(str(cell.get("value") or "") for cell in rows[candidate].values())
+            if "dataentry" in _metadata_key(candidate_text):
+                break
+            data_row_numbers.append(candidate)
+            candidate += 1
+        if not data_row_numbers:
+            continue
+        input_columns = [
+            column for column in header_columns
+            if any(not str(rows[data_row].get(column, {}).get("value") or "").strip() for data_row in data_row_numbers)
+        ]
+        label_columns = [column for column in header_columns if column not in input_columns]
+        if not input_columns:
+            continue
+        heading_label = str(next((cell.get("value") for _, cell in sorted(row.items()) if str(cell.get("value") or "").strip()), "Data Entry"))
+        fixed_rows = []
+        fixed_row_sources = []
+        for data_row in data_row_numbers:
+            label_parts = [str(rows[data_row].get(column, {}).get("value") or "").strip() for column in label_columns]
+            label_parts = [part for part in label_parts if part]
+            label = " | ".join(label_parts) or f"Row {len(fixed_rows) + 1}"
+            fixed_rows.append(label[:255])
+            fixed_row_sources.append({"label": label[:255], "source": {"sheet": sheet_title, "rows": [data_row]}})
+        columns = []
+        for column in input_columns:
+            label = str(header_row[column].get("value") or f"Column {column}").strip()[:255]
+            field_type, _unknown = _metadata_field_type(label)
+            columns.append({
+                "column_code": _unique_code(label, set(item["column_code"] for item in columns), f"COLUMN_{column}"),
+                "label": label, "field_type": field_type, "unit": _unit(label), "is_required": False,
+                "source": {"sheet": sheet_title, "row": header_row_number},
+            })
+        grids.append({
+            "source_order": row_number,
+            "grid_code": _unique_code(heading_label, used_grid_codes, f"DATA_ENTRY_TABLE_{sheet_index}_{row_number}"),
+            "title": re.sub(r"\s*\(?data\s*entry\)?\s*", "", heading_label, flags=re.IGNORECASE).strip(" -")[:255] or "Data Entry",
+            "row_mode": "FIXED", "min_rows": len(fixed_rows),
+            "instructions": "Complete the blank columns. Existing row labels are fixed by the source form.",
+            "columns": columns, "fixed_rows": fixed_rows, "fixed_row_sources": fixed_row_sources,
+            "source": {"sheet": sheet_title, "row": row_number, "heading": heading_label},
+            "parser_version": PARSER_VERSION,
+        })
+        consumed_matrix_rows.update({row_number, header_row_number, *data_row_numbers})
     brand_pairs = []
     if device_brand_context:
         for position, row_number in enumerate(ordered_rows):

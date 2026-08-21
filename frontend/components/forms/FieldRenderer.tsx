@@ -2,7 +2,9 @@
 
 import { cn } from "@/lib/utils";
 import type { FormField, FieldStatus } from "@/lib/types";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Download, FileText, Upload } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { api, ApiError, downloadAuthenticated } from "@/lib/api";
 
 const FIELD_STATUS_OPTIONS: { value: FieldStatus; label: string }[] = [
   { value: "NOT_APPLICABLE", label: "Not Applicable" },
@@ -25,12 +27,17 @@ interface FieldRendererProps {
   onBlur?: () => void;
   readOnlyPresentation?: boolean;
   previousValue?: string | null;
+  submissionId?: number;
 }
 
 const inputBase =
   "w-full rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px] text-[#191c1e] placeholder:text-[#737780] transition-colors focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20 disabled:bg-[#f2f4f6] disabled:text-[#737780]";
 
 const numericTypes = new Set(["number", "currency", "percentage"]);
+
+export function isNumericFieldType(fieldType: string) {
+  return numericTypes.has(fieldType);
+}
 
 export function calculateGrowth(current: string, previous: string | null | undefined, fieldType: FormField["field_type"]) {
   if (!numericTypes.has(fieldType) || previous === null || previous === undefined || previous === "") return null;
@@ -41,7 +48,8 @@ export function calculateGrowth(current: string, previous: string | null | undef
 }
 
 function PreviousAndGrowth({ field, value, previousValue }: { field: FormField; value: string; previousValue?: string | null }) {
-  const numeric = numericTypes.has(field.field_type);
+  const numeric = isNumericFieldType(field.field_type);
+  if (!numeric) return null;
   const previousNumber = previousValue === null || previousValue === undefined || previousValue === ""
     ? null : Number(String(previousValue).replaceAll(",", ""));
   const previousDisplay = previousValue === null || previousValue === undefined || previousValue === ""
@@ -74,7 +82,37 @@ export function DefinitionDisclosure({ definition }: { definition: string }) {
   </details>;
 }
 
-export function FieldRenderer({ field, value, valueStatus, explanation, onChange, disabled, allFieldValues, issues = [], correctionInstructions = [], onBlur, readOnlyPresentation = false, previousValue }: FieldRendererProps) {
+type FieldAttachment = { id:number; file_name:string; file_size:number; scan_status:string; download_ready:boolean };
+
+function AttachmentInput({ submissionId, field, disabled }: { submissionId?:number; field:FormField; disabled?:boolean }) {
+  const [attachment, setAttachment] = useState<FieldAttachment|null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    if (!submissionId) return;
+    try { const items = await api.get<FieldAttachment[]>(`/submissions/${submissionId}/field-attachments/${field.id}/`); setAttachment(items[0] ?? null); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Attachment could not be loaded."); }
+  }, [submissionId, field.id]);
+  useEffect(() => { void load(); }, [load]);
+  async function upload(file?:File) {
+    if (!file || !submissionId) return;
+    setBusy(true); setError("");
+    try { const form = new FormData(); form.append("file", file); await api.upload(`/submissions/${submissionId}/field-attachments/${field.id}/`, form); await load(); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "Attachment upload failed."); }
+    finally { setBusy(false); }
+  }
+  return <div className="rounded-lg border border-dashed border-[#aeb8c2] bg-white p-3">
+    {attachment ? <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex min-w-0 items-center gap-2"><FileText size={18} className="shrink-0 text-[#0066cc]"/><div className="min-w-0"><p className="truncate text-xs font-semibold">{attachment.file_name}</p><p className="text-[10px] text-[#737780]">{(attachment.file_size/1024).toFixed(1)} KB · {attachment.scan_status.toLowerCase()}</p></div></div>
+      {attachment.download_ready&&<button type="button" onClick={()=>downloadAuthenticated(`/submissions/${submissionId}/field-attachments/files/${attachment.id}/download/`,{},attachment.file_name)} className="flex items-center gap-1 text-xs font-semibold text-[#0066cc]"><Download size={13}/>Download</button>}
+    </div>:<p className="text-xs text-[#737780]">No document attached.</p>}
+    {!disabled&&<label className="mt-3 flex w-fit cursor-pointer items-center gap-2 rounded-lg bg-[#001836] px-3 py-2 text-xs font-semibold text-white"><Upload size={14}/>{busy?"Uploading…":attachment?"Replace attachment":"Choose attachment"}<input type="file" className="hidden" accept=".doc,.docx,.xls,.xlsx,.pdf" disabled={busy} onChange={event=>void upload(event.target.files?.[0])}/></label>}
+    <p className="mt-2 text-[10px] text-[#737780]">Word, Excel, or PDF · Maximum 20 MB</p>
+    {error&&<p role="alert" className="mt-2 text-xs font-medium text-red-700">{error}</p>}
+  </div>;
+}
+
+export function FieldRenderer({ field, value, valueStatus, explanation, onChange, disabled, allFieldValues, issues = [], correctionInstructions = [], onBlur, readOnlyPresentation = false, previousValue, submissionId }: FieldRendererProps) {
   // Conditional visibility — hide if parent field's value doesn't match the required value
   if (
     field.conditional_on_field !== null &&
@@ -87,6 +125,10 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
 
   const isNonFilled = !!valueStatus && valueStatus !== "PROVIDED" && valueStatus !== "MISSING";
 
+  if (field.field_type === "attachment") {
+    return <div className="space-y-2"><div className="flex items-start justify-between gap-2"><p className="text-[13px] font-medium">{field.label}{field.is_required&&<span className="ml-1 text-[#E31937]">*</span>}</p></div><AttachmentInput submissionId={submissionId} field={field} disabled={disabled}/><DefinitionDisclosure definition={field.help_text}/>{issues.map((issue,index)=><p key={index} role="alert" className="text-[11px] font-medium text-[#c0112a]">{issue}</p>)}</div>;
+  }
+
   if (disabled && readOnlyPresentation) {
     const statusLabel = valueStatus ? valueStatus.split("_").join(" ").toLowerCase() : "not provided";
     return (
@@ -97,7 +139,7 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
           </p>
           {field.is_required && <span className="rounded-full bg-[#e8f1fb] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[#004999]">Requested</span>}
         </div>
-        <div className="mt-3"><PreviousAndGrowth field={field} value={value} previousValue={previousValue} /></div>
+        {isNumericFieldType(field.field_type) && <div className="mt-3"><PreviousAndGrowth field={field} value={value} previousValue={previousValue} /></div>}
         <p className="mt-2 whitespace-pre-wrap break-words text-[14px] font-medium text-[#191c1e]">
           {value || <span className="font-normal italic text-[#8a8f98]">— Not provided</span>}
         </p>
@@ -148,7 +190,7 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
         )}
       </div>
 
-      <PreviousAndGrowth field={field} value={value} previousValue={previousValue} />
+      {isNumericFieldType(field.field_type) && <PreviousAndGrowth field={field} value={value} previousValue={previousValue} />}
       {correctionInstructions.map((instruction, index) => <p key={index} className="rounded-md bg-[#fff3bf] px-2 py-1.5 text-[11px] text-[#7a5c00]">Correction: {instruction}</p>)}
       {issues.map((issue, index) => <p key={index} role="alert" className="text-[11px] font-medium text-[#c0112a]">{issue}</p>)}
 

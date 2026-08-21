@@ -75,3 +75,27 @@ class SubmissionExcelBackup(models.Model):
 
     class Meta:
         ordering = ["-uploaded_at"]
+
+
+class SubmissionFieldAttachment(models.Model):
+    """Private document supplied for an attachment-type form indicator."""
+    submission = models.ForeignKey("submissions.Submission", on_delete=models.CASCADE, related_name="field_attachments")
+    field = models.ForeignKey("forms_engine.FormField", on_delete=models.PROTECT, related_name="submission_attachments")
+    file_name = models.CharField(max_length=255)
+    file_size = models.PositiveIntegerField()
+    mime_type = models.CharField(max_length=150)
+    storage_path = models.CharField(max_length=500)
+    sha256 = models.CharField(max_length=64)
+    uploaded_by = models.ForeignKey("users.User", on_delete=models.PROTECT, related_name="field_attachments")
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    is_current = models.BooleanField(default=True)
+    scan_status = models.CharField(max_length=20, choices=[("PENDING", "Pending"), ("CLEAN", "Clean"), ("INFECTED", "Infected"), ("ERROR", "Scan error")], default="PENDING")
+    scan_engine = models.CharField(max_length=100, blank=True)
+    scan_details = models.TextField(blank=True)
+    scanned_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-uploaded_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["submission", "field"], condition=models.Q(is_current=True), name="one_current_attachment_per_field"),
+        ]

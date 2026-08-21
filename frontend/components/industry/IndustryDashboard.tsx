@@ -57,6 +57,7 @@ import {
   formatValue,
   getHeadlineMetric,
   percentChange,
+  periodYear,
   prepareSeries,
   sortPeriods,
 } from "@/lib/industry-dashboard/analytics";
@@ -489,6 +490,7 @@ function ChartCard({
   onOperatorChange,
   viewLabel,
   showProvenance,
+  showActions = true,
 }: {
   chart: IndustryChart;
   range: Range;
@@ -502,6 +504,7 @@ function ChartCard({
   onOperatorChange: (operator: string) => void;
   viewLabel: string;
   showProvenance: boolean;
+  showActions?: boolean;
 }) {
   const [shareMode, setShareMode] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
@@ -622,7 +625,7 @@ function ChartCard({
             {chart.unitLabel}{showProvenance && chart.sourceSheet ? ` · ${chart.sourceSheet}` : ""}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        {showActions && <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             className={ICON_BUTTON}
@@ -648,7 +651,7 @@ function ChartCard({
           >
             <Maximize2 size={15} aria-hidden="true" />
           </button>
-        </div>
+        </div>}
       </header>
 
       <div className="mt-3 flex min-h-6 flex-wrap items-center justify-between gap-2">
@@ -898,12 +901,22 @@ function DetailDrawer({
   );
 }
 
+function GranularityTabs({ value, onChange }: { value: Granularity; onChange: (value: Granularity) => void }) {
+  return (
+    <div className="inline-flex rounded-[10px] border border-[#dce3e9] bg-[#f3f6f8] p-1" role="tablist" aria-label="Dashboard granularity">
+      {(["monthly", "quarterly", "yearly"] as Granularity[]).map((item) => (
+        <button key={item} type="button" role="tab" aria-selected={value === item} onClick={() => onChange(item)}
+          className={cn("h-8 rounded-[7px] px-4 text-[10px] font-semibold capitalize transition", value === item ? "bg-white text-[#173d64] shadow-sm" : "text-[#6f7a85] hover:text-[#34414d]")}>{item}</button>
+      ))}
+    </div>
+  );
+}
+
 function FilterControls({
   dataset,
   range,
   setRange,
   granularity,
-  setGranularity,
   trendMode,
   setTrendMode,
   operator,
@@ -917,7 +930,6 @@ function FilterControls({
   range: Range;
   setRange: (range: Range) => void;
   granularity: Granularity;
-  setGranularity: (value: Granularity) => void;
   trendMode: TrendMode;
   setTrendMode: (value: TrendMode) => void;
   operator: string;
@@ -927,8 +939,14 @@ function FilterControls({
   sort: SortMode;
   setSort: (value: SortMode) => void;
 }) {
+  const periodOptions = granularity === "yearly"
+    ? Array.from(new Set(dataset.periods.map((period) => String(periodYear(period)))))
+    : granularity === "monthly"
+      ? dataset.periods.filter((period) => /^\d{4}-(0[1-9]|1[0-2])$/.test(period) || /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}$/i.test(period))
+      : dataset.periods.filter((period) => /^Q[1-4]\s+\d{4}$/.test(period));
+  const periodsAvailable = periodOptions.length > 0;
   return (
-    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_0.8fr_0.9fr_1fr_1.2fr_0.8fr]">
+    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_0.9fr_1fr_1.2fr_0.8fr]">
       <label className="grid gap-1">
         <span className="text-[9px] font-semibold uppercase tracking-[0.065em] text-[#747d87]">
           From
@@ -938,9 +956,11 @@ function FilterControls({
           onChange={(event) => setRange({ ...range, start: event.target.value })}
           className={CONTROL}
           aria-label="Start period"
+          disabled={!periodsAvailable}
         >
-          {dataset.periods
-            .filter((period) => dataset.periods.indexOf(period) <= dataset.periods.indexOf(range.end))
+          {!periodsAvailable && <option>Monthly unavailable</option>}
+          {periodOptions
+            .filter((period) => periodOptions.indexOf(period) <= periodOptions.indexOf(range.end))
             .map((period) => (
               <option key={period}>{period}</option>
             ))}
@@ -955,29 +975,14 @@ function FilterControls({
           onChange={(event) => setRange({ ...range, end: event.target.value })}
           className={CONTROL}
           aria-label="End period"
+          disabled={!periodsAvailable}
         >
-          {dataset.periods
-            .filter((period) => dataset.periods.indexOf(period) >= dataset.periods.indexOf(range.start))
+          {!periodsAvailable && <option>Monthly unavailable</option>}
+          {periodOptions
+            .filter((period) => periodOptions.indexOf(period) >= periodOptions.indexOf(range.start))
             .map((period) => (
               <option key={period}>{period}</option>
             ))}
-        </select>
-      </label>
-      <label className="grid gap-1">
-        <span className="text-[9px] font-semibold uppercase tracking-[0.065em] text-[#747d87]">
-          Granularity
-        </span>
-        <select
-          value={granularity}
-          onChange={(event) => setGranularity(event.target.value as Granularity)}
-          className={CONTROL}
-          aria-label="Granularity"
-        >
-          <option value="monthly" disabled>
-            Monthly · unavailable
-          </option>
-          <option value="quarterly">Quarterly</option>
-          <option value="yearly">Yearly</option>
         </select>
       </label>
       <label className="grid gap-1">
@@ -1856,7 +1861,7 @@ function CoverageView({
   );
 }
 
-export function IndustryDashboard({ canManage = false }: { canManage?: boolean }) {
+export function IndustryDashboard({ canManage = false, providerView = false }: { canManage?: boolean; providerView?: boolean }) {
   const reduceMotion = useReducedMotion();
   const [dataset, setDataset] = useState<IndustryDashboardDataset | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -2077,6 +2082,44 @@ export function IndustryDashboard({ canManage = false }: { canManage?: boolean }
     );
   };
 
+  const changeGranularity = (next: Granularity) => {
+    if (next === "yearly") {
+      setRange({ start: String(periodYear(range.start)), end: String(periodYear(range.end)) });
+    } else if (next === "quarterly" && granularity === "yearly") {
+      setRange({ start: `Q1 ${range.start}`, end: `Q4 ${range.end}` });
+    }
+    setGranularity(next);
+  };
+
+  if (providerView) {
+    return (
+      <div className="mx-auto w-full max-w-[1500px] space-y-4 pb-10">
+        <header className="rounded-[17px] border border-[#d9e1e8] bg-white px-5 py-5 shadow-[0_8px_26px_rgba(0,45,91,0.055)] sm:px-6">
+          <p className="text-[9px] font-semibold uppercase tracking-[0.075em] text-[#0a66c2]">NCA aggregate information</p>
+          <h1 className="mt-2 text-[25px] font-semibold tracking-[-0.035em] text-[#15191d]">Industry indicators</h1>
+          <p className="mt-1 max-w-2xl text-[12px] leading-5 text-[#65707a]">An anonymized view of headline industry trends. Provider-level data and NCA source information are not included.</p>
+        </header>
+        <div className="flex justify-start"><GranularityTabs value={granularity} onChange={changeGranularity} /></div>
+        {granularity === "monthly" ? (
+          <section className="rounded-[16px] border border-dashed border-[#cfd8e0] bg-white px-5 py-16 text-center" role="status">
+            <CalendarRange className="mx-auto text-[#7e8d99]" size={30} aria-hidden="true" />
+            <h2 className="mt-3 text-[15px] font-semibold text-[#36404a]">Monthly data is not available</h2>
+            <p className="mt-1 text-[11px] text-[#7c858e]">The authorized dashboard source currently contains quarterly observations. No monthly values have been estimated.</p>
+          </section>
+        ) : (
+          <>
+            {metricCharts.length > 0 && <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-6" aria-label="Latest aggregate indicator values">
+              {metricCharts.map((chart,index)=><MetricCard key={chart.id} chart={chart} rangeEnd={range.end} operator="all" operatorNames={[]} index={index} reduceMotion={reduceMotion}/>) }
+            </section>}
+            <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12" aria-label="Aggregate industry charts">
+              {visibleCharts.map((chart,index)=>{const heroIndex=visibleCharts.slice(0,index+1).filter(item=>item.presentation.emphasis==="hero").length-1;return <div key={chart.id} className={chartGridClass(chart,heroIndex)}><ChartCard chart={chart} range={range} granularity={granularity} trendMode="absolute" operator="all" operatorNames={[]} globalTable={false} reduceMotion={reduceMotion} viewLabel="Industry" showProvenance={false} showActions={false} onOperatorChange={()=>{}} onDetails={()=>{}}/></div>})}
+            </section>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-[1720px] space-y-4 pb-10">
       <header className="overflow-hidden rounded-[17px] border border-[#d9e1e8] bg-white shadow-[0_8px_26px_rgba(0,45,91,0.055)]">
@@ -2296,24 +2339,17 @@ export function IndustryDashboard({ canManage = false }: { canManage?: boolean }
         <CoverageView dataset={dataset} onExport={exportCoverage} />
       ) : (
         <>
+          <div className="flex justify-start"><GranularityTabs value={granularity} onChange={changeGranularity} /></div>
           <section className="hidden rounded-[15px] border border-[#dce3e9] bg-white p-4 shadow-[0_5px_16px_rgba(0,45,91,0.035)] lg:block">
-            <FilterControls
-              dataset={dataset}
-              range={range}
-              setRange={setRange}
-              granularity={granularity}
-              setGranularity={setGranularity}
-              trendMode={trendMode}
-              setTrendMode={setTrendMode}
-              operator={operator}
-              setOperator={setOperator}
-              search={search}
-              setSearch={setSearch}
-              sort={sort}
-              setSort={setSort}
-            />
+            <FilterControls dataset={dataset} range={range} setRange={setRange} granularity={granularity} trendMode={trendMode} setTrendMode={setTrendMode} operator={operator} setOperator={setOperator} search={search} setSearch={setSearch} sort={sort} setSort={setSort}/>
           </section>
-
+          {granularity === "monthly" ? (
+            <section className="rounded-[16px] border border-dashed border-[#cfd8e0] bg-white px-5 py-16 text-center" role="status">
+              <CalendarRange className="mx-auto text-[#7e8d99]" size={30} aria-hidden="true" />
+              <h2 className="mt-3 text-[15px] font-semibold text-[#36404a]">Monthly data is not available</h2>
+              <p className="mt-1 text-[11px] text-[#7c858e]">The authorized dashboard source currently contains quarterly observations. No monthly values have been estimated.</p>
+            </section>
+          ) : (<>
           <section className="flex gap-2 overflow-x-auto pb-0.5" aria-label="Indicator sections">
             {sections.map((section) => (
               <button
@@ -2482,6 +2518,7 @@ export function IndustryDashboard({ canManage = false }: { canManage?: boolean }
               <ChevronRight size={13} aria-hidden="true" />
             </button>
           </section>
+          </>)}
         </>
       )}
 
@@ -2525,7 +2562,6 @@ export function IndustryDashboard({ canManage = false }: { canManage?: boolean }
                 range={range}
                 setRange={setRange}
                 granularity={granularity}
-                setGranularity={setGranularity}
                 trendMode={trendMode}
                 setTrendMode={setTrendMode}
                 operator={operator}

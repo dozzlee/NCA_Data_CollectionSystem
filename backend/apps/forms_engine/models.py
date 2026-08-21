@@ -15,6 +15,7 @@ FIELD_TYPES = [
     ("coordinate", "Coordinate"),
     ("formula", "Formula (Calculated)"),
     ("declaration", "Declaration / Checkbox"),
+    ("attachment", "Document attachment"),
 ]
 
 FORM_CODES = [
@@ -413,7 +414,7 @@ class FormWorkbookImport(models.Model):
     scan_engine = models.CharField(max_length=100, blank=True)
     scan_details = models.TextField(blank=True)
     parse_status = models.CharField(max_length=20, choices=PARSE_STATUSES, default="PENDING")
-    parser_version = models.CharField(max_length=50, default="xlsx-worksheet-v6-visible-rows-matrix-grids")
+    parser_version = models.CharField(max_length=50, default="xlsx-worksheet-v7-data-entry-tables")
     detected_schema = models.JSONField(default=dict, blank=True)
     warnings = models.JSONField(default=list, blank=True)
     mapping_decisions = models.JSONField(default=dict, blank=True)

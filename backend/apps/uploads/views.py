@@ -15,7 +15,7 @@ from apps.submissions.access import get_submission_for_user
 from apps.submissions.readiness import refresh_submission_completion
 from apps.users.permissions import IsNCAEditor, IsProviderUser
 from apps.submissions.provider_workspace import provider_can_edit
-from .models import SubmissionKMZUpload, SubmissionExcelBackup
+from .models import SubmissionKMZUpload, SubmissionExcelBackup, SubmissionFieldAttachment
 from .tasks import scan_private_upload
 
 
@@ -23,6 +23,13 @@ ALLOWED_KMZ_TYPES = {"application/vnd.google-earth.kmz", "application/zip"}
 ALLOWED_EXCEL_TYPES = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.ms-excel",
+}
+ALLOWED_ATTACHMENT_EXTENSIONS = {".doc", ".docx", ".xls", ".xlsx", ".pdf"}
+ALLOWED_ATTACHMENT_TYPES = {
+    "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/pdf",
+    "application/zip", "application/octet-stream",
 }
 
 
@@ -243,3 +250,66 @@ class ExcelBackupDownloadView(APIView):
         if not os.path.exists(full_path): return Response({"detail":"File not found on disk."},status=404)
         record_audit(user=request.user,action="EXCEL_BACKUP_DOWNLOADED",entity_type="SubmissionExcelBackup",entity_id=backup.id)
         return FileResponse(open(full_path,"rb"),as_attachment=True,filename=backup.file_name)
+
+
+class FieldAttachmentView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser]
+
+    def get(self, request, pk, field_id=None):
+        submission = get_submission_for_user(request.user, pk=pk)
+        uploads = SubmissionFieldAttachment.objects.filter(submission=submission, is_current=True)
+        if field_id is not None:
+            uploads = uploads.filter(field_id=field_id)
+        return Response([{
+            "id": item.id, "field_id": item.field_id, "file_name": item.file_name,
+            "file_size": item.file_size, "mime_type": item.mime_type, "sha256": item.sha256,
+            "scan_status": item.scan_status, "uploaded_at": item.uploaded_at,
+            "download_ready": item.scan_status == "CLEAN",
+        } for item in uploads])
+
+    def post(self, request, pk, field_id=None):
+        submission = get_submission_for_user(request.user, pk=pk)
+        if not provider_can_edit(request.user, submission):
+            return Response({"detail": "Your provider role cannot upload files at this workflow stage."}, status=403)
+        from apps.forms_engine.models import FormField
+        field = FormField.objects.filter(pk=field_id, section__form_template=submission.expected.form_template, field_type="attachment").first()
+        if not field:
+            return Response({"detail": "The selected indicator is not an attachment field."}, status=400)
+        file = request.FILES.get("file")
+        if not file:
+            return Response({"detail": "file is required."}, status=400)
+        extension = os.path.splitext(file.name)[1].lower()
+        mime = magic.from_buffer(file.read(4096), mime=True); file.seek(0)
+        if extension not in ALLOWED_ATTACHMENT_EXTENSIONS or mime not in ALLOWED_ATTACHMENT_TYPES:
+            return Response({"detail": "Only Word (.doc/.docx), Excel (.xls/.xlsx), or PDF files are accepted."}, status=400)
+        if file.size > 20 * 1024 * 1024:
+            return Response({"detail": "Attachment exceeds the 20 MB limit."}, status=400)
+        import uuid
+        original_name = os.path.basename(file.name)
+        path, digest = save_upload(file, f"field_attachments/{submission.id}", f"{uuid.uuid4()}_{original_name}")
+        SubmissionFieldAttachment.objects.filter(submission=submission, field=field, is_current=True).update(is_current=False)
+        item = SubmissionFieldAttachment.objects.create(submission=submission, field=field, file_name=original_name,
+            file_size=file.size, mime_type=mime, storage_path=path, sha256=digest, uploaded_by=request.user)
+        record_audit(user=request.user, action="FIELD_ATTACHMENT_UPLOADED", entity_type="SubmissionFieldAttachment",
+            entity_id=item.id, after={"submission_id": submission.id, "field_id": field.id, "file_name": original_name, "sha256": digest})
+        scan_private_upload.delay("ATTACHMENT", item.id)
+        return Response({"id": item.id, "field_id": field.id, "file_name": original_name, "scan_status": item.scan_status}, status=201)
+
+
+class FieldAttachmentDownloadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk, uid):
+        submission = get_submission_for_user(request.user, pk=pk)
+        item = SubmissionFieldAttachment.objects.filter(pk=uid, submission=submission).first()
+        if not item:
+            return Response({"detail": "Attachment not found."}, status=404)
+        if item.scan_status != "CLEAN":
+            return Response({"detail": "File is quarantined until malware scanning succeeds."}, status=423)
+        full_path = os.path.join(settings.PRIVATE_UPLOAD_ROOT, item.storage_path)
+        if not os.path.exists(full_path):
+            return Response({"detail": "File not found on disk."}, status=404)
+        from django.http import FileResponse
+        record_audit(user=request.user, action="FIELD_ATTACHMENT_DOWNLOADED", entity_type="SubmissionFieldAttachment", entity_id=item.id)
+        return FileResponse(open(full_path, "rb"), as_attachment=True, filename=item.file_name, content_type=item.mime_type)

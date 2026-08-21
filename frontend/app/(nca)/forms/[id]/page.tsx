@@ -24,6 +24,7 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value:"coordinate",  label:"Coordinate (lat/lng)" },
   { value:"formula",     label:"Formula (calculated)" },
   { value:"declaration", label:"Declaration (checkbox)" },
+  { value:"attachment", label:"Document attachment (Word, Excel or PDF)" },
 ];
 
 const inp = "w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20";
@@ -58,9 +59,9 @@ function AssignmentPanel({ template }: { template: FormTemplate }) {
   return <><section className="rounded-xl border bg-white p-5"><div className="flex items-start justify-between gap-3"><div><h2 className="font-semibold">Send to providers</h2><p className="mt-1 text-xs text-[#737780]">Use the primary action to deliver this exact version immediately for one active reporting period.</p></div><button type="button" onClick={()=>setSendOpen(true)} className="rounded-lg bg-[#0066cc] px-4 py-2 text-sm font-semibold text-white">Send for one period</button></div>
     <div className="mt-4 grid gap-3 sm:grid-cols-3"><select className={inp} value={mode} onChange={e=>setMode(e.target.value as "RECURRING"|"MANUAL")}><option value="MANUAL">Send for one active period</option><option value="RECURRING">Configure recurring schedule</option></select>{mode==="MANUAL"?<select className={`${inp} sm:col-span-2`} value={periodId} onChange={e=>setPeriodId(e.target.value)}><option value="">Select active reporting period</option>{(periods.data?.results??[]).filter(p=>p.status==="ACTIVE").map(p=><option key={p.id} value={p.id}>{p.name} · {p.status}</option>)}</select>:<><input className={inp} type="date" value={effectiveFrom} onChange={e=>setEffectiveFrom(e.target.value)}/><input className={inp} type="date" value={effectiveTo} onChange={e=>setEffectiveTo(e.target.value)} aria-label="Recurring assignment end date"/></>}</div>
     {mode==="RECURRING"&&<p className="mt-3 rounded-lg bg-[#f7f9fb] px-3 py-2 text-xs text-[#43474f]">This creates a schedule only. Provider forms and notifications are generated when matching future reporting periods are activated.</p>}
-    <div className="mt-4 max-h-56 overflow-y-auto rounded-lg border p-2">{providerList.map(provider=>{const mismatch=provider.sector!==template.sector||provider.category!==template.provider_category;return <label key={provider.id} className="flex items-center gap-3 rounded px-2 py-2 hover:bg-[#f7f9fb]"><input type="checkbox" checked={selected.includes(provider.id)} onChange={()=>setSelected(items=>items.includes(provider.id)?items.filter(id=>id!==provider.id):[...items,provider.id])}/><span className="flex-1 text-sm">{provider.registered_name}</span>{mismatch&&<span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] text-amber-800">Type mismatch</span>}</label>})}</div>
-    {(preview.data?.summary.mismatches??0)>0&&<textarea className={`${inp} mt-3`} rows={2} placeholder="Required reason for assigning across a sector or provider-type mismatch" value={overrideReason} onChange={e=>setOverrideReason(e.target.value)}/>}
-    {preview.data&&<p className="mt-3 text-xs text-[#43474f]">{preview.data.summary.assignable} assignable · {preview.data.summary.duplicates} already assigned · {preview.data.summary.mismatches} mismatches</p>}
+    <div className="mt-4 max-h-56 overflow-y-auto rounded-lg border p-2">{providerList.map(provider=><label key={provider.id} className="flex items-center gap-3 rounded px-2 py-2 hover:bg-[#f7f9fb]"><input type="checkbox" checked={selected.includes(provider.id)} onChange={()=>setSelected(items=>items.includes(provider.id)?items.filter(id=>id!==provider.id):[...items,provider.id])}/><span className="flex-1 text-sm">{provider.registered_name}</span></label>)}</div>
+    {(preview.data?.summary.mismatches??0)>0&&<textarea className={`${inp} mt-3`} rows={2} placeholder="Additional assignment reason" value={overrideReason} onChange={e=>setOverrideReason(e.target.value)}/>}
+    {preview.data&&<p className="mt-3 text-xs text-[#43474f]">{preview.data.summary.assignable} assignable · {preview.data.summary.duplicates} already assigned</p>}
     <div className="mt-3 flex justify-end"><button onClick={()=>send.mutate()} disabled={!selected.length||send.isPending||(mode==="MANUAL"&&!periodId)||(Boolean(preview.data?.summary.mismatches)&&!overrideReason.trim())} className="rounded-lg bg-[#001836] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{mode==="MANUAL"?"Confirm & send":"Configure recurring schedule"}</button></div>
     {(assignments.data?.recurring.length||assignments.data?.manual.length)?<div className="mt-5 border-t pt-4 text-xs text-[#43474f]"><p className="font-semibold">Current assignments</p>{assignments.data?.recurring.map(a=><p key={`r${a.id}`} className="mt-1">Recurring · {a.provider_name} · from {a.effective_from}{a.effective_to?` to ${a.effective_to}`:""}</p>)}{assignments.data?.manual.map(a=><p key={`m${a.id}`} className="mt-1">Manual · {a.provider_name} · {a.period_name}</p>)}</div>:null}
   </section><FormSendDialog template={template} open={sendOpen} onClose={()=>setSendOpen(false)}/></>;
@@ -289,7 +290,7 @@ function GridEditor({ grid, editable, onChanged }: { grid: FormGrid; editable: b
       <div className="grid gap-2 sm:grid-cols-5">
         <input className={inp} placeholder="Column code" value={column.column_code} onChange={e=>setColumn(p=>({...p,column_code:e.target.value}))}/>
         <input className={inp} placeholder="Label" value={column.label} onChange={e=>setColumn(p=>({...p,label:e.target.value}))}/>
-        <select className={inp} value={column.field_type} onChange={e=>setColumn(p=>({...p,field_type:e.target.value as FieldType}))}>{FIELD_TYPES.filter(item=>!["formula","declaration"].includes(item.value)).map(item=><option key={item.value} value={item.value}>{item.label}</option>)}</select>
+        <select className={inp} value={column.field_type} onChange={e=>setColumn(p=>({...p,field_type:e.target.value as FieldType}))}>{FIELD_TYPES.filter(item=>!["formula","declaration","attachment"].includes(item.value)).map(item=><option key={item.value} value={item.value}>{item.label}</option>)}</select>
         <input className={inp} placeholder="Unit" value={column.unit} onChange={e=>setColumn(p=>({...p,unit:e.target.value}))}/>
         <button className="rounded bg-[#002d5b] px-3 text-xs font-semibold text-white disabled:opacity-50" disabled={!column.column_code||!column.label||addColumn.isPending} onClick={()=>addColumn.mutate()}>Add column</button>
       </div>
@@ -571,7 +572,7 @@ export default function FormBuilderPage() {
         </div>
       </div>
 
-      <div role="tablist" aria-label="Form Builder sections" className="flex gap-1 overflow-x-auto rounded-xl border border-[#eceef0] bg-white p-1">
+      <div role="tablist" aria-label="Form sections" className="flex gap-1 overflow-x-auto rounded-xl border border-[#eceef0] bg-white p-1">
         {([['structure','Structure'],['workbook','Workbook Import'],['excel-report','Excel Report'],['validation','Validation'],['assignments','Assignments'],['gaps','Gap Analysis'],['publication','Publication']] as const).map(([value,label])=><button key={value} role="tab" aria-selected={activeTab===value} onClick={()=>setActiveTab(value)} className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-semibold ${activeTab===value?'bg-[#001836] text-white':'text-[#43474f] hover:bg-[#f2f4f6]'}`}>{label}</button>)}
       </div>
 

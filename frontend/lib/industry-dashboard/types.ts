@@ -13,7 +13,7 @@ export type DashboardVisualKind =
   | "lineBand";
 export type ChartEmphasis = "hero" | "wide" | "standard" | "compact";
 export type AggregationMode = "yearEnd" | "sum" | "average";
-export type Granularity = "quarterly" | "yearly";
+export type Granularity = "monthly" | "quarterly" | "yearly";
 export type TrendMode = "absolute" | "qoq" | "yoy" | "index";
 export type SortMode = "source" | "title" | "latest";
 export type Provenance = "baseline" | "uploaded";

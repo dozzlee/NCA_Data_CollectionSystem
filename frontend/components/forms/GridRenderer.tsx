@@ -38,6 +38,10 @@ function numericGrowth(current: string | undefined, previous: string | null | un
   return ((currentNumber - previousNumber) / previousNumber) * 100;
 }
 
+function isNumericColumn(fieldType: string) {
+  return ["number", "currency", "percentage"].includes(fieldType);
+}
+
 export function GridRenderer({ grid, values, onChange, disabled, issues = [], correctionInstructions = [], readOnlyPresentation = false, sectionCode, previousValues = {} }: GridRendererProps) {
   const [repeatableRows, setRepeatableRows] = useState<string[]>(() => {
     if (grid.row_mode === "FIXED") return [];
@@ -120,7 +124,7 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
                 return <td key={column.id} className="px-3 py-2 text-[12px] text-[#191c1e]">
                   {current?.value || current?.explanation || <span className="italic text-[#8a8f98]">— Not provided</span>}
                   {current?.value_status && !["PROVIDED", "MISSING"].includes(current.value_status) && <span className="mt-0.5 block text-[9px] uppercase tracking-wide text-[#7a5c00]">{current.value_status.split("_").join(" ")}</span>}
-                  <span className="mt-1 block text-[9px] text-[#737780]">Previous: {previous ?? "—"} · Growth: {growth === null ? "N/A" : `${growth > 0 ? "↑ +" : growth < 0 ? "↓ " : ""}${growth.toFixed(2)}%`}</span>
+                  {isNumericColumn(column.field_type) && <span className="mt-1 block text-[9px] text-[#737780]">Previous: {previous ?? "—"} · Growth: {growth === null ? "N/A" : `${growth > 0 ? "↑ +" : growth < 0 ? "↓ " : ""}${growth.toFixed(2)}%`}</span>}
                 </td>;
               })}
             </tr>) : <tr><td colSpan={grid.columns.length + 1} className="px-4 py-8 text-center text-[12px] italic text-[#8a8f98]">No rows provided</td></tr>}</tbody>
@@ -177,7 +181,7 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
                           disabled={disabled} step={column.field_type === "percentage" ? "0.01" : undefined}
                           className={cn(cellInput, "text-right")} placeholder="—" />
                       )}
-                      <p className="px-1 pb-1 text-left text-[9px] text-[#737780]">Previous: {previous ?? "—"} · Growth: {growth === null ? "N/A" : `${growth > 0 ? "↑ +" : growth < 0 ? "↓ " : ""}${growth.toFixed(2)}%`}</p>
+                      {isNumericColumn(column.field_type) && <p className="px-1 pb-1 text-left text-[9px] text-[#737780]">Previous: {previous ?? "—"} · Growth: {growth === null ? "N/A" : `${growth > 0 ? "↑ +" : growth < 0 ? "↓ " : ""}${growth.toFixed(2)}%`}</p>}
                       {column.is_required && !disabled && (
                         <select value={hasNonFilledStatus ? current?.value_status : ""}
                           onChange={(event) => setStatus(row.id, column.id, event.target.value as FieldStatus | "")}

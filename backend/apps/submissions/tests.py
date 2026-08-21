@@ -1283,8 +1283,8 @@ class SubmissionRemediationTests(APITestCase):
         )
         self.assertEqual(response.status_code, 403)
 
-    def test_every_authenticated_role_can_export_aggregate_dashboard_xlsx(self):
-        for user in [self.entry_a, self.approver_a, self.officer, self.viewer]:
+    def test_nca_roles_can_export_aggregate_dashboard_xlsx(self):
+        for user in [self.officer, self.viewer]:
             with self.subTest(role=user.role):
                 self.authenticate(user)
                 response = self.client.get("/api/v1/industry-dashboard/export/?format=xlsx")
@@ -1292,11 +1292,24 @@ class SubmissionRemediationTests(APITestCase):
                 self.assertEqual(response["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 self.assertNotIn(b"e70682e229f04e6dbb46da0b7b3004f6.xlsx", response.content)
 
+    def test_provider_roles_cannot_export_dashboard(self):
+        for user in [self.entry_a, self.approver_a]:
+            with self.subTest(role=user.role):
+                self.authenticate(user)
+                response = self.client.get("/api/v1/industry-dashboard/export/?format=xlsx")
+                self.assertEqual(response.status_code, 403)
+
     def test_restricted_dashboard_replaces_operator_rows_with_industry_totals(self):
         self.authenticate(self.entry_a)
         response = self.client.get("/api/v1/industry-dashboard/data/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["operators"], [])
+        self.assertEqual(response.data["sectors"], [])
+        self.assertTrue(response.data["providerView"])
+        self.assertEqual(
+            {item["id"] for item in response.data["charts"]},
+            set(response.data["industryOverview"]["chartIds"]),
+        )
         self.assertNotIn("sourceWorkbooks", response.data["metadata"])
 
         chart = next(

@@ -74,6 +74,9 @@ export async function downloadAuthenticated(
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("text/csv") && !contentType.includes("application/octet-stream")
       && !contentType.includes("application/pdf")
+      && !contentType.includes("application/msword")
+      && !contentType.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+      && !contentType.includes("application/vnd.ms-excel")
       && !contentType.includes("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) {
     throw new ApiError(res.status, "The server returned an unexpected download format.");
   }

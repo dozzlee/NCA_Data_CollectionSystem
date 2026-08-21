@@ -3,13 +3,14 @@ from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
 from apps.audit.services import record_audit
-from .models import SubmissionKMZUpload, SubmissionExcelBackup
+from .models import SubmissionKMZUpload, SubmissionExcelBackup, SubmissionFieldAttachment
 from .scanner import scan_path
 
 
 @shared_task(bind=True, max_retries=3)
 def scan_private_upload(self, model_name, object_id):
-    model = SubmissionKMZUpload if model_name == "KMZ" else SubmissionExcelBackup
+    models = {"KMZ": SubmissionKMZUpload, "EXCEL": SubmissionExcelBackup, "ATTACHMENT": SubmissionFieldAttachment}
+    model = models[model_name]
     upload=model.objects.select_related("uploaded_by").get(pk=object_id)
     try:
         result=scan_path(os.path.join(settings.PRIVATE_UPLOAD_ROOT,upload.storage_path))

@@ -47,25 +47,42 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
 
     blockers = []
     completeness_warnings = []
+    # Count every blank indicator (including optional indicators) separately
+    # from transition blockers and required-field completion metrics.
+    blank_indicator_count = 0
     required_total = 0
     completed_total = 0
     section_required = defaultdict(int)
     section_completed = defaultdict(int)
 
     fields = (
-        FormField.objects.filter(section__form_template=template, is_required=True)
+        FormField.objects.filter(section__form_template=template)
         .select_related("section", "conditional_on_field")
     )
     for field in fields:
         if not _field_is_applicable(field, values_by_field):
             continue
-        required_total += 1
-        section_required[field.section.section_code] += 1
+        if field.is_required:
+            required_total += 1
+            section_required[field.section.section_code] += 1
+        if field.field_type == "attachment":
+            current = submission.field_attachments.filter(field=field, is_current=True, scan_status="CLEAN").exists()
+            if current:
+                if field.is_required:
+                    completed_total += 1
+                    section_completed[field.section.section_code] += 1
+            else:
+                if field.is_required:
+                    blockers.append({"code": "REQUIRED_ATTACHMENT", "type": "ATTACHMENT", "id": field.id,
+                        "section_code": field.section.section_code, "label": f"{field.label}: upload a clean Word, Excel, or PDF file"})
+            continue
         value = values_by_field.get(field.id)
         if _is_value_complete(value):
-            completed_total += 1
-            section_completed[field.section.section_code] += 1
+            if field.is_required:
+                completed_total += 1
+                section_completed[field.section.section_code] += 1
             continue
+        blank_indicator_count += 1
         issue = {
             "code": "EXPLANATION_REQUIRED" if value and value.value_status in ACCEPTED_NON_FILLED else "MISSING_INDICATOR",
             "type": "FIELD",
@@ -92,7 +109,8 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
             rows_by_grid[value.grid_id].add(value.grid_row_id)
 
     for grid in grids:
-        required_columns = [column for column in grid.columns.all() if column.is_required]
+        columns = list(grid.columns.all())
+        required_columns = [column for column in columns if column.is_required]
         if grid.row_mode == "FIXED":
             row_ids = [str(row.id) for row in grid.fixed_rows.all()]
         else:
@@ -103,7 +121,12 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
                     "section_code": grid.section.section_code, "label": f"{grid.title} requires at least {grid.min_rows} row(s)",
                 })
         for row_id in row_ids:
-            for column in required_columns:
+            for column in columns:
+                value = grid_values.get((grid.id, row_id, column.id))
+                if not _is_value_complete(value):
+                    blank_indicator_count += 1
+                if column not in required_columns:
+                    continue
                 required_total += 1
                 section_required[grid.section.section_code] += 1
                 value = grid_values.get((grid.id, row_id, column.id))
@@ -179,7 +202,7 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
     return {
         "completion_pct": completion_pct,
         "can_submit": not blockers,
-        "missing_indicator_count": len(completeness_warnings),
+        "missing_indicator_count": blank_indicator_count,
         # Compatibility field retained for existing clients; it now describes
         # requested indicators that are blank, not workflow blockers.
         "missing_required_count": len(completeness_warnings),

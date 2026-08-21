@@ -47,7 +47,9 @@ def _aggregate_operator_series(series_items, periods):
 
 def dataset_for_user(dataset, user):
     """Return dashboard data with source/detail information appropriate to the actor."""
-    privileged = getattr(user, "role", "") in {"NCA_ADMIN", "NCA_OFFICER"}
+    role = getattr(user, "role", "")
+    privileged = role in {"NCA_ADMIN", "NCA_OFFICER"}
+    provider = role.startswith("PROVIDER_")
     result = deepcopy(dataset)
     if privileged:
         return result
@@ -97,6 +99,11 @@ def dataset_for_user(dataset, user):
         # Composition series are normally operator/provider shares and therefore
         # are intentionally excluded from non-NCA responses.
         chart["shareSeries"] = []
+    if provider:
+        overview_ids = set(result.get("industryOverview", {}).get("chartIds", []))
+        result["charts"] = [chart for chart in result.get("charts", []) if chart.get("id") in overview_ids]
+        result["sectors"] = []
+        result["providerView"] = True
     return result
 
 

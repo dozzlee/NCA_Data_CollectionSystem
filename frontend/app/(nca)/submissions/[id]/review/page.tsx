@@ -54,7 +54,7 @@ function ValueDisplay({ value, unit }: { value?:ValueItem; unit?:string }) {
 }
 
 function isNumericType(type?: string) {
-  return !!type && /(?:number|integer|decimal|numeric|float|percent|currency|count|amount)/i.test(type);
+  return type === "number" || type === "currency" || type === "percentage";
 }
 
 function changeLabel(current: string | undefined, previous: string | null | undefined) {

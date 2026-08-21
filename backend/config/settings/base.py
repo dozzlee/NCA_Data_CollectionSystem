@@ -45,6 +45,11 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
+# Use project-specific cookie names so legacy localhost sessions from earlier
+# authentication implementations cannot conflict with this application.
+SESSION_COOKIE_NAME = "nca_sessionid"
+CSRF_COOKIE_NAME = "nca_csrftoken"
+
 ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [

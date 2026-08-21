@@ -293,7 +293,7 @@ class ExpectedSubmissionListView(generics.ListAPIView):
     ordering_fields = ["period__due_at", "workflow_status", "due_state"]
 
     def get_queryset(self):
-        return expected_submissions_for_user(self.request.user).select_related(
+        return expected_submissions_for_user(self.request.user).exclude(workflow_status="ARCHIVED").select_related(
             "provider", "form_template", "period", "assigned_officer"
         )
 
@@ -1598,6 +1598,8 @@ class IndustryDashboardExportView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        if request.user.role.startswith("PROVIDER_"):
+            return Response({"detail": "Dashboard export is not available to provider accounts."}, status=403)
         if request.query_params.get("format", "xlsx").lower() != "xlsx":
             return Response({"detail": "Only aggregate XLSX export is available."}, status=400)
         from openpyxl import Workbook

@@ -33,7 +33,7 @@ const BASE_NAV = [
 
 // System Admin only
 const ADMIN_NAV = [
-  { href: "/forms",  label: "Form Builder", icon: FormInput },
+  { href: "/forms",  label: "Forms", icon: FormInput },
   { href: "/users",  label: "Users",        icon: Users },
   { href: "/data-requests", label: "Data Requests", icon: ClipboardList },
   { href: "/governance", label: "Production Readiness", icon: ShieldCheck },
@@ -41,7 +41,7 @@ const ADMIN_NAV = [
 ];
 
 const OFFICER_NAV = [
-  { href: "/forms",  label: "Form Builder", icon: FormInput },
+  { href: "/forms",  label: "Forms", icon: FormInput },
   { href: "/governance", label: "Production Readiness", icon: ShieldCheck },
   { href: "/support", label: "Support Queue", icon: LifeBuoy },
 ];

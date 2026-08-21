@@ -367,6 +367,7 @@ function SectionContent({
                   correctionInstructions={correctionItems.filter((item) => item.status === "OPEN" && item.target_type === "FIELD" && String(item.target_id) === String(field.id)).map((item) => item.instruction)}
                   onBlur={() => { if (dirty && !saving && !conflict) void handleSave(); }}
                   previousValue={previousValues[`field:${section.section_code}:${field.field_code}`.toLowerCase()]}
+                  submissionId={submissionId}
                 />
               </div>
             );
@@ -659,6 +660,13 @@ export default function FormEntryPage() {
         </div>
 
         <div className="flex gap-2 shrink-0">
+          {completion && (isDataEntry || isApprover) && (
+            <div className="self-center rounded-lg border border-[#dce3e9] bg-white px-3 py-2 text-right text-[11px] text-[#5e6269]" aria-live="polite">
+              <span className="font-semibold text-[#191c1e]">{completion.missing_indicator_count}</span>{" "}
+              blank indicator{completion.missing_indicator_count === 1 ? "" : "s"}
+              {completion.blocking_issues.length > 0 && <span className="ml-2 font-semibold text-red-700">· {completion.blocking_issues.length} error{completion.blocking_issues.length === 1 ? "" : "s"}</span>}
+            </div>
+          )}
           {/* DATA ENTRY: can submit draft to approver */}
           {isDataEntry && ["NOT_STARTED", "DRAFT", "PROVIDER_CHANGES_REQUESTED"].includes(expected.workflow_status) && (
             <button
@@ -676,7 +684,10 @@ export default function FormEntryPage() {
             <>
               <button
                 onClick={() => {
-                  setCorrectionTargets([`SECTION:${activeSection || sections[0]?.section_code || ""}`]);
+                  const sectionCode = activeSection || sections[0]?.section_code || "";
+                  setActionError("");
+                  setCorrectionReason("");
+                  setCorrectionTargets(sectionCode ? [`SECTION:${sectionCode}`] : []);
                   setCorrectionOpen(true);
                 }}
                 className="flex items-center gap-2 rounded-[8px] border border-[#c3c6d0] px-4 py-2.5 text-[13px] font-medium text-[#43474f] hover:bg-[#f2f4f6] transition-colors"
@@ -729,16 +740,29 @@ export default function FormEntryPage() {
           </div>
           <div className="mt-3 flex justify-end gap-2">
             <button type="button" onClick={() => setCorrectionOpen(false)} className="rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[12px]">Cancel</button>
-            <button type="button" disabled={!correctionReason.trim() || correctionTargets.length === 0}
+            <button type="button" disabled={!correctionReason.trim() || correctionTargets.length === 0 || !submission?.id}
               onClick={async () => {
-                await api.post(`/submissions/${submission?.id}/provider-review/request-correction/`, {
-                  reason: correctionReason,
-                  targets: correctionTargets.map((target) => { const separator = target.indexOf(":"); return { type:target.slice(0, separator), id:target.slice(separator + 1), instruction: correctionReason }; }),
-                });
-                setCorrectionOpen(false); setCorrectionReason(""); await refreshProviderWorkflow();
+                if (!submission?.id) return;
+                try {
+                  setActionError("");
+                  await api.post(`/submissions/${submission.id}/provider-review/request-correction/`, {
+                    reason: correctionReason.trim(),
+                    targets: correctionTargets.map((target) => {
+                      const separator = target.indexOf(":");
+                      return { type: target.slice(0, separator), id: target.slice(separator + 1), instruction: correctionReason.trim() };
+                    }),
+                  });
+                  setCorrectionOpen(false);
+                  setCorrectionReason("");
+                  setCorrectionTargets([]);
+                  await refreshProviderWorkflow();
+                } catch (error) {
+                  setActionError(error instanceof ApiError ? error.message : "The correction request could not be sent. Please retry.");
+                }
               }}
               className="rounded-[8px] bg-[#002d5b] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">Send correction request</button>
           </div>
+          {actionError && <p role="alert" className="mt-3 text-xs text-red-700">{actionError}</p>}
         </div>
       )}
 

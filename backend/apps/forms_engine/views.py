@@ -477,7 +477,7 @@ def _assignment_preview(form, provider_ids, *, mode, period=None, override_reaso
         elif duplicate:
             blocking_reason = "This exact form version has already been sent for the selected period."
         elif mismatch and not override_reason.strip():
-            blocking_reason = "A mismatch override reason is required."
+            blocking_reason = "An additional assignment reason is required."
         rows.append({
             "provider_id": provider.id, "provider_name": provider.registered_name,
             "provider_sector": provider.sector, "provider_category": provider.category,
@@ -580,7 +580,7 @@ class FormAssignmentListCreateView(APIView):
             }, status=409)
         mismatches = [row for row in selected_rows if row["mismatch"]]
         if mismatches and not override_reason:
-            return Response({"detail": "A reason is required to assign this form across a sector or provider-type mismatch.", "mismatches": mismatches}, status=409)
+            return Response({"detail": "An additional assignment reason is required for one or more selected providers.", "mismatches": mismatches}, status=409)
         obligations_created, duplicates, recurring_schedules_created = 0, 0, 0
         obligation_references = []
         recurring_references = []

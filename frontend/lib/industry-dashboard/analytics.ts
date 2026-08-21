@@ -91,7 +91,7 @@ function transformSeries(
   granularity: Granularity
 ): IndicatorSeries {
   if (mode === "absolute") return series;
-  const yearOffset = granularity === "quarterly" ? 4 : 1;
+  const yearOffset = granularity === "monthly" ? 12 : granularity === "quarterly" ? 4 : 1;
   const first = series.values.find((point) => point.value !== null)?.value ?? null;
 
   return {
@@ -158,6 +158,7 @@ export function prepareSeries(
     trendMode: TrendMode;
   }
 ) {
+  if (options.granularity === "monthly") return [];
   const selected = selectChartSeries(
     chart,
     options.shareMode,
@@ -178,6 +179,7 @@ export function buildChartData(
   range: { start: string; end: string },
   granularity: Granularity
 ) {
+  if (granularity === "monthly") return [];
   const startIndex =
     granularity === "quarterly" ? periodIndex(range.start) : periodYear(range.start);
   const endIndex =

@@ -387,6 +387,27 @@ class WorksheetWorkbookGroupingTests(TestCase):
         self.assertEqual(len(first["sections"][0]["fields"]), 26)
         self.assertEqual(first, second)
 
+    def test_data_entry_heading_creates_grid_with_only_blank_columns_editable(self):
+        workbook = Workbook(); sheet = workbook.active; sheet.title = "ISP Locations"
+        sheet.append(["Industry Data", "Definitions", "Data Type", "User Input"])
+        sheet.append(["8.3 Regional PoPs (Data Entry)", None, None, None])
+        sheet.append(["No.", "Region", "Number of PoPs", "Notes"])
+        sheet.append([1, "Ahafo", None, None])
+        sheet.append([2, "Ashanti", None, None])
+        sheet.append([None, None, None, None])
+        sheet.append(["Total providers", "Count of providers", "Number", None])
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "data-entry-table.xlsx"; workbook.save(path)
+            normal, _ = parse_workbook(path)
+            streamed, _ = _parse_workbook_streaming(path)
+        grid = normal["sections"][0]["grids"][0]
+        self.assertEqual(grid["title"], "8.3 Regional PoPs")
+        self.assertEqual(grid["fixed_rows"], ["1 | Ahafo", "2 | Ashanti"])
+        self.assertEqual([column["label"] for column in grid["columns"]], ["Number of PoPs", "Notes"])
+        self.assertNotIn("No.", [column["label"] for column in grid["columns"]])
+        self.assertNotIn("Region", [column["label"] for column in grid["columns"]])
+        self.assertEqual(streamed["sections"], normal["sections"])
+
     def test_metadata_types_options_units_and_unknown_type_warning(self):
         workbook = Workbook(); sheet = workbook.active; sheet.title = "Traffic"
         sheet.append(["Indicator", "Definitions", "Data Type", "Unit", "Required", "Options"])

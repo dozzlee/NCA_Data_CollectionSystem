@@ -184,7 +184,7 @@ export type Frequency = "MONTHLY" | "QUARTERLY" | "SEMI_ANNUAL" | "ANNUAL";
 export type FieldType =
   | "text" | "number" | "currency" | "percentage" | "date"
   | "boolean" | "select" | "multiselect" | "textarea"
-  | "coordinate" | "formula" | "declaration";
+  | "coordinate" | "formula" | "declaration" | "attachment";
 
 export interface FormTemplate {
   id: number;
