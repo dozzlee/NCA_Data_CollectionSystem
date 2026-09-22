@@ -38,7 +38,7 @@
   --radius-pill:          9999px;
 
   /* Institutional glass surfaces use the existing NCA palette. */
-  --workspace-background: radial-gradient(circle at 12% 8%, rgba(39, 95, 165, 0.08), transparent 34%), linear-gradient(135deg, #f7f9fb 0%, #eef3f8 100%);
+  --workspace-background: #f7f9fb;
   --glass-surface-strong: rgba(255, 255, 255, 0.9);
   --glass-border: rgba(0, 45, 91, 0.12);
   --glass-blur: 12px;
@@ -74,12 +74,17 @@ body {
 
 .workspace-background { background: var(--workspace-background); }
 .workspace-header {
-  background: var(--glass-surface-strong);
+  background: #fff;
   border-color: var(--glass-border);
-  box-shadow: 0 4px 18px rgba(0, 45, 91, 0.06);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
+  box-shadow: 0 3px 14px rgba(0, 45, 91, 0.04);
 }
+.dashboard-surface {
+  background: #fff;
+  border: 1px solid rgba(0, 45, 91, 0.11);
+  border-radius: 16px;
+}
+.dashboard-surface-interactive { transition: background-color var(--glass-transition), border-color var(--glass-transition); }
+.dashboard-surface-interactive:hover { background: #f7f9fb; border-color: rgba(0, 102, 204, 0.3); }
 .workspace-sidebar {
   background: linear-gradient(180deg, rgba(0, 45, 91, 0.95), rgba(0, 24, 54, 0.98));
   border-right: 1px solid rgba(255, 255, 255, 0.14);

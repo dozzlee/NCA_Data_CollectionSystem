@@ -38,8 +38,7 @@ function StatCard({
   loading?: boolean;
 }) {
   return (
-    <div className="rounded-[16px] bg-white border border-[#e6e8ea] p-5 flex flex-col gap-4"
-      style={{ boxShadow: "0 2px 8px rgba(0,45,91,0.06)" }}>
+    <div className="dashboard-surface p-5 flex flex-col gap-4">
       <div className="flex items-start justify-between">
         <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-[#737780]">{label}</p>
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px]"
@@ -66,8 +65,7 @@ function StatCard({
 
 function ChartCard({ title, children, className = "" }: { title: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className={`rounded-[16px] bg-white border border-[#e6e8ea] p-5 flex flex-col gap-4 ${className}`}
-      style={{ boxShadow: "0 2px 8px rgba(0,45,91,0.06)" }}>
+    <div className={`dashboard-surface p-5 flex flex-col gap-4 ${className}`}>
       <p className="text-[13px] font-semibold text-[#191c1e]">{title}</p>
       {children}
     </div>
@@ -150,8 +148,8 @@ export default function DashboardPage() {
     <div className="space-y-6">
 
       {/* Page header */}
-      <div>
-        <h1 className="text-[22px] font-semibold text-[#191c1e]" style={{ letterSpacing: "-0.01em" }}>
+      <div className="border-b border-[#dfe5eb] pb-5 pt-2">
+        <h1 className="text-[28px] font-semibold tracking-[-0.025em] text-[#001836]">
           Submission Overview
         </h1>
         <p className="text-[13px] text-[#737780] mt-0.5">
