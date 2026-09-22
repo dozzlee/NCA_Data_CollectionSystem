@@ -13,8 +13,9 @@ def dashboard_dataset_path():
 
 
 def load_dashboard_dataset():
+    from .approved_dashboard import overlay_approved_submissions
     with dashboard_dataset_path().open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+        return overlay_approved_submissions(json.load(handle))
 
 
 def _aggregate_operator_series(series_items, periods):
@@ -68,6 +69,7 @@ def dataset_for_user(dataset, user):
     result["commonElements"] = []
 
     for chart in result.get("charts", []):
+        chart.pop("approvedSources", None)
         chart["sourceWorkbook"] = ""
         chart["sourceSheet"] = ""
         chart["placementContexts"] = []

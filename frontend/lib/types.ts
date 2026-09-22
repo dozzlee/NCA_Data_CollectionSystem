@@ -97,6 +97,9 @@ export interface DataRequestItem {
   purpose: string;
   requested_format: "CSV" | "XLSX" | "PDF";
   scope: DataRequestScope;
+  dataset_names: string[];
+  period_names: string[];
+  provider_names: string[];
   status: DataRequestStatus;
   reviewer_name: string | null;
   expected_delivery_at: string | null;
@@ -122,6 +125,8 @@ export interface CatalogForm {
   id: number; code: string; name: string; description: string; sector: string;
   provider_category: string; frequency: string; version: string;
   available_period_ids: number[];
+  applicable_provider_ids: number[];
+  applicable_provider_ids_by_period: Record<string, number[]>;
   sections: Array<{ id: number; code: string; title: string; description: string; fields: CatalogField[]; grids: CatalogGrid[] }>;
 }
 export interface DataCatalog {
@@ -330,6 +335,9 @@ export type WorkflowStatus =
   | "UNDER_REVIEW" | "CORRECTION_REQUESTED" | "RESUBMITTED"
   | "APPROVED" | "REJECTED" | "ARCHIVED";
 
+export type ProviderFormStatus = "IN_PROGRESS" | "AWAITING_APPROVAL" | "CORRECTIONS_REQUIRED" | "CLOSED";
+export type RegulatoryStatus = "DRAFT" | "SUBMITTED" | "UNDER_REVIEW" | "RETURNED_FOR_CORRECTION" | "APPROVED" | "REJECTED";
+
 export type DueState =
   | "NOT_OPEN" | "OPEN" | "DUE_SOON" | "DUE_TODAY" | "OVERDUE" | "CLOSED";
 
@@ -369,6 +377,8 @@ export interface ExpectedSubmission {
   effective_due_at: string;
   due_at_override: string | null;
   workflow_status: WorkflowStatus;
+  provider_status: ProviderFormStatus;
+  form_reference: string;
   due_state: DueState;
   assigned_officer: number | null;
   assigned_officer_name: string | null;
@@ -382,6 +392,8 @@ export interface ExpectedSubmission {
   submitted_at: string | null;
   correction_count: number;
   open_correction_count: number;
+  open_compliance_flag_count: number;
+  compliance_flag_types: string[];
   receipt_available: boolean;
   receipt_reference: string | null;
   permitted_actions: string[];
@@ -390,7 +402,138 @@ export interface ExpectedSubmission {
   data_entry_team: Array<{ id: string; name: string; email: string }>;
   last_data_entry_editor: { id: string; name: string; email: string; edited_at: string } | null;
   sent_at: string;
+  latest_message: { subject: string; preview: string; body: string; event_type: string; created_at: string } | null;
+  latest_action: { code: string; label: string; from_status: string; to_status: string } | null;
+  latest_action_at: string | null;
+  latest_communication_at: string | null;
+  penalty_amount_ghs: string;
+  penalty_reference: string;
+  penalty_note: string;
+  penalty_updated_by: string | null;
+  penalty_updated_at: string | null;
   created_at: string;
+}
+
+export interface FormalSubmission {
+  id: number;
+  expected: number;
+  submission_reference: string;
+  form_reference: string;
+  version: number;
+  provider_name: string;
+  form_code: FormCode;
+  form_name: string;
+  form_version: string;
+  period_name: string;
+  submitted_at: string | null;
+  regulatory_status: RegulatoryStatus;
+  provider_display_status?: RegulatoryStatus | "FLAGGED";
+  workflow_status: RegulatoryStatus;
+  responsible_approver: string | null;
+  receipt_available: boolean;
+  receipt_reference: string | null;
+  latest_message: { subject: string; preview: string; body: string; event_type: string; created_at: string } | null;
+  latest_action: { code: string; label: string; from_status: string; to_status: string } | null;
+  latest_action_at: string | null;
+  latest_communication_at: string | null;
+  form_task_id?: number;
+  latest_submission_id?: number;
+  formal_versions?: Array<{id:number;version:number;submission_reference:string;regulatory_status:RegulatoryStatus;submitted_at:string|null}>;
+}
+
+export type ExcelImportMatchStatus = "MATCHED" | "UNMATCHED" | "AMBIGUOUS" | "DUPLICATE" | "INVALID" | "SKIPPED";
+
+export interface SubmissionExcelImportMatch {
+  id: number;
+  source_locator: string;
+  source_sheet: string;
+  source_row: number;
+  indicator_code: string;
+  indicator_name: string;
+  definition: string;
+  raw_value: string | number | boolean | null;
+  converted_value: string;
+  status: ExcelImportMatchStatus;
+  score: string;
+  evidence: Record<string, unknown>;
+  target_type: "FIELD" | "GRID_CELL" | "";
+  target_key: string;
+  field: number | null;
+  grid: number | null;
+  grid_row_id: string;
+  grid_column: number | null;
+  target_label: string;
+  current_value: string;
+  will_overwrite: boolean;
+  user_confirmed: boolean;
+}
+
+export interface SubmissionExcelImport {
+  id: number;
+  submission: number;
+  status: "SCANNING" | "PARSING" | "READY" | "IMPORTING" | "IMPORTED" | "FAILED";
+  parser_version: string;
+  matcher_version: string;
+  layout_fingerprint: string;
+  source_revision: number;
+  summary: {
+    detected?: number;
+    counts?: Partial<Record<ExcelImportMatchStatus, number>>;
+    missing_required?: number;
+    warnings?: Array<{sheet:string;row?:number;message:string}>;
+    missing_targets?: Array<{target_key:string;label:string;required:boolean}>;
+    unresolved_populated?: Array<{source_locator:string;indicator:string;status:ExcelImportMatchStatus}>;
+  };
+  errors: Array<{code:string;message:string}>;
+  imported_manifest: {
+    match_ids?: number[];
+    changed_targets?: number;
+    unresolved_populated?: Array<{id:number;source_locator:string;indicator_name:string;status:ExcelImportMatchStatus}>;
+    skipped_populated?: Array<{id:number;source_locator:string;indicator_name:string}>;
+    reconciled?: boolean;
+  };
+  file_name: string;
+  file_size: number;
+  sha256: string;
+  scan_status: string;
+  created_at: string;
+  updated_at: string;
+    resulting_revision: number | null;
+    matches: SubmissionExcelImportMatch[];
+    matches_meta: { count:number; page:number; page_size:number; pages:number };
+  }
+
+export interface SubmissionCommunication {
+  id: number;
+  event_type: string;
+  channel: "SYSTEM" | "EMAIL" | "BOTH";
+  direction: "OUTBOUND" | "INBOUND" | "INTERNAL";
+  sender: string | null;
+  sender_name: string;
+  recipients: Array<{id?:string;email:string;name:string;role?:string}>;
+  subject: string;
+  body: string;
+  from_status: string;
+  to_status: string;
+  attachments: Array<{type:string;id:number;name:string;sha256:string;size:number}>;
+  delivery_status: string | null;
+  created_at: string;
+  form_code?: string;
+  form_name?: string;
+  period_name?: string;
+  submission_reference?: string;
+  submission_version?: number | null;
+  email_handoff?: { id:number; event:number; recipients:Array<{email:string;name?:string}>; subject:string; body:string; status:"AVAILABLE"|"OPENED"|"DEFERRED"; opened_at:string|null; deferred_at:string|null } | null;
+}
+
+export interface SubmissionComplianceFlag {
+  id: number;
+  flag_type: string;
+  description: string;
+  missing_field_count: number;
+  completion_percentage: number;
+  status: "OPEN" | "ACKNOWLEDGED" | "IN_PROGRESS" | "RESOLVED";
+  created_at?: string;
 }
 
 export interface FormWorkbookImport {
@@ -454,6 +597,38 @@ export interface ProviderWorkspaceSummary {
   nca_corrections: number;
   returned_to_data_entry: number;
   recently_submitted: number;
+  open_compliance_flags: number;
+  flagged_submissions: number;
+  penalty_amount_ghs: string;
+  penalty_obligation_count: number;
+}
+
+export interface AuditEvent {
+  id: number;
+  user_email: string;
+  role: string;
+  organization: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  before_value: unknown;
+  after_value: unknown;
+  ip_address: string | null;
+  timestamp: string;
+  previous_hash: string;
+  event_hash: string;
+}
+
+export interface AuditAnchor {
+  id: number;
+  anchor_date: string;
+  first_event_id: number | null;
+  last_event_id: number | null;
+  event_count: number;
+  root_hash: string;
+  signature: string;
+  exported_reference: string;
+  created_at: string;
 }
 
 export interface SubmissionNotificationSummary {

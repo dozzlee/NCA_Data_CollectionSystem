@@ -1,20 +1,31 @@
 from django.conf import settings
+from django.contrib.auth.password_validation import validate_password
 from ipaddress import ip_address, ip_network
 from django.middleware.csrf import get_token
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect
 from django.utils import timezone
+import hashlib
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.exceptions import TokenError
 
 from apps.audit.services import record_audit
 from apps.users.permissions import IsSystemAdmin
 from .models import User, Organization, NCADivision
 from .serializers import LoginSerializer, UserSerializer, NCADivisionSerializer
+
+
+
+def invalidate_refresh_tokens(user):
+    """Revoke every refresh session issued to a user."""
+    for outstanding in OutstandingToken.objects.filter(user=user):
+        BlacklistedToken.objects.get_or_create(token=outstanding)
 
 
 def get_client_ip(request):
@@ -41,6 +52,13 @@ class LoginView(APIView):
                 record_audit(user=candidate, action="USER_LOGIN_FAILED", entity_type="User", entity_id=candidate.id,
                     after={"locked": bool(candidate.locked_until and candidate.locked_until > timezone.now())},
                     ip_address=get_client_ip(request))
+            else:
+                attempted = str(request.data.get("email") or "").strip().lower()
+                record_audit(
+                    user=None, action="USER_LOGIN_FAILED", entity_type="User",
+                    entity_id=f"unknown:{hashlib.sha256(attempted.encode('utf-8')).hexdigest()[:16]}",
+                    after={"reason": "unknown_or_invalid_account"}, ip_address=get_client_ip(request),
+                )
             response_status = (
                 status.HTTP_401_UNAUTHORIZED
                 if "non_field_errors" in serializer.errors
@@ -101,7 +119,12 @@ class CookieTokenRefreshView(APIView):
         if not raw_refresh:
             return Response({"detail": "Refresh session is unavailable."}, status=401)
         serializer = TokenRefreshSerializer(data={"refresh": raw_refresh})
-        serializer.is_valid(raise_exception=True)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except TokenError:
+            response = Response({"detail": "Refresh session has expired."}, status=401)
+            clear_auth_cookies(response)
+            return response
         response = Response({"detail": "Session refreshed."})
         set_auth_cookies(response, serializer.validated_data["access"], serializer.validated_data.get("refresh", raw_refresh))
         return response
@@ -178,7 +201,6 @@ class AdminPasswordResetView(APIView):
     def post(self, request, pk):
         user = generics.get_object_or_404(User, pk=pk)
         password = str(request.data.get("temporary_password", ""))
-        from django.contrib.auth.password_validation import validate_password
         try:
             validate_password(password, user)
         except Exception as exc:
@@ -188,6 +210,7 @@ class AdminPasswordResetView(APIView):
         user.failed_login_attempts = 0
         user.locked_until = None
         user.save(update_fields=["password", "must_change_password", "failed_login_attempts", "locked_until"])
+        invalidate_refresh_tokens(user)
         record_audit(user=request.user, action="USER_TEMPORARY_PASSWORD_ISSUED", entity_type="User", entity_id=user.id)
         return Response({"detail": "Temporary password issued. The user must change it at next sign-in."})
 
@@ -200,7 +223,6 @@ class ChangePasswordView(APIView):
         new_password = str(request.data.get("new_password", ""))
         if not request.user.check_password(current):
             return Response({"detail": "Current password is incorrect."}, status=400)
-        from django.contrib.auth.password_validation import validate_password
         try:
             validate_password(new_password, request.user)
         except Exception as exc:
@@ -208,6 +230,7 @@ class ChangePasswordView(APIView):
         request.user.set_password(new_password)
         request.user.must_change_password = False
         request.user.save(update_fields=["password", "must_change_password"])
+        invalidate_refresh_tokens(request.user)
         record_audit(user=request.user, action="USER_PASSWORD_CHANGED", entity_type="User", entity_id=request.user.id)
         return Response({"detail": "Password changed."})
 

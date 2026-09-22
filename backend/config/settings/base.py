@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     "apps.feedback",
     "apps.data_requests",
     "apps.governance",
+    "apps.reports",
 ]
 
 MIDDLEWARE = [
@@ -149,7 +150,7 @@ LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10MB in memory
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
 MAX_KMZ_UPLOAD_MB = 50
-MAX_EXCEL_BACKUP_MB = 50
+MAX_EXCEL_BACKUP_MB = 20
 MALWARE_SCANNER_REQUIRED = os.environ.get("MALWARE_SCANNER_REQUIRED", "False") == "True"
 CLAMAV_HOST = os.environ.get("CLAMAV_HOST", "clamav")
 CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", 3310))
@@ -175,7 +176,6 @@ AUDIT_HMAC_KEY = os.environ.get("AUDIT_HMAC_KEY", "")
 PORTAL_URL = os.environ.get("PORTAL_URL", "http://127.0.0.1:3001")
 APPROVED_PENALTY_REFERENCE = os.environ.get("APPROVED_PENALTY_REFERENCE", "")
 IMMUTABLE_AUDIT_STORAGE_REFERENCE = os.environ.get("IMMUTABLE_AUDIT_STORAGE_REFERENCE", "")
-MAIL_PROVIDER_CONFIGURED = os.environ.get("MAIL_PROVIDER_CONFIGURED", "False") == "True"
 RECOVERY_STORAGE_CONFIGURED = os.environ.get("RECOVERY_STORAGE_CONFIGURED", "False") == "True"
 UAT_SIGNOFF_REFERENCE = os.environ.get("UAT_SIGNOFF_REFERENCE", "")
 INDUSTRY_DASHBOARD_DATASET = os.environ.get("INDUSTRY_DASHBOARD_DATASET", "")

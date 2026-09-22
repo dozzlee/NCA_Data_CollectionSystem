@@ -14,7 +14,7 @@ export const WORKFLOW_LABELS: Record<WorkflowStatus, string> = {
   PROVIDER_RESUBMITTED: "Resubmitted to Approver",
   SUBMITTED: "Submitted",
   UNDER_REVIEW: "Under Review",
-  CORRECTION_REQUESTED: "Correction Requested",
+  CORRECTION_REQUESTED: "Flag Requested",
   RESUBMITTED: "Resubmitted",
   APPROVED: "Approved",
   REJECTED: "Rejected",
@@ -61,6 +61,20 @@ export function formatDateTime(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/** Compact transmission timestamp used in submission registers: 9/2/2026 10:40 PM. */
+export function formatTransmissionDateTime(iso: string): string {
+  return new Date(iso)
+    .toLocaleString("en-US", {
+      month: "numeric",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+    .replace(",", "");
 }
 
 export function getWorkflowStatusColor(status: WorkflowStatus): string {

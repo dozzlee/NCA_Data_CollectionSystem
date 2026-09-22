@@ -81,8 +81,8 @@ export default function LoginPage() {
           <div className="grid grid-cols-1 gap-3">
             {[
               { label: "Manual web forms", desc: "Grouped sections, draft saving, required field validation" },
-              { label: "Traceable review", desc: "Field statuses, correction tracking, audit trail" },
-              { label: "Compliance monitoring", desc: "Due states, overdue alerts, email follow-up" },
+              { label: "Traceable review", desc: "Field statuses, flag tracking, audit trail" },
+              { label: "Compliance monitoring", desc: "Due states, overdue alerts and traceable portal correspondence" },
             ].map(({ label, desc }) => (
               <div key={label} className="flex items-start gap-3 rounded-[10px] border border-white/10 bg-white/05 px-4 py-3">
                 <div className="mt-0.5 h-2 w-2 rounded-full bg-[#0066cc] shrink-0" />
@@ -132,7 +132,7 @@ export default function LoginPage() {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label className="block text-[13px] font-medium text-[#191c1e]">Password</label>
-                <span className="text-[11px] text-[#737780]">Contact your administrator for an audited reset.</span>
+                <span className="text-[11px] text-[#737780]">Contact your administrator to reset it.</span>
               </div>
               <div className="relative">
                 <input

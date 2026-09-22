@@ -107,7 +107,8 @@ def run_validation(submission, scope="FULL"):
                     continue
                 calculated = _expression(expression, values)
                 obj, _ = SubmissionValue.objects.update_or_create(submission=submission, field=rule.field,
-                    defaults={"value": str(calculated), "value_status": "SYSTEM_CALCULATED"})
+                    defaults={"value": str(calculated), "value_status": "SYSTEM_CALCULATED",
+                              "value_source": "SYSTEM", "source_reference": f"validation-rule:{rule.id}"})
                 values[rule.field_id] = obj.value
             elif rule.rule_type == "COMPARISON":
                 left_value = values.get(int(params.get("left_field", rule.field_id)), "")

@@ -68,6 +68,8 @@ interface SubmissionValue {
   value: string;
   value_status: string;
   explanation?: string;
+  value_source?: "MANUAL" | "EXCEL_IMPORT" | "SYSTEM";
+  source_reference?: string;
 }
 
 export function useFormTemplate(id: number) {
@@ -148,7 +150,7 @@ export function useStartSubmission() {
 export function useSubmitForApproval(submissionId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post(`/submissions/${submissionId}/submit-for-approval/`),
+    mutationFn: () => api.post<{event_id:number;internal_notification_created:boolean}>(`/submissions/${submissionId}/submit-for-approval/`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["submission", submissionId] });
       qc.invalidateQueries({ queryKey: ["provider-review-data", submissionId] });

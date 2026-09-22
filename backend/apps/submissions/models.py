@@ -1,5 +1,6 @@
 import uuid
 import re
+from datetime import date
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -18,6 +19,22 @@ WORKFLOW_STATUSES = [
     ("APPROVED", "Approved"),
     ("REJECTED", "Rejected"),
     ("ARCHIVED", "Archived"),
+]
+
+PROVIDER_WORKFLOW_STATUSES = [
+    ("IN_PROGRESS", "In Progress"),
+    ("AWAITING_APPROVAL", "Awaiting Approval"),
+    ("CORRECTIONS_REQUIRED", "Corrections Required"),
+    ("CLOSED", "Closed"),
+]
+
+REGULATORY_STATUSES = [
+    ("DRAFT", "Draft"),
+    ("SUBMITTED", "Submitted"),
+    ("UNDER_REVIEW", "Under Review"),
+    ("RETURNED_FOR_CORRECTION", "Returned for Correction"),
+    ("APPROVED", "Approved"),
+    ("REJECTED", "Rejected"),
 ]
 
 DUE_STATES = [
@@ -72,14 +89,29 @@ class ReportingPeriod(models.Model):
         return self.name
 
     def clean(self):
+        if self.due_at and self.opens_at and self.due_at <= self.opens_at:
+            raise ValidationError({"due_at": "The due date must be after the opening date."})
         if self.frequency == "MONTHLY" and not self.month:
             raise ValidationError({"month": "Month is required for a monthly period."})
         if self.month and (self.frequency != "MONTHLY" or not 1 <= self.month <= 12):
             raise ValidationError({"month": "Month must be 1-12 and is only valid for monthly periods."})
+        if self.frequency == "MONTHLY" and self.month and self.due_at:
+            next_year = self.year + 1 if self.month == 12 else self.year
+            next_month = 1 if self.month == 12 else self.month + 1
+            if self.due_at.date() != date(next_year, next_month, 10):
+                raise ValidationError({
+                    "due_at": "Monthly periods must be due on the 10th of the following month."
+                })
         if self.frequency == "QUARTERLY" and not self.quarter:
             raise ValidationError({"quarter": "Quarter is required for a quarterly period."})
         if self.quarter and (self.frequency != "QUARTERLY" or not 1 <= self.quarter <= 4):
             raise ValidationError({"quarter": "Quarter must be 1-4 and is only valid for quarterly periods."})
+        if self.frequency == "SEMI_ANNUAL":
+            expected_date = (6, 30) if self.due_at.month == 6 else (12, 31)
+            if (self.due_at.month, self.due_at.day) != expected_date:
+                raise ValidationError({
+                    "due_at": "Bi-annual periods must be due on 30 June or 31 December."
+                })
 
     def activate(self):
         """Generate ExpectedSubmission records for all assigned provider-form pairs."""
@@ -171,11 +203,23 @@ class ExpectedSubmission(models.Model):
     workflow_status_snapshot = models.CharField(max_length=30, blank=True)
     period = models.ForeignKey(ReportingPeriod, on_delete=models.PROTECT, related_name="expected_submissions")
     workflow_status = models.CharField(max_length=30, choices=WORKFLOW_STATUSES, default="NOT_STARTED")
+    provider_status = models.CharField(
+        max_length=30, choices=PROVIDER_WORKFLOW_STATUSES, default="IN_PROGRESS", db_index=True,
+    )
+    form_reference = models.CharField(max_length=180, unique=True, editable=False)
     due_state = models.CharField(max_length=15, choices=DUE_STATES, default="NOT_OPEN")
     assigned_officer = models.ForeignKey(
         "users.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="assigned_submissions"
     )
     due_at_override = models.DateTimeField(null=True, blank=True)
+    penalty_amount_ghs = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    penalty_reference = models.CharField(max_length=120, blank=True)
+    penalty_note = models.TextField(blank=True)
+    penalty_updated_by = models.ForeignKey(
+        "users.User", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="penalties_updated",
+    )
+    penalty_updated_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     replacement = models.OneToOneField(
         "self", null=True, blank=True, on_delete=models.PROTECT,
@@ -192,11 +236,15 @@ class ExpectedSubmission(models.Model):
     )
 
     @classmethod
-    def create_from_assignment(cls, *, provider, form_template, period, recurring_assignment=None, manual_assignment=None, actor=None):
+    def create_from_assignment(
+        cls, *, provider, form_template, period, recurring_assignment=None,
+        manual_assignment=None, actor=None, message_subject="", message_body="",
+    ):
         expected, created = cls.objects.get_or_create(
             provider=provider, form_template=form_template, period=period,
             defaults={
                 "workflow_status": "NOT_STARTED",
+                "provider_status": "IN_PROGRESS",
                 "recurring_assignment": recurring_assignment,
                 "manual_assignment": manual_assignment,
             },
@@ -205,14 +253,53 @@ class ExpectedSubmission(models.Model):
             from .workflow import emit_submission_event
             submission = Submission.objects.create(expected=expected, version=1)
             expected.refresh_due_state()
-            emit_submission_event(
+            event = emit_submission_event(
                 submission=submission, actor=actor, event_type="FORM_ASSIGNED",
-                message=f"{form_template.name} was assigned for {period.name}.",
+                message=message_body or f"{form_template.name} was assigned for {period.name}.",
                 to_status="NOT_STARTED", audience="PROVIDER",
                 notify=["PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER"],
-                title="New form assigned",
+                title=message_subject or "New form assigned",
+                metadata={
+                    "communication_subject": message_subject or "New form assigned",
+                    "communication_body": message_body or f"{form_template.name} was assigned for {period.name}.",
+                },
             )
+            from apps.compliance.communications import create_system_record, queue_automatic_communication
+            create_system_record(submission=submission, event=event)
+            if actor:
+                queue_automatic_communication(
+                    submission=submission, event=event, action="FORM_ASSIGNED", actor=actor,
+                )
         return expected, created
+
+    def build_form_reference(self):
+        period = self.period
+        if period.frequency == "MONTHLY":
+            period_token = f"{period.year}-{period.month:02d}"
+        elif period.frequency == "QUARTERLY":
+            period_token = f"{period.year}-Q{period.quarter}"
+        elif period.frequency == "ANNUAL":
+            period_token = str(period.year)
+        else:
+            period_token = f"{period.year}-SA-{period.id}"
+        template = self.form_template
+        form_code_value = template.form_code if template else self.form_code_snapshot
+        form_code = re.sub(r"[^A-Z0-9-]+", "-", form_code_value.upper()).strip("-")
+        return f"FORM-{form_code}-{self.provider.provider_code}-{period_token}-F{self.id}"
+
+    def save(self, *args, **kwargs):
+        creating = self._state.adding
+        if creating and not self.form_reference:
+            self.form_reference = f"PENDING-{uuid.uuid4().hex}"
+            super().save(*args, **kwargs)
+            self.form_reference = self.build_form_reference()
+            type(self).objects.filter(pk=self.pk).update(form_reference=self.form_reference)
+            return
+        if self.pk:
+            original = type(self).objects.filter(pk=self.pk).values_list("form_reference", flat=True).first()
+            if original and self.form_reference != original:
+                raise ValidationError({"form_reference": "Form references are immutable."})
+        super().save(*args, **kwargs)
 
     def compute_due_state(self):
         now = timezone.now()
@@ -284,6 +371,9 @@ class SubmissionOverride(models.Model):
 class Submission(models.Model):
     expected = models.ForeignKey(ExpectedSubmission, on_delete=models.PROTECT, related_name="versions")
     submission_reference = models.CharField(max_length=180, unique=True, editable=False)
+    regulatory_status = models.CharField(
+        max_length=30, choices=REGULATORY_STATUSES, default="DRAFT", db_index=True,
+    )
     form_schema_snapshot = models.JSONField(default=dict, blank=True)
     form_schema_sha256 = models.CharField(max_length=64, blank=True, editable=False)
     form_schema_snapshot_version = models.PositiveSmallIntegerField(default=1)
@@ -425,6 +515,12 @@ class SubmissionValue(models.Model):
     value = models.TextField(blank=True)
     value_status = models.CharField(max_length=30, choices=FIELD_STATUSES, default="MISSING")
     explanation = models.TextField(blank=True)
+    value_source = models.CharField(
+        max_length=20,
+        choices=[("MANUAL", "Manual entry"), ("EXCEL_IMPORT", "Excel import"), ("SYSTEM", "System calculated")],
+        default="MANUAL",
+    )
+    source_reference = models.CharField(max_length=100, blank=True)
     updated_by = models.ForeignKey("users.User", null=True, on_delete=models.SET_NULL)
     updated_at = models.DateTimeField(auto_now=True)
 

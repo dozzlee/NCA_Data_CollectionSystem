@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.core.mail import send_mail
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -10,7 +11,27 @@ from rest_framework.views import APIView
 from apps.audit.services import record_audit
 from apps.users.models import User
 from apps.users.permissions import IsNCAEditor, CanSendProviderCorrespondence
-from .models import FeedbackItem, SystemIssueEvent, SystemIssueTicket
+from .models import FeedbackItem, FeedbackNotification, SystemIssueEvent, SystemIssueTicket
+
+
+def feedback_data(item):
+    submitter = item.submitted_by
+    return {
+        "id": item.id,
+        "submitted_by": submitter.id if submitter else None,
+        "submitted_by_name": submitter.name if submitter else "Former user",
+        "submitted_by_email": submitter.email if submitter else "",
+        "organization": submitter.organization.name if submitter and submitter.organization else "",
+        "category": item.category,
+        "category_label": item.get_category_display(),
+        "subject": item.subject,
+        "message": item.message,
+        "page_url": item.page_url,
+        "submitted_at": item.submitted_at,
+        "acknowledged": item.acknowledged,
+        "acknowledged_at": item.acknowledged_at,
+        "acknowledged_by_name": item.acknowledged_by.name if item.acknowledged_by else "",
+    }
 
 
 def ticket_data(ticket):
@@ -31,16 +52,69 @@ def ticket_data(ticket):
 
 class FeedbackView(APIView):
     permission_classes = [CanSendProviderCorrespondence]
+
+    def get(self, request):
+        queryset = FeedbackItem.objects.select_related(
+            "submitted_by__organization", "acknowledged_by"
+        )
+        if request.user.role not in {"NCA_ADMIN", "NCA_OFFICER"}:
+            queryset = queryset.filter(submitted_by=request.user)
+        return Response([feedback_data(item) for item in queryset])
+
     def post(self, request):
         data = request.data
-        item = FeedbackItem.objects.create(submitted_by=request.user, category=data.get("category", "GENERAL"),
-            subject=data.get("subject", ""), message=data.get("message", ""), page_url=data.get("page_url", ""))
+        subject = data.get("subject", "").strip()
+        message = data.get("message", "").strip()
+        category = data.get("category", "GENERAL")
+        if not subject or not message:
+            return Response({"detail": "subject and message are required."}, status=400)
+        if category not in dict(FeedbackItem.CATEGORY_CHOICES):
+            return Response({"detail": "Invalid feedback category."}, status=400)
+        item = FeedbackItem.objects.create(submitted_by=request.user, category=category,
+            subject=subject, message=message, page_url=data.get("page_url", ""))
         support_email = getattr(settings, "FEEDBACK_EMAIL", None) or getattr(settings, "SUPPORT_EMAIL", None)
         if support_email:
             send_mail(subject=f"[NCA Feedback] {item.subject}", message=f"From: {request.user.email} ({request.user.role})\nCategory: {item.category}\n\n{item.message}",
                 from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@nca.org.gh"), recipient_list=[support_email], fail_silently=True)
         record_audit(user=request.user, action="FEEDBACK_SUBMITTED", entity_type="FeedbackItem", entity_id=item.id)
-        return Response({"id": item.id, "detail": "Feedback submitted. Thank you."}, status=201)
+        return Response(feedback_data(item), status=201)
+
+
+class FeedbackAcknowledgeView(APIView):
+    permission_classes = [IsNCAEditor]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        item = get_object_or_404(
+            FeedbackItem.objects.select_for_update().select_related(
+                "submitted_by__organization", "acknowledged_by"
+            ),
+            pk=pk,
+        )
+        if not item.acknowledged:
+            item.acknowledged = True
+            item.acknowledged_at = timezone.now()
+            item.acknowledged_by = request.user
+            item.save(update_fields=["acknowledged", "acknowledged_at", "acknowledged_by"])
+            if item.submitted_by_id:
+                FeedbackNotification.objects.get_or_create(
+                    feedback=item,
+                    recipient=item.submitted_by,
+                    defaults={
+                        "title": "Feedback received by NCA",
+                        "message": f'NCA has received your feedback "{item.subject}".',
+                    },
+                )
+            record_audit(
+                user=request.user,
+                action="FEEDBACK_ACKNOWLEDGED",
+                entity_type="FeedbackItem",
+                entity_id=item.id,
+                before={"acknowledged": False},
+                after={"acknowledged": True, "recipient": str(item.submitted_by_id or "")},
+                ip_address=request.META.get("REMOTE_ADDR"),
+            )
+        return Response(feedback_data(item))
 
 
 class SystemIssueView(APIView):

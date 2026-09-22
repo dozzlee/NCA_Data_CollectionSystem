@@ -86,6 +86,8 @@ def audit_transition(*, request, submission, event_type, message, from_status, t
         after={"workflow_status": to_status, "event_id": event.id, **(metadata or {})},
         ip_address=request.META.get("REMOTE_ADDR"),
     )
+    from apps.compliance.communications import finalize_event_communication
+    finalize_event_communication(request=request, submission=submission, event=event)
     return event
 
 
@@ -106,6 +108,7 @@ def clone_for_nca_correction(source_submission):
         version=source_submission.version + 1,
         completion_pct=source_submission.completion_pct,
         supersedes=source_submission,
+        regulatory_status="DRAFT",
     )
     SubmissionValue.objects.bulk_create([
         SubmissionValue(
@@ -117,6 +120,8 @@ def clone_for_nca_correction(source_submission):
             value=value.value,
             value_status=value.value_status,
             explanation=value.explanation,
+            value_source=value.value_source,
+            source_reference=value.source_reference,
             updated_by=value.updated_by,
         )
         for value in source_submission.values.all()

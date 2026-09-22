@@ -29,8 +29,6 @@ SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = "DENY"
 MALWARE_SCANNER_REQUIRED = True
 
-# Provider integration is intentionally disabled until Graph credentials and
-# the approved shared-mailbox configuration are supplied.
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
 unsafe = []

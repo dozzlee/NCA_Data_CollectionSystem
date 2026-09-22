@@ -150,24 +150,24 @@ class Command(BaseCommand):
         periods = []
 
         period_configs = [
-            ('Q1 2024', 2024, 'ANNUAL', date(2024, 1, 1),
+            ('Q1 2024', 2024, 'QUARTERLY', date(2024, 1, 1),
              timezone.make_aware(timezone.datetime(2024, 1, 1)),
              timezone.make_aware(timezone.datetime(2024, 3, 31)), 'CLOSED'),
-            ('Q2 2024', 2024, 'ANNUAL', date(2024, 4, 1),
+            ('Q2 2024', 2024, 'QUARTERLY', date(2024, 4, 1),
              timezone.make_aware(timezone.datetime(2024, 4, 1)),
              timezone.make_aware(timezone.datetime(2024, 6, 30)), 'CLOSED'),
-            ('Q3 2024', 2024, 'ANNUAL', date(2024, 7, 1),
+            ('Q3 2024', 2024, 'QUARTERLY', date(2024, 7, 1),
              timezone.make_aware(timezone.datetime(2024, 7, 1)),
              timezone.make_aware(timezone.datetime(2024, 9, 30)), 'CLOSED'),
-            ('Q4 2024', 2024, 'ANNUAL', date(2024, 10, 1),
+            ('Q4 2024', 2024, 'QUARTERLY', date(2024, 10, 1),
              timezone.make_aware(timezone.datetime(2024, 10, 1)),
              timezone.make_aware(timezone.datetime(2024, 12, 31)), 'ACTIVE'),
-            ('Q1 2025', 2025, 'ANNUAL', date(2025, 1, 1),
+            ('Q1 2025', 2025, 'QUARTERLY', date(2025, 1, 1),
              timezone.make_aware(timezone.datetime(2025, 1, 1)),
              timezone.make_aware(timezone.datetime(2025, 3, 31)), 'ACTIVE'),
             ('July 2026', 2026, 'MONTHLY', date(2026, 7, 1),
              timezone.make_aware(timezone.datetime(2026, 7, 1)),
-             timezone.make_aware(timezone.datetime(2026, 7, 31, 23, 59, 59)), 'ACTIVE'),
+             timezone.make_aware(timezone.datetime(2026, 8, 10, 23, 59, 59)), 'ACTIVE'),
         ]
 
         for p_name, p_year, p_freq, p_eff, p_opens, p_due, p_status in period_configs:
@@ -177,6 +177,7 @@ class Command(BaseCommand):
                     'year': p_year,
                     'frequency': p_freq,
                     'month': p_eff.month if p_freq == 'MONTHLY' else None,
+                    'quarter': ((p_eff.month - 1) // 3 + 1) if p_freq == 'QUARTERLY' else None,
                     'opens_at': p_opens,
                     'due_at': p_due,
                     'status': p_status,
@@ -324,9 +325,9 @@ class Command(BaseCommand):
     def seed_form_templates(self):
         template_data = [
             ('MNO-MONTHLY', 'MNO Monthly Return', 'MNO', 'MONTHLY'),
-            ('DC-ISP06', 'Internet Service Provider Annual Return', 'ISP', 'ANNUAL'),
-            ('DC-TB02', 'Pay TV Broadcasting Annual Return', 'PAY_TV', 'ANNUAL'),
-            ('DC-ITC04', 'Tower Operator Annual Return', 'TOWER_OPERATOR', 'ANNUAL'),
+            ('DC-ISP06', 'Internet Service Provider Bi-Annual Return', 'ISP', 'SEMI_ANNUAL'),
+            ('DC-TB02', 'Pay TV Broadcasting Bi-Annual Return', 'PAY_TV', 'SEMI_ANNUAL'),
+            ('DC-ITC04', 'Tower Operator Bi-Annual Return', 'TOWER_OPERATOR', 'SEMI_ANNUAL'),
         ]
 
         for form_code, name, category, frequency in template_data:

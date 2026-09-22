@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.db import transaction
 from django.core.serializers.json import DjangoJSONEncoder
-from django.db.models import Count, Q
+from django.db.models import Count, F, OuterRef, Prefetch, Q, Subquery
 from django.http import FileResponse, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_datetime
@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import uuid
+from decimal import Decimal, InvalidOperation
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -21,8 +22,9 @@ from rest_framework.pagination import PageNumberPagination
 
 from apps.audit.services import record_audit
 from apps.compliance.models import TransactionalOutbox
+from apps.forms_engine.models import FormField, FormGrid, GridColumn
 from apps.users.permissions import (
-    IsNCAUser, IsNCAEditor,
+    IsNCAUser, IsNCAEditor, IsNCAAdmin,
     IsProviderDataEntry, IsProviderApprover, IsProviderUser,
 )
 from .access import (
@@ -43,13 +45,15 @@ from .models import (
 )
 from .serializers import (
     ReportingPeriodSerializer, ExpectedSubmissionSerializer,
-    SubmissionSerializer, SubmissionValueSerializer, ReviewActionSerializer,
+    SubmissionSerializer, FormalSubmissionListSerializer, ProviderFormalTaskListSerializer,
+    SubmissionValueSerializer, ReviewActionSerializer,
     SubmissionEventSerializer, SubmissionNotificationSerializer,
     ProviderWorkbookBaselineSerializer, MonthlyReportArtifactSerializer,
 )
 from .workflow import (
     audit_transition, clone_for_nca_correction, complete_submission_revision,
     lock_submission, mark_matching_corrections_addressed, mark_notification_read,
+    emit_submission_event,
 )
 from .provider_workspace import (
     apply_workspace_queue, filter_workspace_queryset, provider_can_edit,
@@ -86,8 +90,34 @@ def validate_correction_targets(template, targets):
     return None
 
 
+def correction_target_label(template, target_type, target_id):
+    """Resolve stored correction identifiers without exposing raw database IDs."""
+    target_id = str(target_id or "")
+    if target_type == "SECTION":
+        section = template.sections.filter(section_code=target_id).first()
+        return f"Section: {section.title}" if section else "Section"
+    if target_type == "FIELD":
+        field = FormField.objects.filter(section__form_template=template, pk=target_id).first()
+        return f"Indicator: {field.label}" if field else "Indicator"
+    if target_type == "GRID_CELL":
+        parts = target_id.split(":")
+        if len(parts) == 3:
+            grid_id, row_id, column_id = parts
+            grid = FormGrid.objects.filter(section__form_template=template, pk=grid_id).first()
+            column = GridColumn.objects.filter(grid=grid, pk=column_id).first() if grid else None
+            row = grid.fixed_rows.filter(pk=row_id).first() if grid and grid.row_mode == "FIXED" else None
+            row_label = row.row_label if row else row_id
+            if grid and column:
+                return f"Indicator: {grid.title} / {row_label} / {column.label}"
+        return "Grid indicator"
+    return "Submission"
+
+
 def dashboard_queryset(request):
-    qs = ExpectedSubmission.objects.all()
+    # Snapshot-backed obligations are immutable history after a form-catalogue
+    # reset. They must not re-enter operational dashboard totals or dereference
+    # a template that no longer exists.
+    qs = ExpectedSubmission.objects.filter(form_template__isnull=False)
     filters = {
         "period_id": "period_id", "form_id": "form_template_id", "provider_category": "provider__category",
         "sector": "provider__sector", "assigned_officer": "assigned_officer_id", "due_state": "due_state",
@@ -221,6 +251,12 @@ class ReportingPeriodListView(generics.ListCreateAPIView):
             return [IsNCAEditor()]
         return [IsNCAUser()]
 
+    def perform_create(self, serializer):
+        period = serializer.save()
+        write_audit(self.request, "REPORTING_PERIOD_CREATED", "ReportingPeriod", period.id, after={
+            "name": period.name, "frequency": period.frequency, "year": period.year, "status": period.status,
+        })
+
 
 class ReportingPeriodDetailView(generics.RetrieveUpdateAPIView):
     queryset = ReportingPeriod.objects.all()
@@ -230,6 +266,15 @@ class ReportingPeriodDetailView(generics.RetrieveUpdateAPIView):
         if self.request.method in ("GET", "HEAD", "OPTIONS"):
             return [IsNCAUser()]
         return [IsNCAEditor()]
+
+    def perform_update(self, serializer):
+        period = serializer.instance
+        before = {"name": period.name, "status": period.status, "due_at": period.due_at.isoformat()}
+        period = serializer.save()
+        write_audit(self.request, "REPORTING_PERIOD_UPDATED", "ReportingPeriod", period.id, before=before, after={
+            "name": period.name, "status": period.status, "due_at": period.due_at.isoformat(),
+            "changed_fields": sorted(serializer.validated_data),
+        })
 
 
 class ActivatePeriodView(APIView):
@@ -279,6 +324,77 @@ class PeriodAssignmentPreviewView(APIView):
         return Response({"period": period.id, "pairs": list(unique.values()), "count": len(unique), "blockers": blockers, "can_activate": not blockers and bool(unique)})
 
 
+class PeriodManualReminderView(APIView):
+    permission_classes = [IsNCAEditor]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        period = get_object_or_404(ReportingPeriod, pk=pk)
+        selected_ids = request.data.get("expected_submission_ids", [])
+        subject = str(request.data.get("subject") or "").strip()
+        body = str(request.data.get("message") or "").strip()
+        request_id = str(request.data.get("client_request_id") or "").strip()
+        if period.status != "ACTIVE":
+            return Response({"detail": "Manual reminders can only be sent for an active reporting period."}, status=409)
+        if not isinstance(selected_ids, list) or not selected_ids:
+            return Response({"detail": "Select at least one form obligation."}, status=400)
+        if not subject or not body:
+            return Response({"detail": "An email subject and message are required."}, status=400)
+        try:
+            selected_ids = list(dict.fromkeys(int(value) for value in selected_ids))
+        except (TypeError, ValueError):
+            return Response({"detail": "Every selected obligation must have a numeric ID."}, status=400)
+
+        queryset = ExpectedSubmission.objects.select_for_update().filter(period=period, id__in=selected_ids).select_related(
+            "provider", "form_template",
+        ).prefetch_related("versions")
+        if queryset.count() != len(selected_ids):
+            return Response({"detail": "One or more selected obligations do not belong to this period."}, status=400)
+        blocked = queryset.filter(workflow_status__in=["SUBMITTED", "UNDER_REVIEW", "RESUBMITTED", "APPROVED", "REJECTED", "ARCHIVED"])
+        if blocked.exists():
+            return Response({"detail": "Forms already sent to NCA, completed, rejected or archived cannot receive completion reminders."}, status=409)
+
+        from apps.compliance.communications import ensure_email_handoff, handoff_data
+        reminders = []
+        for expected in queryset.order_by("provider__registered_name", "id"):
+            submission = expected.versions.order_by("-version", "-id").first()
+            if not submission:
+                return Response({"detail": f"Obligation {expected.id} has no submission version."}, status=409)
+            existing = None
+            if request_id:
+                existing = SubmissionEvent.objects.filter(
+                    submission=submission, event_type="REMINDER",
+                    metadata__manual_request_id=request_id,
+                ).first()
+            if existing:
+                handoff = ensure_email_handoff(submission=submission, event=existing, actor=request.user)
+            else:
+                event = emit_submission_event(
+                    submission=submission, actor=request.user, event_type="REMINDER",
+                    message=f"NCA sent a manual reminder for {submission.submission_reference}.",
+                    from_status=expected.workflow_status, to_status=expected.workflow_status,
+                    audience="PROVIDER", notify=["PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER"],
+                    metadata={
+                        "manual": True, "manual_request_id": request_id,
+                        "communication_subject": subject,
+                        "communication_body": body,
+                        "period_id": period.id,
+                    },
+                )
+                handoff = ensure_email_handoff(submission=submission, event=event, actor=request.user)
+            reminders.append({
+                "expected_submission_id": expected.id,
+                "provider": expected.provider.registered_name,
+                "submission_reference": submission.submission_reference,
+                "email": handoff_data(handoff),
+            })
+        write_audit(
+            request, "PERIOD_MANUAL_REMINDERS_PREPARED", "ReportingPeriod", period.id,
+            after={"obligation_ids": selected_ids, "count": len(reminders), "client_request_id": request_id},
+        )
+        return Response({"period": period.id, "count": len(reminders), "reminders": reminders})
+
+
 # ── Expected Submissions ──────────────────────────────────────────────────────
 
 class ExpectedSubmissionListView(generics.ListAPIView):
@@ -293,9 +409,24 @@ class ExpectedSubmissionListView(generics.ListAPIView):
     ordering_fields = ["period__due_at", "workflow_status", "due_state"]
 
     def get_queryset(self):
-        return expected_submissions_for_user(self.request.user).exclude(workflow_status="ARCHIVED").select_related(
+        queryset = expected_submissions_for_user(self.request.user).exclude(workflow_status="ARCHIVED").select_related(
             "provider", "form_template", "period", "assigned_officer"
         )
+        attention = self.request.query_params.get("attention_required")
+        flag_status = self.request.query_params.get("compliance_status")
+        flag_type = self.request.query_params.get("compliance_flag_type")
+        if attention in {"1", "true", "True"}:
+            queryset = queryset.filter(compliance_flags__status__in=["OPEN", "ACKNOWLEDGED", "IN_PROGRESS"])
+        if flag_status:
+            queryset = queryset.filter(compliance_flags__status=flag_status)
+        if flag_type:
+            queryset = queryset.filter(compliance_flags__flag_type=flag_type)
+        latest_event_at = SubmissionEvent.objects.filter(
+            submission__expected_id=OuterRef("pk"),
+        ).order_by("-created_at", "-id").values("created_at")[:1]
+        return queryset.distinct().annotate(
+            latest_activity_at=Subquery(latest_event_at),
+        ).order_by(F("latest_activity_at").desc(nulls_last=True), "-created_at", "-id")
 
 
 class ExpectedSubmissionDetailView(generics.RetrieveUpdateAPIView):
@@ -309,6 +440,13 @@ class ExpectedSubmissionDetailView(generics.RetrieveUpdateAPIView):
 
     def get_queryset(self):
         return expected_submissions_for_user(self.request.user)
+
+    def perform_update(self, serializer):
+        expected = serializer.save()
+        write_audit(
+            self.request, "EXPECTED_SUBMISSION_UPDATED", "ExpectedSubmission", expected.id,
+            after={"changed_fields": sorted(serializer.validated_data)},
+        )
 
 
 class ProviderWorkspaceSummaryView(APIView):
@@ -335,6 +473,181 @@ class ProviderWorkspaceSubmissionListView(generics.ListAPIView):
         return queryset.order_by(ordering if ordering in allowed else "period__due_at", "id")
 
 
+class ProviderFormsListView(generics.ListAPIView):
+    """Active provider work; formal versions belong on Provider Submissions."""
+    permission_classes = [IsProviderUser]
+    serializer_class = ExpectedSubmissionSerializer
+    pagination_class = ProviderWorkspacePagination
+
+    def get_queryset(self):
+        queryset = workspace_queryset(self.request.user).exclude(provider_status="CLOSED")
+        queryset = filter_workspace_queryset(queryset, self.request.query_params)
+        provider_status = self.request.query_params.get("provider_status")
+        if provider_status:
+            queryset = queryset.filter(provider_status=provider_status)
+        return queryset.order_by("period__due_at", "id")
+
+
+class ProviderFormSummaryView(APIView):
+    permission_classes = [IsProviderUser]
+
+    def get(self, request):
+        queryset = ExpectedSubmission.objects.filter(provider__organization_id=request.user.organization_id)
+        return Response({
+            "in_progress": queryset.filter(provider_status="IN_PROGRESS").count(),
+            "awaiting_approval": queryset.filter(provider_status="AWAITING_APPROVAL").count(),
+            "corrections_required": queryset.filter(provider_status="CORRECTIONS_REQUIRED").count(),
+            "total_active": queryset.exclude(provider_status="CLOSED").count(),
+        })
+
+
+FORMAL_REGULATORY_STATUSES = {
+    "SUBMITTED", "UNDER_REVIEW", "RETURNED_FOR_CORRECTION", "APPROVED", "REJECTED",
+}
+
+
+def formal_submission_queryset(user):
+    return submissions_for_user(user).filter(
+        regulatory_status__in=FORMAL_REGULATORY_STATUSES,
+    ).select_related(
+        "expected__provider", "expected__form_template", "expected__period",
+        "provider_approval__approver", "receipt",
+    ).order_by("-submitted_at", "-created_at", "-id")
+
+
+class ProviderFormalSubmissionListView(generics.ListAPIView):
+    permission_classes = [IsProviderUser]
+    serializer_class = ProviderFormalTaskListSerializer
+    pagination_class = ProviderWorkspacePagination
+
+    def get_queryset(self):
+        formal = Submission.objects.filter(
+            regulatory_status__in=FORMAL_REGULATORY_STATUSES,
+        ).select_related("provider_approval__approver", "receipt").order_by("-version", "-id")
+        latest_formal = Submission.objects.filter(
+            expected_id=OuterRef("pk"), regulatory_status__in=FORMAL_REGULATORY_STATUSES,
+        ).order_by("-version", "-id")
+        queryset = expected_submissions_for_user(self.request.user).filter(
+            versions__regulatory_status__in=FORMAL_REGULATORY_STATUSES,
+        ).select_related("provider", "form_template", "period").prefetch_related(
+            Prefetch("versions", queryset=formal, to_attr="latest_formal_versions"),
+        ).annotate(
+            latest_formal_status=Subquery(latest_formal.values("regulatory_status")[:1]),
+            latest_formal_timestamp=Subquery(latest_formal.values("submitted_at")[:1]),
+        ).distinct()
+        if value := self.request.query_params.get("regulatory_status"):
+            queryset = queryset.filter(latest_formal_status=value)
+        if search := (self.request.query_params.get("search") or "").strip():
+            queryset = queryset.filter(
+                Q(versions__submission_reference__icontains=search)
+                | Q(form_template__form_code__icontains=search)
+                | Q(form_template__name__icontains=search)
+                | Q(period__name__icontains=search)
+            )
+        return queryset.order_by("-latest_formal_timestamp", "-created_at", "-id")
+
+
+class ProviderFormalSubmissionDetailView(generics.RetrieveAPIView):
+    permission_classes = [IsProviderUser]
+    serializer_class = FormalSubmissionListSerializer
+
+    def get_queryset(self):
+        return formal_submission_queryset(self.request.user)
+
+
+class ExpectedSubmissionPenaltyView(APIView):
+    permission_classes = [IsNCAAdmin]
+
+    @transaction.atomic
+    def patch(self, request, pk):
+        expected = get_object_or_404(
+            ExpectedSubmission.objects.select_for_update().select_related("provider", "period"), pk=pk,
+        )
+        if request.data.get("action") == "MARK_PAID":
+            if expected.penalty_amount_ghs == 0:
+                return Response(ExpectedSubmissionSerializer(expected, context={"request": request}).data)
+            payment_reference = str(request.data.get("payment_reference") or "").strip()
+            payment_note = str(request.data.get("payment_note") or "").strip()
+            before = {"penalty_amount_ghs": str(expected.penalty_amount_ghs),
+                      "penalty_reference": expected.penalty_reference}
+            expected.penalty_amount_ghs = Decimal("0.00")
+            expected.penalty_updated_by = request.user
+            expected.penalty_updated_at = timezone.now()
+            expected.save(update_fields=["penalty_amount_ghs", "penalty_updated_by", "penalty_updated_at"])
+            write_audit(
+                request, "OBLIGATION_PENALTY_PAID", "ExpectedSubmission", expected.id,
+                before=before, after={"penalty_amount_ghs": "0.00",
+                    "penalty_reference": expected.penalty_reference,
+                    "payment_reference": payment_reference, "payment_note": payment_note},
+            )
+            return Response(ExpectedSubmissionSerializer(expected, context={"request": request}).data)
+        try:
+            amount = Decimal(str(request.data.get("penalty_amount_ghs", expected.penalty_amount_ghs)))
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({"detail": "Penalty amount must be a valid number."}, status=400)
+        if amount < 0:
+            return Response({"detail": "Penalty amount cannot be negative."}, status=400)
+        reference = str(request.data.get("penalty_reference", expected.penalty_reference) or "").strip()
+        note = str(request.data.get("penalty_note", expected.penalty_note) or "").strip()
+        if amount > 0 and not reference:
+            return Response({"detail": "A penalty reference is required for a non-zero penalty."}, status=400)
+        before = {
+            "penalty_amount_ghs": str(expected.penalty_amount_ghs),
+            "penalty_reference": expected.penalty_reference,
+            "penalty_note": expected.penalty_note,
+        }
+        expected.penalty_amount_ghs = amount
+        expected.penalty_reference = reference
+        expected.penalty_note = note
+        expected.penalty_updated_by = request.user
+        expected.penalty_updated_at = timezone.now()
+        expected.save(update_fields=[
+            "penalty_amount_ghs", "penalty_reference", "penalty_note",
+            "penalty_updated_by", "penalty_updated_at",
+        ])
+        write_audit(
+            request, "OBLIGATION_PENALTY_UPDATED", "ExpectedSubmission", expected.id,
+            before=before,
+            after={
+                "penalty_amount_ghs": str(expected.penalty_amount_ghs),
+                "penalty_reference": expected.penalty_reference,
+                "penalty_note": expected.penalty_note,
+            },
+        )
+        return Response(ExpectedSubmissionSerializer(expected, context={"request": request}).data)
+
+
+class NCAFormalSubmissionListView(generics.ListAPIView):
+    permission_classes = [IsNCAUser]
+    serializer_class = FormalSubmissionListSerializer
+    pagination_class = ProviderWorkspacePagination
+
+    def get_queryset(self):
+        queryset = formal_submission_queryset(self.request.user)
+        for parameter, lookup in {
+            "regulatory_status": "regulatory_status", "provider": "expected__provider_id",
+            "period": "expected__period_id", "form_template": "expected__form_template_id",
+            "due_state": "expected__due_state", "provider__sector": "expected__provider__sector",
+            "provider__category": "expected__provider__category",
+        }.items():
+            if value := self.request.query_params.get(parameter):
+                queryset = queryset.filter(**{lookup: value})
+        if self.request.query_params.get("attention_required") in {"1", "true", "True"}:
+            queryset = queryset.filter(expected__compliance_flags__status__in=["OPEN", "ACKNOWLEDGED", "IN_PROGRESS"]).distinct()
+        if value := self.request.query_params.get("compliance_status"):
+            queryset = queryset.filter(expected__compliance_flags__status=value).distinct()
+        if value := self.request.query_params.get("compliance_flag_type"):
+            queryset = queryset.filter(expected__compliance_flags__flag_type=value).distinct()
+        if search := (self.request.query_params.get("search") or "").strip():
+            queryset = queryset.filter(
+                Q(submission_reference__icontains=search)
+                | Q(expected__provider__registered_name__icontains=search)
+                | Q(expected__form_template__form_code__icontains=search)
+                | Q(expected__form_template__name__icontains=search)
+            )
+        return queryset
+
+
 # ── Submissions ───────────────────────────────────────────────────────────────
 
 class StartSubmissionView(APIView):
@@ -358,7 +671,8 @@ class StartSubmissionView(APIView):
             submission = last if last and last.submitted_at is None else Submission.objects.create(expected=expected, version=1)
         prior_status = expected.workflow_status
         expected.workflow_status = "DRAFT"
-        expected.save(update_fields=["workflow_status"])
+        expected.provider_status = "IN_PROGRESS"
+        expected.save(update_fields=["workflow_status", "provider_status"])
         audit_transition(
             request=request, submission=submission, event_type="SUBMISSION_STARTED",
             message="A correction version was opened for editing." if correcting else "The form was opened for data entry.",
@@ -384,6 +698,7 @@ class SubmissionReviewDataView(APIView):
     def get(self, request, pk):
         from apps.forms_engine.gaps import recalculate_form_gaps
         from apps.forms_engine.serializers import FormTemplateDetailSerializer, FormGapAssessmentSerializer
+        from apps.compliance.serializers import ComplianceFlagSerializer
 
         submission = get_submission_for_user(request.user, pk=pk)
         template = submission.expected.form_template
@@ -399,8 +714,72 @@ class SubmissionReviewDataView(APIView):
         correction_items = CorrectionItem.objects.filter(
             Q(source_submission=submission) | Q(resolution_submission=submission)
         ).distinct()
+        correction_changes = []
+        if submission.supersedes_id:
+            def value_key(item):
+                if item.field_id:
+                    return ("FIELD", str(item.field_id))
+                return ("GRID_CELL", f"{item.grid_id}:{item.grid_row_id}:{item.grid_column_id}")
+
+            previous_values = {
+                value_key(item): item
+                for item in submission.supersedes.values.all()
+            }
+            current_values = {
+                value_key(item): item
+                for item in submission.values.all()
+            }
+            resolution_corrections = [
+                item for item in correction_items
+                if item.resolution_submission_id == submission.id
+            ]
+            for target in sorted(
+                set(previous_values) | set(current_values), key=str,
+            ):
+                before = previous_values.get(target)
+                after = current_values.get(target)
+                before_state = (
+                    before.value if before else None,
+                    before.value_status if before else None,
+                    before.explanation if before else None,
+                )
+                after_state = (
+                    after.value if after else None,
+                    after.value_status if after else None,
+                    after.explanation if after else None,
+                )
+                if before_state == after_state:
+                    continue
+                value_item = after or before
+                section_code = (
+                    value_item.field.section.section_code
+                    if value_item.field_id else value_item.grid.section.section_code
+                )
+                item = next((candidate for candidate in resolution_corrections if (
+                    candidate.target_type == "SUBMISSION"
+                    or (candidate.target_type == "SECTION" and candidate.target_id == section_code)
+                    or (candidate.target_type == target[0] and candidate.target_id == target[1])
+                )), None)
+                if item is None:
+                    continue
+                correction_changes.append({
+                    "target_type": target[0],
+                    "target_id": target[1],
+                    "target_label": correction_target_label(
+                        template, target[0], target[1],
+                    ),
+                    "instruction": item.instruction,
+                    "status": item.status,
+                    "before_value": before.value if before else None,
+                    "before_status": before.value_status if before else None,
+                    "after_value": after.value if after else None,
+                    "after_status": after.value_status if after else None,
+                })
         return Response({
             "submission": SubmissionSerializer(submission).data,
+            "obligation": ExpectedSubmissionSerializer(
+                submission.expected, context={"request": request},
+            ).data,
             "template": submission.form_schema_snapshot if archived else FormTemplateDetailSerializer(template).data,
             "values": SubmissionValueSerializer(values, many=True).data,
             "requirements": FormGapAssessmentSerializer(assessments, many=True).data,
@@ -420,11 +799,16 @@ class SubmissionReviewDataView(APIView):
             },
             "approval_blockers": readiness.get("blocking_issues", []),
             "correction_items": [{"id": item.id, "stage": item.stage, "target_type": item.target_type, "target_id": item.target_id,
+                "target_label": correction_target_label(template, item.target_type, item.target_id),
                 "instruction": item.instruction, "status": item.status} for item in correction_items],
+            "correction_changes": correction_changes,
             # Deprecated response key retained for API compatibility. Exact-version
             # review remains in force without presenting a misleading legacy banner.
             "legacy_warning": None,
             "previous_month": previous_month_values(submission),
+            "compliance_flags": ComplianceFlagSerializer(
+                submission.expected.compliance_flags.all(), many=True,
+            ).data,
         })
 
 
@@ -434,6 +818,7 @@ class ProviderReviewDataView(APIView):
 
     def get(self, request, pk):
         from apps.forms_engine.serializers import FormTemplateDetailSerializer
+        from apps.compliance.serializers import ComplianceFlagSerializer
         from apps.uploads.models import SubmissionKMZUpload, SubmissionExcelBackup
 
         submission = get_submission_for_user(request.user, pk=pk)
@@ -463,7 +848,9 @@ class ProviderReviewDataView(APIView):
             },
             "correction_items": [{
                 "id": item.id, "stage": item.stage, "target_type": item.target_type,
-                "target_id": item.target_id, "instruction": item.instruction,
+                "target_id": item.target_id,
+                "target_label": correction_target_label(submission.expected.form_template, item.target_type, item.target_id) if submission.expected.form_template_id else "Flagged item",
+                "instruction": item.instruction,
                 "status": item.status, "created_by_name": item.created_by.name,
                 "created_at": item.created_at,
             } for item in corrections],
@@ -498,6 +885,9 @@ class ProviderReviewDataView(APIView):
             } for batch in edit_batches],
             "permitted_actions": permitted_actions(request.user, submission.expected, submission),
             "previous_month": previous_month_values(submission),
+            "compliance_flags": ComplianceFlagSerializer(
+                submission.expected.compliance_flags.all(), many=True,
+            ).data,
         })
 
 
@@ -658,6 +1048,8 @@ class SectionValuesView(APIView):
                     "value": value,
                     "value_status": value_status,
                     "explanation": explanation,
+                    "value_source": "MANUAL",
+                    "source_reference": "",
                     "updated_by": request.user,
                 },
             )
@@ -686,7 +1078,8 @@ class SectionValuesView(APIView):
 
         if submission.expected.workflow_status == "NOT_STARTED":
             submission.expected.workflow_status = "DRAFT"
-            submission.expected.save(update_fields=["workflow_status"])
+            submission.expected.provider_status = "IN_PROGRESS"
+            submission.expected.save(update_fields=["workflow_status", "provider_status"])
             audit_transition(
                 request=request, submission=submission, event_type="SUBMISSION_STARTED",
                 message="The form was opened for data entry by saving its first section.",
@@ -822,15 +1215,17 @@ class SubmitForApprovalView(APIView):
             prior_status = "DRAFT"
         is_resubmission = prior_status in {"PROVIDER_CHANGES_REQUESTED", "CORRECTION_REQUESTED"} or submission.supersedes_id is not None
         submission.expected.workflow_status = "PROVIDER_RESUBMITTED" if is_resubmission else "PENDING_APPROVAL"
-        submission.expected.save(update_fields=["workflow_status"])
-        audit_transition(
+        submission.expected.provider_status = "AWAITING_APPROVAL"
+        submission.expected.save(update_fields=["workflow_status", "provider_status"])
+        handoff_event = audit_transition(
             request=request, submission=submission,
             event_type="PROVIDER_RESUBMITTED" if is_resubmission else "SUBMITTED_FOR_APPROVAL",
             message="The corrected form was resubmitted to the Provider Approver." if is_resubmission else "The form was submitted to the Provider Approver.",
             from_status=prior_status, to_status=submission.expected.workflow_status,
             audience="PROVIDER", notify=["PROVIDER_APPROVER"],
         )
-        return Response({"detail": "Submitted for provider approval.", "workflow_status": submission.expected.workflow_status})
+        return Response({"detail": "Submitted for provider approval.", "workflow_status": submission.expected.workflow_status,
+                         "event_id": handoff_event.id, "internal_notification_created": True})
 
 
 class OfficialSubmitView(APIView):
@@ -874,21 +1269,19 @@ class OfficialSubmitView(APIView):
             edit_batches = edit_batches.filter(created_at__gte=latest_handoff.created_at)
         edit_batch_count = edit_batches.count()
         change_summary = str(request.data.get("change_summary") or "").strip()
-        if edit_batch_count and not change_summary:
-            return Response({
-                "code": "CHANGE_SUMMARY_REQUIRED",
-                "detail": "Summarize the values changed by the Approver before official submission.",
-                "provider_edit_batch_count": edit_batch_count,
-            }, status=400)
         approval_note = str(request.data.get("approval_note") or "").strip()
         prior_status = submission.expected.workflow_status
         was_correction = submission.supersedes_id is not None
         submission.expected.workflow_status = "RESUBMITTED" if was_correction else "SUBMITTED"
+        submission.expected.provider_status = "CLOSED"
         submission.expected.due_state = submission.expected.compute_due_state()
-        submission.expected.save(update_fields=["workflow_status", "due_state"])
+        submission.expected.save(update_fields=["workflow_status", "provider_status", "due_state"])
         submission.submitted_by = request.user
         submission.submitted_at = timezone.now()
-        submission.save(update_fields=["submitted_by", "submitted_at"])
+        submission.regulatory_status = "SUBMITTED"
+        submission.save(update_fields=["submitted_by", "submitted_at", "regulatory_status"])
+        from .form_snapshots import snapshot_submission
+        snapshot_submission(submission)
         decision = ProviderApprovalDecision.objects.create(
             submission=submission, approver=request.user, attestation=True,
             approval_note=approval_note, change_summary=change_summary,
@@ -899,7 +1292,7 @@ class OfficialSubmitView(APIView):
         TransactionalOutbox.objects.get_or_create(topic="submission.official", aggregate_type="Submission",
             aggregate_id=str(submission.id), idempotency_key=f"official-submission:{submission.id}:{submission.version}",
             defaults={"payload": {"submission_id": submission.id, "receipt_reference": receipt.reference}})
-        audit_transition(
+        official_event = audit_transition(
             request=request, submission=submission, event_type="OFFICIALLY_SUBMITTED",
             message="The Provider Approver officially resubmitted the corrected form to NCA." if was_correction else "The Provider Approver officially submitted the form to NCA.",
             from_status=prior_status, to_status=submission.expected.workflow_status,
@@ -908,7 +1301,14 @@ class OfficialSubmitView(APIView):
                 "receipt_reference": receipt.reference,
                 "provider_approval_decision_id": decision.id,
                 "provider_edit_batch_count": edit_batch_count,
+                "comments": approval_note,
+                "action_required": "NCA will review the submitted form.",
             },
+        )
+        from apps.compliance.communications import queue_automatic_communication
+        queue_automatic_communication(
+            submission=submission, event=official_event, action="NCA_ACKNOWLEDGEMENT",
+            actor=request.user, payload={"comments": approval_note},
         )
         baseline = ProviderWorkbookBaseline.objects.filter(
             provider_id=submission.expected.provider_id,
@@ -944,6 +1344,8 @@ class OfficialSubmitView(APIView):
             "receipt_reference": receipt.reference,
             "provider_approval_decision_id": decision.id,
             "monthly_report_status": "PREPARING" if baseline else "NOT_CONFIGURED",
+            "event_id": official_event.id,
+            "internal_notification_created": True,
         })
 
 
@@ -1159,15 +1561,21 @@ class StartReviewView(APIView):
     @transaction.atomic
     def post(self, request, pk):
         submission = lock_submission(pk)
-        if submission.expected.workflow_status not in ("SUBMITTED", "RESUBMITTED"):
+        if submission.regulatory_status == "DRAFT" and submission.expected.workflow_status in {"SUBMITTED", "RESUBMITTED"}:
+            submission.regulatory_status = "SUBMITTED"
+            submission.save(update_fields=["regulatory_status"])
+        if submission.regulatory_status != "SUBMITTED":
             return Response({"detail": "Only submitted returns can enter review."}, status=409)
         prior_status = submission.expected.workflow_status
         submission.expected.workflow_status = "UNDER_REVIEW"; submission.expected.save(update_fields=["workflow_status"])
+        submission.regulatory_status = "UNDER_REVIEW"
+        submission.save(update_fields=["regulatory_status"])
         ReviewAction.objects.create(submission=submission, action="ADD_NOTE", comment="NCA review started.", created_by=request.user)
-        audit_transition(request=request, submission=submission, event_type="SUBMISSION_REVIEW_STARTED",
+        event = audit_transition(request=request, submission=submission, event_type="SUBMISSION_REVIEW_STARTED",
             message="NCA regulatory review started.", from_status=prior_status,
-            to_status="UNDER_REVIEW", audience="NCA")
-        return Response({"detail": "Review started.", "workflow_status": "UNDER_REVIEW"})
+            to_status="UNDER_REVIEW", audience="BOTH", notify=["PROVIDER_APPROVER"])
+        return Response({"detail": "Review started.", "workflow_status": "UNDER_REVIEW",
+                         "event_id": event.id, "internal_notification_created": True})
 
 
 class ReviewApproveView(APIView):
@@ -1177,7 +1585,10 @@ class ReviewApproveView(APIView):
     def post(self, request, pk):
         try: submission = lock_submission(pk)
         except Submission.DoesNotExist: return Response({"detail": "Not found."}, status=404)
-        if submission.expected.workflow_status != "UNDER_REVIEW":
+        if submission.regulatory_status != "UNDER_REVIEW" and submission.expected.workflow_status == "UNDER_REVIEW":
+            submission.regulatory_status = "UNDER_REVIEW"
+            submission.save(update_fields=["regulatory_status"])
+        if submission.regulatory_status != "UNDER_REVIEW":
             return Response({"detail": "Start the regulatory review before approving this submission."}, status=409)
         readiness = refresh_submission_completion(submission)
         if not readiness["can_submit"]:
@@ -1200,20 +1611,24 @@ class ReviewApproveView(APIView):
                 "form_gap_ids": [gap.id for gap in objective_gaps]}, status=409)
         prior_status = submission.expected.workflow_status
         submission.expected.workflow_status = "APPROVED"
+        submission.expected.provider_status = "CLOSED"
         submission.expected.refresh_due_state()
         submission.reviewed_by = request.user
         submission.reviewed_at = timezone.now()
-        submission.save(update_fields=["reviewed_by", "reviewed_at"])
-        submission.expected.save(update_fields=["workflow_status", "due_state"])
+        submission.regulatory_status = "APPROVED"
+        submission.save(update_fields=["reviewed_by", "reviewed_at", "regulatory_status"])
+        submission.expected.save(update_fields=["workflow_status", "provider_status", "due_state"])
         submission.resolved_correction_items.filter(status="ADDRESSED").update(status="VERIFIED")
         ReviewAction.objects.create(
             submission=submission, action="APPROVE",
             comment=request.data.get("comment", ""), created_by=request.user,
         )
-        audit_transition(request=request, submission=submission, event_type="SUBMISSION_APPROVED",
+        event = audit_transition(request=request, submission=submission, event_type="SUBMISSION_APPROVED",
             message="NCA approved the official submission.", from_status=prior_status,
-            to_status="APPROVED", audience="BOTH", notify=["PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER"])
-        return Response({"detail": "Submission approved."})
+            to_status="APPROVED", audience="BOTH", notify=["PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER"],
+            metadata={"comments": str(request.data.get("comment") or "").strip(),
+                      "action_required": "No further action is required."})
+        return Response({"detail": "Submission approved.", "event_id": event.id, "internal_notification_created": True})
 
 
 class ReviewRejectView(APIView):
@@ -1223,25 +1638,31 @@ class ReviewRejectView(APIView):
     def post(self, request, pk):
         try: submission = lock_submission(pk)
         except Submission.DoesNotExist: return Response({"detail": "Not found."}, status=404)
-        if submission.expected.workflow_status != "UNDER_REVIEW":
+        if submission.regulatory_status != "UNDER_REVIEW" and submission.expected.workflow_status == "UNDER_REVIEW":
+            submission.regulatory_status = "UNDER_REVIEW"
+            submission.save(update_fields=["regulatory_status"])
+        if submission.regulatory_status != "UNDER_REVIEW":
             return Response({"detail": "Start the regulatory review before rejecting this submission."}, status=409)
         if not request.data.get("comment", "").strip():
             return Response({"detail": "A rejection reason is required."}, status=400)
         comment = request.data.get("comment", "").strip()
         prior_status = submission.expected.workflow_status
         submission.expected.workflow_status = "REJECTED"
-        submission.expected.save(update_fields=["workflow_status"])
+        submission.expected.provider_status = "CLOSED"
+        submission.expected.save(update_fields=["workflow_status", "provider_status"])
         submission.reviewed_by = request.user
         submission.reviewed_at = timezone.now()
-        submission.save(update_fields=["reviewed_by", "reviewed_at"])
+        submission.regulatory_status = "REJECTED"
+        submission.save(update_fields=["reviewed_by", "reviewed_at", "regulatory_status"])
         ReviewAction.objects.create(
             submission=submission, action="REJECT",
             comment=comment, is_provider_visible=True, created_by=request.user,
         )
-        audit_transition(request=request, submission=submission, event_type="SUBMISSION_REJECTED",
+        event = audit_transition(request=request, submission=submission, event_type="SUBMISSION_REJECTED",
             message=f"NCA rejected the submission: {comment}", from_status=prior_status,
-            to_status="REJECTED", audience="BOTH", notify=["PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER"])
-        return Response({"detail": "Submission rejected."})
+            to_status="REJECTED", audience="BOTH", notify=["PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER"],
+            metadata={"reason": comment, "action_required": "Review the decision and contact NCA if clarification is needed."})
+        return Response({"detail": "Submission rejected.", "event_id": event.id, "internal_notification_created": True})
 
 
 class ReviewRequestCorrectionView(APIView):
@@ -1251,12 +1672,21 @@ class ReviewRequestCorrectionView(APIView):
     def post(self, request, pk):
         try: submission = lock_submission(pk)
         except Submission.DoesNotExist: return Response({"detail": "Not found."}, status=404)
-        if submission.expected.workflow_status != "UNDER_REVIEW":
+        if submission.regulatory_status != "UNDER_REVIEW" and submission.expected.workflow_status == "UNDER_REVIEW":
+            submission.regulatory_status = "UNDER_REVIEW"
+            submission.save(update_fields=["regulatory_status"])
+        if submission.regulatory_status != "UNDER_REVIEW":
             return Response({"detail": "Start the regulatory review before requesting corrections."}, status=409)
-        targets = request.data.get("targets", [])  # [{type, id, comment}]
-        comment = request.data.get("comment", "")
-        if not comment.strip() and not any(str(t.get("comment", "")).strip() for t in targets):
-            return Response({"detail": "A correction instruction is required."}, status=400)
+        targets = request.data.get("targets", [])  # [{type, id, reason|comment}]
+        comment = str(request.data.get("comment", "")).strip()
+        if not targets:
+            return Response({"detail": "Select at least one section or indicator to flag."}, status=400)
+        missing_reasons = [
+            str(target.get("id", "")) for target in targets
+            if not str(target.get("reason") or target.get("comment") or "").strip()
+        ]
+        if missing_reasons:
+            return Response({"detail": "Every flagged section or indicator requires its own reason.", "targets": missing_reasons}, status=400)
         target_error = validate_correction_targets(submission.expected.form_template, targets)
         if target_error:
             return Response({"detail": target_error}, status=400)
@@ -1264,7 +1694,10 @@ class ReviewRequestCorrectionView(APIView):
         correction_submission = clone_for_nca_correction(submission)
         prior_status = submission.expected.workflow_status
         submission.expected.workflow_status = "CORRECTION_REQUESTED"
-        submission.expected.save(update_fields=["workflow_status"])
+        submission.expected.provider_status = "AWAITING_APPROVAL"
+        submission.expected.save(update_fields=["workflow_status", "provider_status"])
+        submission.regulatory_status = "RETURNED_FOR_CORRECTION"
+        submission.save(update_fields=["regulatory_status"])
 
         # Mark targeted fields as WAITING_CORRECTION
         for t in targets:
@@ -1279,29 +1712,37 @@ class ReviewRequestCorrectionView(APIView):
             is_provider_visible=True, created_by=request.user,
         )
         for t in targets:
+            target_reason = str(t.get("reason") or t.get("comment") or "").strip()
             ReviewAction.objects.create(
                 submission=submission, action="REQUEST_CORRECTION",
                 target_type=t.get("type", "FIELD"),
                 target_id=str(t.get("id", "")),
-                comment=t.get("comment", ""),
+                comment=target_reason,
                 is_provider_visible=True, created_by=request.user,
             )
             CorrectionItem.objects.create(source_submission=submission, resolution_submission=correction_submission,
                 stage="NCA_REVIEW", target_type=t.get("type", "FIELD"), target_id=str(t.get("id", "")),
-                instruction=t.get("comment", "") or comment, created_by=request.user)
-        if not targets:
-            CorrectionItem.objects.create(source_submission=submission, resolution_submission=correction_submission,
-                stage="NCA_REVIEW", target_type="SUBMISSION", target_id=str(submission.id), instruction=comment, created_by=request.user)
-        audit_transition(request=request, submission=submission, event_type="CORRECTION_REQUESTED",
-            message=f"NCA requested corrections: {comment}", from_status=prior_status,
+                instruction=target_reason, created_by=request.user)
+        target_labels = [{
+            "label": correction_target_label(submission.expected.form_template, target.get("type"), target.get("id")),
+            "reason": str(target.get("reason") or target.get("comment") or "").strip(),
+        } for target in targets]
+        summary = comment or "; ".join(item["reason"] for item in target_labels)
+        event = audit_transition(request=request, submission=submission, event_type="CORRECTION_REQUESTED",
+            message=f"NCA flagged {len(targets)} item(s) for review.", from_status=prior_status,
             to_status="CORRECTION_REQUESTED", audience="BOTH", notify=["PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER"],
-            metadata={"targets": len(targets), "correction_submission_id": correction_submission.id})
-        return Response({"detail": "Correction requested.", "targets": len(targets), "correction_submission_id": correction_submission.id})
+            metadata={"targets": targets, "target_labels": target_labels, "correction_submission_id": correction_submission.id,
+                      "reason": summary, "comments": summary,
+                      "action_required": "Review the flagged items and resubmit the form."})
+        return Response({"detail": "Flagged items returned for review.", "targets": len(targets),
+                         "correction_submission_id": correction_submission.id, "event_id": event.id,
+                         "internal_notification_created": True})
 
 
 class ReviewAddNoteView(APIView):
     permission_classes = [IsNCAEditor]
 
+    @transaction.atomic
     def post(self, request, pk):
         submission = get_submission_for_user(request.user, pk=pk)
         is_provider = request.data.get("provider_visible", False)
@@ -1311,7 +1752,22 @@ class ReviewAddNoteView(APIView):
             comment=request.data.get("comment", ""),
             is_provider_visible=is_provider, created_by=request.user,
         )
-        return Response({"detail": "Note added."})
+        comment = str(request.data.get("comment") or "").strip()
+        if not comment:
+            return Response({"detail": "A note is required."}, status=400)
+        event = audit_transition(
+            request=request,
+            submission=submission,
+            event_type="SUBMISSION_CORRESPONDENCE" if is_provider else "SUBMISSION_INTERNAL_NOTE",
+            message=comment,
+            from_status=submission.expected.workflow_status,
+            to_status=submission.expected.workflow_status,
+            audience="BOTH" if is_provider else "INTERNAL",
+            notify=["PROVIDER_APPROVER"] if is_provider else [],
+            metadata={"internal_note": not is_provider, "provider_visible": bool(is_provider)},
+        )
+        return Response({"detail": "Note added.", "event_id": event.id,
+                         "internal_notification_created": bool(is_provider)})
 
 
 # ── Expected Submission Management ───────────────────────────────────────────
@@ -1511,12 +1967,15 @@ class ProviderRequestCorrectionView(APIView):
                 created_by=request.user,
             )
         submission.expected.workflow_status = "PROVIDER_CHANGES_REQUESTED"
-        submission.expected.save(update_fields=["workflow_status"])
-        audit_transition(request=request, submission=submission, event_type="PROVIDER_CHANGES_REQUESTED",
+        submission.expected.provider_status = "CORRECTIONS_REQUIRED"
+        submission.expected.save(update_fields=["workflow_status", "provider_status"])
+        event = audit_transition(request=request, submission=submission, event_type="PROVIDER_CHANGES_REQUESTED",
             message=f"The Provider Approver requested corrections: {reason}", from_status=prior_status,
             to_status="PROVIDER_CHANGES_REQUESTED", audience="PROVIDER", notify=["PROVIDER_DATA_ENTRY"],
-            metadata={"targets": targets})
-        return Response({"detail": "Returned to Data Entry for correction.", "workflow_status": "PROVIDER_CHANGES_REQUESTED"})
+            metadata={"targets": targets, "reason": reason, "comments": reason,
+                      "action_required": "Review the flagged items and update the form."})
+        return Response({"detail": "Returned to Data Entry for flagged review.", "workflow_status": "PROVIDER_CHANGES_REQUESTED",
+                         "event_id": event.id, "internal_notification_created": True})
 
 
 class ReturnToDraftView(ProviderRequestCorrectionView):
@@ -1581,7 +2040,10 @@ class SubmissionNotificationReadView(APIView):
 
     def post(self, request, pk):
         notification = get_object_or_404(SubmissionNotification, pk=pk, recipient=request.user)
+        was_read = notification.is_read
         mark_notification_read(notification)
+        if not was_read:
+            write_audit(request, "NOTIFICATION_READ", "SubmissionNotification", notification.id)
         return Response({"id": notification.id, "is_read": True})
 
 
@@ -1591,6 +2053,11 @@ class SubmissionNotificationReadAllView(APIView):
     def post(self, request):
         now = timezone.now()
         count = SubmissionNotification.objects.filter(recipient=request.user, is_read=False).update(is_read=True, read_at=now)
+        if count:
+            write_audit(
+                request, "NOTIFICATIONS_MARKED_READ", "SubmissionNotification", "bulk",
+                after={"count": count},
+            )
         return Response({"marked_read": count})
 
 

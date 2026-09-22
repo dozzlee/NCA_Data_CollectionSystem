@@ -31,7 +31,7 @@ class RequesterProfileTests(APITestCase):
         self.client.force_authenticate(officer)
         self.assertEqual(self.client.get("/api/v1/form-templates/").status_code, 200)
         self.assertEqual(self.client.get("/api/v1/provider-form-coverage/").status_code, 404)
-        self.assertEqual(self.client.get("/api/v1/governance/readiness/").status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/governance/readiness/").status_code, 404)
         self.assertEqual(self.client.get("/api/v1/auth/users/").status_code, 403)
         self.assertEqual(self.client.get("/api/v1/nca-divisions/").status_code, 403)
         self.assertEqual(self.client.get("/api/v1/data-requests/").status_code, 403)
@@ -61,12 +61,22 @@ class AuthenticationSecurityTests(APITestCase):
 
     def test_admin_reset_requires_password_change(self):
         admin = User.objects.create_user("admin-reset@nca.test", "admin-password-123", name="Admin", role="NCA_ADMIN")
+        original_identity = (self.user.email, self.user.name, self.user.role, self.user.organization_id)
         self.client.force_authenticate(admin)
         response = self.client.post(f"/api/v1/auth/users/{self.user.id}/reset-password/", {"temporary_password": "temporary-password-456"}, format="json")
         self.assertEqual(response.status_code, 200, response.data)
         self.user.refresh_from_db()
         self.assertTrue(self.user.must_change_password)
         self.assertTrue(self.user.check_password("temporary-password-456"))
+        self.assertEqual((self.user.email, self.user.name, self.user.role, self.user.organization_id), original_identity)
+
+    def test_non_admin_cannot_reset_another_users_password(self):
+        self.client.force_authenticate(self.user)
+        target = User.objects.create_user("target@nca.test", "target-password-123", name="Target", role="NCA_OFFICER")
+        response = self.client.post(f"/api/v1/auth/users/{target.id}/reset-password/", {"temporary_password": "temporary-password-456"}, format="json")
+        self.assertEqual(response.status_code, 403)
+        target.refresh_from_db()
+        self.assertTrue(target.check_password("target-password-123"))
 
     def test_cookie_auth_requires_csrf_and_rotates_refresh(self):
         client = APIClient(enforce_csrf_checks=True)

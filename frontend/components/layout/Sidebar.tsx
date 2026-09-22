@@ -7,9 +7,9 @@ import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, BarChart3, FileText, Building2, Calendar,
-  ShieldAlert, Download, LogOut, FormInput, Users,
+  Download, LogOut, FormInput, Users,
   Library, ClipboardList, Bell,
-  ShieldCheck, LifeBuoy,
+  LifeBuoy, ScrollText, BookOpenText,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { User } from "@/lib/types";
@@ -24,25 +24,26 @@ const ROLE_LABELS: Record<string, string> = {
 const BASE_NAV = [
   { href: "/dashboard",   label: "Dashboard",   icon: LayoutDashboard },
   { href: "/industry-dashboard", label: "Industry Dashboard", icon: BarChart3 },
-  { href: "/submissions", label: "Submissions",  icon: FileText },
+  { href: "/submissions", label: "Compliance & Submission", icon: FileText },
   { href: "/providers",   label: "Providers",    icon: Building2 },
   { href: "/periods",     label: "Periods",      icon: Calendar },
-  { href: "/compliance",  label: "Compliance",   icon: ShieldAlert },
   { href: "/exports",     label: "Exports",      icon: Download },
 ];
 
 // System Admin only
 const ADMIN_NAV = [
   { href: "/forms",  label: "Forms", icon: FormInput },
+  { href: "/reports", label: "Reports", icon: BookOpenText },
   { href: "/users",  label: "Users",        icon: Users },
   { href: "/data-requests", label: "Data Requests", icon: ClipboardList },
-  { href: "/governance", label: "Production Readiness", icon: ShieldCheck },
+  { href: "/audit-log", label: "Audit Log", icon: ScrollText },
   { href: "/support", label: "Support Queue", icon: LifeBuoy },
 ];
 
 const OFFICER_NAV = [
   { href: "/forms",  label: "Forms", icon: FormInput },
-  { href: "/governance", label: "Production Readiness", icon: ShieldCheck },
+  { href: "/reports", label: "Reports", icon: BookOpenText },
+  { href: "/data-requests", label: "Data Requests", icon: ClipboardList },
   { href: "/support", label: "Support Queue", icon: LifeBuoy },
 ];
 
@@ -79,8 +80,7 @@ export function Sidebar() {
 
   return (
     <aside
-      className="flex h-screen w-[272px] shrink-0 flex-col"
-      style={{ background: "linear-gradient(180deg, #002d5b 0%, #001836 100%)" }}
+      className="workspace-sidebar flex h-screen w-[272px] shrink-0 flex-col"
     >
       {/* Brand */}
       <div className="flex items-center gap-3 px-6 py-6 border-b border-white/10">
@@ -106,15 +106,13 @@ export function Sidebar() {
           const active = pathname === href || pathname.startsWith(href + "/");
           return (
             <Link key={href} href={href}
+              aria-current={active ? "page" : undefined}
               className={cn(
-                "group flex items-center gap-3 rounded-[8px] px-3 py-2.5 text-[14px] font-medium transition-colors duration-150",
-                active ? "bg-white/12 text-white" : "text-white/60 hover:bg-white/08 hover:text-white/90"
+                "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[14px] font-medium transition-colors duration-150",
+                active ? "bg-white/[0.94] text-[#001836]" : "text-white/75 hover:bg-white/10 hover:text-white"
               )}>
-              <Icon size={16} className={cn("shrink-0 transition-colors", active ? "text-white" : "text-white/50 group-hover:text-white/80")} />
+              <Icon size={16} className={cn("shrink-0 transition-colors", active ? "text-[#001836]" : "text-white/75 group-hover:text-white")} />
               {label}
-              {href === "/compliance" && (
-                <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-[#E31937] px-1.5 text-[10px] font-bold text-white leading-none">!</span>
-              )}
             </Link>
           );
         })}

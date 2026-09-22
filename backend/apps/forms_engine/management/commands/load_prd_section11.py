@@ -67,7 +67,7 @@ FORM_DEFINITIONS = {
         ],
     },
     "DC-ISP06": {
-        "version": "3.0", "name": "Internet / Public Data Service Providers", "frequency": "ANNUAL", "sector": "TELECOM", "category": "ISP",
+        "version": "3.0", "name": "Internet / Public Data Service Providers", "frequency": "SEMI_ANNUAL", "sector": "TELECOM", "category": "ISP",
         "sections": [
             ("company_details", "Company Details", COMMON_COMPANY), ("employment", "Employment", COMMON_EMPLOYMENT), ("financials", "Financials", COMMON_FINANCIALS),
             ("upstream_transit", "Upstream Transit", [], [grid("supplier_rows", "Upstream suppliers", [col("supplier", "Supplier", "text"), col("capacity", "Capacity", "number", "Gbps"), col("cost", "Cost", "currency", "GHS")], min_rows=1)]),
@@ -88,7 +88,7 @@ FORM_DEFINITIONS = {
         "rules": [{"type": "COORDINATE", "grid": "pop_locations", "message": "PoP latitude and longitude must be valid coordinates."}],
     },
     "DC-ITC04": {
-        "version": "3.0", "name": "Infrastructure Tower Companies", "frequency": "ANNUAL", "sector": "TELECOM", "category": "TOWER_OPERATOR",
+        "version": "3.0", "name": "Infrastructure Tower Companies", "frequency": "SEMI_ANNUAL", "sector": "TELECOM", "category": "TOWER_OPERATOR",
         "sections": [
             ("company_details", "Company Details", COMMON_COMPANY), ("employment", "Employment", COMMON_EMPLOYMENT), ("financials", "Financials", COMMON_FINANCIALS),
             ("maintenance", "Site Maintenance", [f("maintenance_cost", "Site maintenance cost", "currency", "GHS"), f("maintained_sites", "Sites maintained", "number", "count")]),
@@ -104,7 +104,7 @@ FORM_DEFINITIONS = {
         "rules": [{"type": "COORDINATE", "grid": "tower_additions", "message": "Tower coordinates must be valid."}],
     },
     "TOWER-MAIN-ANNUAL": {
-        "version": "2.0", "name": "Infrastructure Main Companies Annual", "frequency": "ANNUAL", "sector": "TELECOM", "category": "TOWER_MAIN", "source_decision": False,
+        "version": "2.0", "name": "Infrastructure Main Companies Bi-Annual", "frequency": "SEMI_ANNUAL", "sector": "TELECOM", "category": "TOWER_MAIN", "source_decision": False,
         "sections": [("owned_sites", "Owned Sites", [], [grid("owned_sites_grid", "Owned sites", [col("value", "Sites", "number", "count")], GHANA_REGIONS)]),
             ("owned_rent", "Owned Average Rent", [], [grid("owned_rent_grid", "Owned average rent", [col("value", "Average rent", "currency", "GHS")], GHANA_REGIONS)]),
             ("managed_sites", "Managed Sites", [], [grid("managed_sites_grid", "Managed sites", [col("value", "Sites", "number", "count")], GHANA_REGIONS)]),
@@ -112,7 +112,7 @@ FORM_DEFINITIONS = {
             ("decommissioned", "Decommissioned Towers", [], [grid("decommissioned_grid", "Decommissioned towers", [col("value", "Towers", "number", "count")], GHANA_REGIONS)])],
     },
     "DC-DBS05": {
-        "version": "2.0", "name": "Domestic / National Inland Fibre", "frequency": "ANNUAL", "sector": "TELECOM", "category": "DOMESTIC_FIBRE", "kmz": ("topology", "TOPOLOGY"),
+        "version": "2.0", "name": "Domestic / National Inland Fibre", "frequency": "SEMI_ANNUAL", "sector": "TELECOM", "category": "DOMESTIC_FIBRE", "kmz": ("topology", "TOPOLOGY"),
         "sections": [("company_details", "Company Details", COMMON_COMPANY), ("employment", "Employment", COMMON_EMPLOYMENT), ("financials", "Financials", COMMON_FINANCIALS),
             ("capacity", "Capacity", [f("backbone_capacity", "Backbone capacity", "number", "Gbps")]), ("fibre_lengths", "Fibre Lengths", [f("owned_fibre_length", "Owned fibre length", "number", "km"), f("leased_fibre_length", "Leased fibre length", "number", "km")]),
             ("leased_cables", "Leased Cables", [], [grid("leased_cables", "Leased cables", [col("supplier", "Supplier", "text"), col("length", "Length", "number", "km"), col("capacity", "Capacity", "number", "Gbps")], min_rows=0)]),
@@ -128,7 +128,7 @@ FORM_DEFINITIONS = {
         "rules": [{"type": "RANGE", "field": "population_coverage", "min": 0, "max": 100, "message": "Population coverage must be between 0 and 100."}, {"type": "RANGE", "field": "geographic_coverage", "min": 0, "max": 100, "message": "Geographic coverage must be between 0 and 100."}],
     },
     "DC-SUB03": {
-        "version": "2.0", "name": "International Submarine Fibre", "frequency": "ANNUAL", "sector": "TELECOM", "category": "SUBMARINE_FIBRE",
+        "version": "2.0", "name": "International Submarine Fibre", "frequency": "SEMI_ANNUAL", "sector": "TELECOM", "category": "SUBMARINE_FIBRE",
         "sections": [("company_details", "Company Details", COMMON_COMPANY), ("employment", "Employment", COMMON_EMPLOYMENT), ("financials", "Financials", COMMON_FINANCIALS),
             ("circuit_costs", "Circuit Costs", [f("circuit_cost", "Circuit cost", "currency", "GHS")]), ("cable_metadata", "Cable Metadata", [f("cable_name", "Cable name", "text"), f("landing_station", "Landing station", "text"), f("ready_for_service", "Ready-for-service date", "date")]),
             ("global_capacity", "Total Cable Capacity", [f("global_total_capacity", "Total cable capacity", "number", "Gbps"), f("global_lit_capacity", "Total lit capacity", "number", "Gbps")]),
@@ -140,7 +140,7 @@ FORM_DEFINITIONS = {
         "rules": [{"type": "COMPARISON", "field": "ghana_total_capacity", "left": "ghana_total_capacity", "right": "global_total_capacity", "operator": "<=", "message": "Ghana segment capacity cannot exceed total cable capacity."}],
     },
     "DC-TB02": {
-        "version": "3.0", "name": "Pay Television Broadcasting", "frequency": "ANNUAL", "sector": "BROADCASTING", "category": "PAY_TV",
+        "version": "3.0", "name": "Pay Television Broadcasting", "frequency": "SEMI_ANNUAL", "sector": "BROADCASTING", "category": "PAY_TV",
         "sections": [("company_details", "Company and Contact Details", COMMON_COMPANY),
             ("service_type", "Television Broadcasting Service Type", [f("service_type", "Television broadcasting service", "multiselect", options=["Satellite", "Terrestrial", "Cable", "Internet streaming"])]),
             ("encryption_streaming", "Encryption and Internet Streaming", [f("encrypted", "Service is encrypted", "boolean"), f("internet_streaming", "Provides internet streaming", "boolean"), f("streaming_platform", "Streaming platform", "text", required=False)]),

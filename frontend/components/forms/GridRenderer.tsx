@@ -11,6 +11,7 @@ interface CellValue {
   value: string;
   value_status: FieldStatus | "";
   explanation?: string;
+  value_source?: string;
 }
 
 interface GridRendererProps {
@@ -75,6 +76,7 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
     replaceCell(rowId, columnId, {
       grid_row_id: rowId, grid_column_id: columnId, value,
       value_status: value ? "PROVIDED" : "MISSING", explanation: "",
+      value_source: "MANUAL",
     });
   }
 
@@ -85,6 +87,7 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
       value: status ? "" : current?.value ?? "",
       value_status: status || (current?.value ? "PROVIDED" : "MISSING"),
       explanation: current?.explanation ?? "",
+      value_source: "MANUAL",
     });
   }
 
@@ -93,6 +96,7 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
     replaceCell(rowId, columnId, {
       grid_row_id: rowId, grid_column_id: columnId, value: "",
       value_status: current?.value_status || "NOT_AVAILABLE", explanation,
+      value_source: "MANUAL",
     });
   }
 
@@ -123,6 +127,7 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
                 const growth = numericGrowth(current?.value, previous, column.field_type);
                 return <td key={column.id} className="px-3 py-2 text-[12px] text-[#191c1e]">
                   {current?.value || current?.explanation || <span className="italic text-[#8a8f98]">— Not provided</span>}
+                  {current?.value_source==="EXCEL_IMPORT"&&<span className="mt-1 block text-[9px] font-semibold text-[#004999]">Imported from Excel</span>}
                   {current?.value_status && !["PROVIDED", "MISSING"].includes(current.value_status) && <span className="mt-0.5 block text-[9px] uppercase tracking-wide text-[#7a5c00]">{current.value_status.split("_").join(" ")}</span>}
                   {isNumericColumn(column.field_type) && <span className="mt-1 block text-[9px] text-[#737780]">Previous: {previous ?? "—"} · Growth: {growth === null ? "N/A" : `${growth > 0 ? "↑ +" : growth < 0 ? "↓ " : ""}${growth.toFixed(2)}%`}</span>}
                 </td>;
@@ -182,6 +187,7 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
                           className={cn(cellInput, "text-right")} placeholder="—" />
                       )}
                       {isNumericColumn(column.field_type) && <p className="px-1 pb-1 text-left text-[9px] text-[#737780]">Previous: {previous ?? "—"} · Growth: {growth === null ? "N/A" : `${growth > 0 ? "↑ +" : growth < 0 ? "↓ " : ""}${growth.toFixed(2)}%`}</p>}
+                      {current?.value_source==="EXCEL_IMPORT"&&<p className="px-1 pb-1 text-left text-[9px] font-semibold text-[#004999]">Imported from Excel</p>}
                       {column.is_required && !disabled && (
                         <select value={hasNonFilledStatus ? current?.value_status : ""}
                           onChange={(event) => setStatus(row.id, column.id, event.target.value as FieldStatus | "")}
@@ -193,7 +199,7 @@ export function GridRenderer({ grid, values, onChange, disabled, issues = [], co
                           <option value="NOT_REQUIRED">Not required</option>
                         </select>
                       )}
-                      {cellCorrections.map((item, correctionIndex) => <p key={correctionIndex} className="px-1 text-left text-[10px] text-[#7a5c00]">Correction: {item.instruction}</p>)}
+                      {cellCorrections.map((item, correctionIndex) => <p key={correctionIndex} className="px-1 text-left text-[10px] text-[#7a5c00]">Flag: {item.instruction}</p>)}
                       {cellIssues.map((item, issueIndex) => <p key={issueIndex} role="alert" className="px-1 text-left text-[10px] font-medium text-[#c0112a]">{item.message}</p>)}
                     </td>
                   );

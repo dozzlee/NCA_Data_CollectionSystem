@@ -3,12 +3,15 @@ import hashlib
 import io
 
 from django.http import HttpResponse
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.audit.services import record_audit
 from apps.submissions.models import ExpectedSubmission, WORKFLOW_STATUSES
+from apps.submissions.models import ReportingPeriod
+from apps.forms_engine.models import FormTemplate
 from apps.users.permissions import IsNCAUser
 from .models import ExportLog
 from .services import CANONICAL_HEADERS, canonical_row_dicts, canonical_values
@@ -174,3 +177,170 @@ class ExportLogListView(APIView):
         return Response([{"id": item.id, "export_type": item.export_type, "filters": item.filters,
             "generated_by": item.generated_by.name, "generated_at": item.generated_at, "row_count": item.row_count,
             "mime_type": item.mime_type, "file_size": item.file_size, "sha256": item.sha256} for item in logs])
+
+
+def _catalogue_query(request):
+    period_id = request.query_params.get("period") or None
+    search = str(request.query_params.get("search") or "").strip()
+    forms = FormTemplate.objects.select_related("family").prefetch_related(
+        "sections__fields", "sections__grids__columns", "sections__grids__fixed_rows",
+    ).order_by("form_code", "version")
+    obligations = ExpectedSubmission.objects.select_related(
+        "provider", "form_template", "period",
+    ).prefetch_related("versions").order_by("-period__year", "-period__month", "provider__registered_name")
+    if period_id:
+        forms = forms.filter(expectedsubmission__period_id=period_id).distinct()
+        obligations = obligations.filter(period_id=period_id)
+    if search:
+        forms = forms.filter(Q(form_code__icontains=search) | Q(name__icontains=search) | Q(version__icontains=search))
+        obligations = obligations.filter(
+            Q(form_template__form_code__icontains=search) | Q(form_template__name__icontains=search)
+            | Q(provider__registered_name__icontains=search) | Q(period__name__icontains=search)
+            | Q(versions__submission_reference__icontains=search)
+        ).distinct()
+    return forms, obligations
+
+
+def _form_item(form):
+    sections = list(form.sections.all())
+    scalar_count = sum(section.fields.count() for section in sections)
+    grid_count = sum(section.grids.count() for section in sections)
+    return {
+        "id": form.id, "code": form.form_code, "name": form.name, "version": form.version,
+        "frequency": form.frequency, "status": form.status, "approval_status": form.approval_status,
+        "sections": len(sections), "indicators": scalar_count,
+        "tables": grid_count, "created_at": form.created_at,
+    }
+
+
+def _obligation_item(expected):
+    latest = expected.versions.order_by("-version", "-id").first()
+    template = expected.form_template
+    return {
+        "id": expected.id, "provider": expected.provider.registered_name,
+        "form_code": template.form_code if template else expected.form_code_snapshot,
+        "form_name": template.name if template else expected.form_name_snapshot,
+        "period_id": expected.period_id, "period": expected.period.name,
+        "workflow_status": expected.workflow_status, "provider_status": expected.provider_status,
+        "due_at": expected.effective_due_at, "sent_at": expected.created_at,
+        "submission_id": latest.id if latest else None,
+        "submission_reference": latest.submission_reference if latest else "",
+        "completion_pct": str(latest.completion_pct if latest else 0),
+        "submitted_at": latest.submitted_at if latest else None,
+    }
+
+
+class ExportCatalogueView(APIView):
+    permission_classes = [IsNCAUser]
+
+    def get(self, request):
+        forms, obligations = _catalogue_query(request)
+        form_items = [_form_item(form) for form in forms]
+        obligation_items = [_obligation_item(item) for item in obligations]
+        return Response({
+            "summary": {
+                "forms": len(form_items), "forms_sent": len(obligation_items),
+                "submitted": sum(item["workflow_status"] in {"SUBMITTED", "UNDER_REVIEW", "RESUBMITTED", "APPROVED", "REJECTED"} for item in obligation_items),
+                "approved": sum(item["workflow_status"] == "APPROVED" for item in obligation_items),
+                "providers": len({item["provider"] for item in obligation_items}),
+            },
+            "periods": list(ReportingPeriod.objects.order_by("-year", "-month", "-quarter", "-id").values("id", "name", "frequency", "year", "month", "quarter", "status")),
+            "forms": form_items,
+            "submissions": obligation_items,
+            "approved_data_only": True,
+        })
+
+
+class ExportCatalogueWorkbookView(APIView):
+    permission_classes = [IsNCAUser]
+
+    def post(self, request):
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+        from openpyxl.utils import get_column_letter
+
+        period_id = request.data.get("period") or None
+        form_ids = request.data.get("form_ids", [])
+        expected_ids = request.data.get("expected_submission_ids", [])
+        try:
+            period_id = int(period_id) if period_id else None
+            form_ids = [int(value) for value in form_ids]
+            expected_ids = [int(value) for value in expected_ids]
+        except (TypeError, ValueError):
+            return Response({"detail": "Period, form and submission selections must use numeric IDs."}, status=400)
+
+        query_request = request._request
+        query_request.GET = query_request.GET.copy()
+        if period_id:
+            query_request.GET["period"] = str(period_id)
+        forms, obligations = _catalogue_query(request)
+        if form_ids:
+            forms = forms.filter(id__in=form_ids)
+        if expected_ids:
+            obligations = obligations.filter(id__in=expected_ids)
+        if form_ids and not expected_ids:
+            obligations = obligations.filter(form_template_id__in=form_ids)
+        forms = list(forms)
+        obligations = list(obligations)
+
+        workbook = Workbook()
+        summary = workbook.active
+        summary.title = "Summary"
+        summary.append(["NCA Data and Form Catalogue"])
+        summary.append(["Generated", timezone.now().isoformat()])
+        summary.append(["Selected period", ReportingPeriod.objects.filter(pk=period_id).values_list("name", flat=True).first() or "All periods"])
+        summary.append(["Forms", len(forms)])
+        summary.append(["Forms sent", len(obligations)])
+        summary.append(["Approved submissions", sum(item.workflow_status == "APPROVED" for item in obligations)])
+
+        forms_sheet = workbook.create_sheet("Forms")
+        forms_sheet.append(["Form ID", "Code", "Name", "Version", "Frequency", "Status", "Approval", "Sections", "Indicators", "Tables"])
+        for form in forms:
+            item = _form_item(form)
+            forms_sheet.append([item["id"], item["code"], item["name"], item["version"], item["frequency"], item["status"], item["approval_status"], item["sections"], item["indicators"], item["tables"]])
+
+        definitions = workbook.create_sheet("Form Definitions")
+        definitions.append(["Form Code", "Version", "Section", "Target Type", "Code", "Label", "Data Type", "Unit", "Required"])
+        for form in forms:
+            for section in form.sections.all():
+                for field in section.fields.all():
+                    definitions.append([form.form_code, form.version, section.title, "FIELD", field.field_code, field.label, field.field_type, field.unit, "Yes" if field.is_required else "No"])
+                for grid in section.grids.all():
+                    for column in grid.columns.all():
+                        definitions.append([form.form_code, form.version, section.title, "TABLE", f"{grid.grid_code}.{column.column_code}", f"{grid.title} / {column.label}", column.field_type, column.unit, "Yes" if column.is_required else "No"])
+
+        submissions_sheet = workbook.create_sheet("Forms Sent")
+        submissions_sheet.append(["Task ID", "Provider", "Form", "Period", "Status", "Sent", "Due", "Submission Reference", "Submitted", "Completion %"])
+        for expected in obligations:
+            item = _obligation_item(expected)
+            submissions_sheet.append([item["id"], item["provider"], item["form_code"], item["period"], item["workflow_status"], item["sent_at"].isoformat() if item["sent_at"] else "", item["due_at"].isoformat() if item["due_at"] else "", item["submission_reference"], item["submitted_at"].isoformat() if item["submitted_at"] else "", item["completion_pct"]])
+
+        approved_ids = [item.id for item in obligations if item.workflow_status == "APPROVED"]
+        data_sheet = workbook.create_sheet("Approved Data")
+        data_sheet.append(CANONICAL_HEADERS)
+        approved = approved_submissions({"id__in": approved_ids}) if approved_ids else []
+        data_rows = canonical_values(canonical_row_dicts(approved)) if approved_ids else []
+        row_count = 0
+        for row in data_rows:
+            data_sheet.append([spreadsheet_safe(value) for value in row])
+            row_count += 1
+
+        header_fill = PatternFill("solid", fgColor="002D5B")
+        for sheet in workbook.worksheets:
+            for cell in sheet[1]:
+                cell.fill = header_fill
+                cell.font = Font(color="FFFFFF", bold=True)
+            sheet.freeze_panes = "A2"
+            for index, column in enumerate(sheet.columns, start=1):
+                width = min(45, max(12, max(len(str(cell.value or "")) for cell in column) + 2))
+                sheet.column_dimensions[get_column_letter(index)].width = width
+
+        output = io.BytesIO()
+        workbook.save(output)
+        content = output.getvalue()
+        filters = {"period": period_id, "form_ids": form_ids, "expected_submission_ids": expected_ids}
+        record_export(request=request, export_type="XLSX", filters=filters, content=content, row_count=row_count, mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        response = HttpResponse(content, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        response["Content-Disposition"] = f'attachment; filename="nca_data_form_catalogue_{timezone.now().strftime("%Y%m%d_%H%M%S")}.xlsx"'
+        response["X-Content-Type-Options"] = "nosniff"
+        return response

@@ -22,6 +22,7 @@ from apps.forms_engine.models import (
     ValidationRule,
 )
 from apps.providers.models import ProviderProfile, ProviderFormAssignment
+from apps.compliance.models import ExternalEmailHandoff
 from apps.users.models import Organization, User
 from apps.uploads.models import SubmissionKMZUpload
 from .models import (
@@ -52,14 +53,19 @@ class FormAssignmentTests(APITestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(PeriodFormAssignment.objects.count(), 1)
         self.assertEqual(ExpectedSubmission.objects.filter(provider=self.provider, form_template=self.form, period=self.period).count(), 1)
-        self.assertTrue(SubmissionNotification.objects.filter(recipient=self.entry, title="New form assigned").exists())
-        self.assertTrue(SubmissionNotification.objects.filter(recipient=self.approver, title="New form assigned").exists())
+        self.assertTrue(SubmissionNotification.objects.filter(recipient=self.entry, event__event_type="FORM_ASSIGNED").exists())
+        self.assertTrue(SubmissionNotification.objects.filter(recipient=self.approver, event__event_type="FORM_ASSIGNED").exists())
         self.assertEqual(response.data["delivery_type"], "IMMEDIATE")
         self.assertEqual(response.data["obligations_created"], 1)
         self.assertEqual(response.data["recurring_schedules_created"], 0)
         self.assertEqual(response.data["obligations"][0]["period_id"], self.period.id)
+        self.assertIsNotNone(response.data["obligations"][0]["event_id"])
         expected = ExpectedSubmission.objects.get(provider=self.provider, form_template=self.form, period=self.period)
         self.assertEqual(expected.due_state, "OPEN")
+        listing = self.client.get("/api/v1/expected-submissions/")
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(listing.data["results"][0]["latest_action"]["label"], "Assigned")
+        self.assertIsNotNone(listing.data["results"][0]["latest_communication_at"])
         repeat = self.client.post(f"/api/v1/form-templates/{self.form.id}/assignments/", payload, format="json")
         self.assertEqual(repeat.status_code, 200, repeat.data)
         self.assertEqual(repeat.data["duplicates"], 1)
@@ -77,6 +83,28 @@ class FormAssignmentTests(APITestCase):
         period.activate()
         expected = ExpectedSubmission.objects.get(period=period, provider=self.provider, form_template=self.form)
         self.assertIsNotNone(expected.recurring_assignment_id)
+
+    def test_nca_can_prepare_manual_period_reminder_email(self):
+        expected, _ = ExpectedSubmission.create_from_assignment(
+            provider=self.provider, form_template=self.form, period=self.period, actor=self.admin,
+        )
+        payload = {
+            "expected_submission_ids": [expected.id],
+            "subject": "Quarterly return reminder",
+            "message": "Please complete the outstanding return before the deadline.",
+            "client_request_id": "period-reminder-test",
+        }
+        response = self.client.post(f"/api/v1/periods/{self.period.id}/send-reminders/", payload, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["count"], 1)
+        event = SubmissionEvent.objects.get(submission__expected=expected, event_type="REMINDER")
+        self.assertEqual(event.metadata["communication_subject"], payload["subject"])
+        self.assertTrue(SubmissionNotification.objects.filter(event=event, recipient=self.entry).exists())
+        self.assertTrue(SubmissionNotification.objects.filter(event=event, recipient=self.approver).exists())
+        self.assertTrue(ExternalEmailHandoff.objects.filter(event=event).exists())
+        replay = self.client.post(f"/api/v1/periods/{self.period.id}/send-reminders/", payload, format="json")
+        self.assertEqual(replay.status_code, 200, replay.data)
+        self.assertEqual(SubmissionEvent.objects.filter(submission__expected=expected, event_type="REMINDER").count(), 1)
 
     def test_mismatch_requires_audited_override_reason(self):
         other_org = Organization.objects.create(name="Broadcaster", org_type="PROVIDER")
@@ -782,8 +810,53 @@ class SubmissionRemediationTests(APITestCase):
         self.assertEqual(official.status_code, 200, official.data)
         self.expected_a.refresh_from_db()
         self.assertEqual(self.expected_a.workflow_status, "RESUBMITTED")
+        self.authenticate(self.officer)
+        review = self.client.get(
+            f"/api/v1/submissions/{correction_submission_id}/review-data/",
+        )
+        self.assertEqual(review.status_code, 200, review.data)
+        self.assertEqual(len(review.data["correction_changes"]), 1)
+        self.assertEqual(
+            review.data["correction_changes"][0]["target_id"],
+            str(self.required_field.id),
+        )
+        self.assertEqual(
+            review.data["correction_changes"][0]["after_value"], "corrected",
+        )
         self.submission_a.refresh_from_db()
         self.assertEqual(self.submission_a.values.get(field=self.required_field).value, "original official value")
+
+    def test_nca_flag_requires_and_preserves_reason_for_each_target(self):
+        self.expected_a.workflow_status = "UNDER_REVIEW"
+        self.expected_a.save(update_fields=["workflow_status"])
+        self.submission_a.regulatory_status = "UNDER_REVIEW"
+        self.submission_a.save(update_fields=["regulatory_status"])
+        self.authenticate(self.officer)
+        url = f"/api/v1/submissions/{self.submission_a.id}/review/request-correction/"
+        missing = self.client.post(url, {
+            "targets": [{"type": "FIELD", "id": self.required_field.id}],
+        }, format="json")
+        self.assertEqual(missing.status_code, 400)
+
+        reason = "The value does not agree with the signed subscriber schedule."
+        response = self.client.post(url, {
+            "targets": [{"type": "FIELD", "id": self.required_field.id, "reason": reason}],
+        }, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        item = CorrectionItem.objects.get(source_submission=self.submission_a, target_type="FIELD")
+        self.assertEqual(item.instruction, reason)
+        event = SubmissionEvent.objects.get(pk=response.data["event_id"])
+        self.assertEqual(event.metadata["target_labels"][0]["reason"], reason)
+        self.assertIn(self.required_field.label, event.metadata["target_labels"][0]["label"])
+        record = event.communications.get()
+        self.assertIn(self.required_field.label, record.body)
+        self.assertIn(reason, record.body)
+        listing = self.client.get("/api/v1/nca-submissions/")
+        self.assertEqual(listing.status_code, 200)
+        row = next(row for row in listing.data["results"] if row["id"] == self.submission_a.id)
+        self.assertEqual(row["latest_action"]["label"], "Flagged and Returned")
+        self.assertIsNotNone(row["latest_action_at"])
+        self.assertIsNotNone(row["latest_communication_at"])
 
     def test_official_approval_reruns_readiness(self):
         self.expected_a.workflow_status = "PENDING_APPROVAL"
@@ -907,6 +980,23 @@ class SubmissionRemediationTests(APITestCase):
         expanded = self.client.get("/api/v1/provider-workspace/submissions/?queue=drafts&page_size=100")
         self.assertEqual(len(expanded.data["results"]), 56)
 
+    def test_provider_dashboard_all_queue_excludes_archived_history(self):
+        archived_period = ReportingPeriod.objects.create(
+            name="Archived dashboard period", frequency="MONTHLY", year=2028, month=1,
+            opens_at=timezone.now() - timedelta(days=30), due_at=timezone.now() - timedelta(days=1),
+            status="CLOSED", created_by=self.officer,
+        )
+        archived = ExpectedSubmission.objects.create(
+            provider=self.provider_a, form_template=self.form, period=archived_period,
+            workflow_status="ARCHIVED", provider_status="CLOSED", due_state="CLOSED",
+        )
+        self.authenticate(self.approver_a)
+        response = self.client.get("/api/v1/provider-workspace/submissions/?queue=all&page_size=100")
+        self.assertEqual(response.status_code, 200, response.data)
+        returned_ids = {item["id"] for item in response.data["results"]}
+        self.assertIn(self.expected_a.id, returned_ids)
+        self.assertNotIn(archived.id, returned_ids)
+
     def test_approver_can_monitor_data_entry_work_without_editing_it(self):
         self.authenticate(self.approver_a)
         summary = self.client.get("/api/v1/provider-workspace/summary/")
@@ -919,7 +1009,7 @@ class SubmissionRemediationTests(APITestCase):
         denied = self.client.post(f"/api/v1/expected-submissions/{self.expected_a.id}/start/")
         self.assertEqual(denied.status_code, 403)
 
-    def test_approver_edit_is_audited_and_requires_change_summary(self):
+    def test_approver_edit_is_audited_without_required_change_summary(self):
         SubmissionValue.objects.create(
             submission=self.submission_a, field=self.required_field, value="entry value",
             value_status="PROVIDED", updated_by=self.entry_a,
@@ -938,15 +1028,9 @@ class SubmissionRemediationTests(APITestCase):
         self.assertEqual(batch.item_count, 1)
         self.assertEqual(batch.items.get().before["value"], "entry value")
         self.assertEqual(batch.items.get().after["value"], "approver value")
-        missing_summary = self.client.post(
-            f"/api/v1/submissions/{self.submission_a.id}/provider-review/approve/",
-            {"attestation": True}, format="json",
-        )
-        self.assertEqual(missing_summary.status_code, 400)
-        self.assertEqual(missing_summary.data["code"], "CHANGE_SUMMARY_REQUIRED")
         approved = self.client.post(
             f"/api/v1/submissions/{self.submission_a.id}/provider-review/approve/",
-            {"attestation": True, "change_summary": "Corrected the value from the signed source."}, format="json",
+            {"attestation": True}, format="json",
         )
         self.assertEqual(approved.status_code, 200, approved.data)
         self.assertTrue(ProviderApprovalDecision.objects.filter(submission=self.submission_a, attestation=True).exists())
@@ -1275,7 +1359,7 @@ class SubmissionRemediationTests(APITestCase):
         expected = self.client.get("/api/v1/expected-submissions/")
         self.assertEqual(expected.status_code, 200)
         self.assertEqual(expected.data["count"], 0)
-        self.assertEqual(self.client.get("/api/v1/compliance/flags/").status_code, 403)
+        self.assertEqual(self.client.get("/api/v1/compliance/flags/").status_code, 404)
         self.assertEqual(self.client.get("/api/v1/data-catalog/").status_code, 200)
         response = self.client.post(
             f"/api/v1/submissions/{self.submission_a.id}/review/approve/",
@@ -1380,21 +1464,21 @@ class SubmissionRemediationTests(APITestCase):
     def test_viewer_mutation_matrix_is_denied(self):
         self.authenticate(self.viewer)
         requests = [
-            ("post", "/api/v1/periods/", {"name": "Forbidden"}),
-            ("post", "/api/v1/form-templates/", {"name": "Forbidden"}),
-            ("post", "/api/v1/auth/users/", {"email": "forbidden@example.com"}),
-            ("get", "/api/v1/auth/users/", {}),
-            ("get", "/api/v1/audit/", {}),
-            ("patch", "/api/v1/compliance/flags/999/status/", {"status": "RESOLVED"}),
-            ("post", "/api/v1/compliance/generate-email/", {"expected_submission_ids": []}),
+            ("post", "/api/v1/periods/", {"name": "Forbidden"}, 403),
+            ("post", "/api/v1/form-templates/", {"name": "Forbidden"}, 403),
+            ("post", "/api/v1/auth/users/", {"email": "forbidden@example.com"}, 403),
+            ("get", "/api/v1/auth/users/", {}, 403),
+            ("get", "/api/v1/audit/", {}, 403),
+            ("patch", "/api/v1/compliance/flags/999/status/", {"status": "RESOLVED"}, 404),
+            ("post", "/api/v1/compliance/generate-email/", {"expected_submission_ids": []}, 404),
             ("patch", f"/api/v1/submissions/{self.submission_a.id}/kmz-uploads/999/review/", {
                 "review_status": "ACCEPTED",
-            }),
+            }, 403),
         ]
-        for method, url, payload in requests:
+        for method, url, payload, expected_status in requests:
             with self.subTest(method=method, url=url):
                 response = getattr(self.client, method)(url, payload, format="json")
-                self.assertEqual(response.status_code, 403)
+                self.assertEqual(response.status_code, expected_status)
 
 
 class MonthlyIndicatorReportTests(APITestCase):

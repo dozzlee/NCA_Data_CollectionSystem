@@ -7,7 +7,7 @@ from apps.audit.services import record_audit
 from apps.users.permissions import IsNCAEditor
 from .models import RecordRetentionPolicy, LegalHold, DispositionRun, BackupRun, RestoreDrill, OperationalTaskRun
 from .serializers import RetentionPolicySerializer, LegalHoldSerializer, DispositionRunSerializer, BackupRunSerializer, RestoreDrillSerializer, TaskRunSerializer
-from .services import readiness_report, preview_disposition
+from .services import preview_disposition
 
 
 class PolicyListCreate(generics.ListCreateAPIView):
@@ -74,7 +74,3 @@ def sign_off_restore(request, pk):
     record_audit(user=request.user,action="RESTORE_DRILL_SIGNED_OFF",entity_type="RestoreDrill",entity_id=drill.id,after={"evidence_reference":evidence})
     return Response(RestoreDrillSerializer(drill).data)
 
-
-@api_view(["GET"])
-@permission_classes([IsNCAEditor])
-def readiness(request): return Response(readiness_report())

@@ -1,4 +1,4 @@
-export type SectorId = "mobile" | "fixed" | "bwa";
+export type SectorId = "mobile" | "fixed" | "bwa" | "broadcasting" | "fibre" | "infrastructure";
 export type DashboardViewId = "industry" | SectorId;
 export type ChartKind = "line" | "area" | "bar" | "combo";
 export type DashboardVisualKind =
@@ -125,8 +125,8 @@ export type IndustryDashboardDataset = {
     reviewedAt: string;
     latestObservedPeriod: string;
     targetsAvailable: false;
-    monthlyDataAvailable: false;
-    sourceWorkbooks: Record<SectorId, string>;
+    monthlyDataAvailable: boolean;
+    sourceWorkbooks: Partial<Record<SectorId, string>>;
   };
   summary: {
     chartPlacements: number;

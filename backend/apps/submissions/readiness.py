@@ -62,15 +62,15 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
     for field in fields:
         if not _field_is_applicable(field, values_by_field):
             continue
-        if field.is_required:
-            required_total += 1
-            section_required[field.section.section_code] += 1
+        # Completion measures all applicable indicators; requiredness only
+        # controls whether missing data blocks submission.
+        required_total += 1
+        section_required[field.section.section_code] += 1
         if field.field_type == "attachment":
             current = submission.field_attachments.filter(field=field, is_current=True, scan_status="CLEAN").exists()
             if current:
-                if field.is_required:
-                    completed_total += 1
-                    section_completed[field.section.section_code] += 1
+                completed_total += 1
+                section_completed[field.section.section_code] += 1
             else:
                 if field.is_required:
                     blockers.append({"code": "REQUIRED_ATTACHMENT", "type": "ATTACHMENT", "id": field.id,
@@ -78,9 +78,8 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
             continue
         value = values_by_field.get(field.id)
         if _is_value_complete(value):
-            if field.is_required:
-                completed_total += 1
-                section_completed[field.section.section_code] += 1
+            completed_total += 1
+            section_completed[field.section.section_code] += 1
             continue
         blank_indicator_count += 1
         issue = {
@@ -110,7 +109,6 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
 
     for grid in grids:
         columns = list(grid.columns.all())
-        required_columns = [column for column in columns if column.is_required]
         if grid.row_mode == "FIXED":
             row_ids = [str(row.id) for row in grid.fixed_rows.all()]
         else:
@@ -125,8 +123,6 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
                 value = grid_values.get((grid.id, row_id, column.id))
                 if not _is_value_complete(value):
                     blank_indicator_count += 1
-                if column not in required_columns:
-                    continue
                 required_total += 1
                 section_required[grid.section.section_code] += 1
                 value = grid_values.get((grid.id, row_id, column.id))

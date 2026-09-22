@@ -22,7 +22,7 @@ const STATUS_SNAPSHOT = [
   { key:"APPROVED",              label:"Approved",         color:"#e5f4eb", text:"#1f7a4d" },
   { key:"SUBMITTED",             label:"Submitted",        color:"#e8f1fb", text:"#004999" },
   { key:"UNDER_REVIEW",          label:"Under Review",     color:"#e8f1fb", text:"#004999" },
-  { key:"CORRECTION_REQUESTED",  label:"Correction Req.",  color:"#ffe8e8", text:"#c0112a" },
+  { key:"CORRECTION_REQUESTED",  label:"Flag Req.",  color:"#ffe8e8", text:"#c0112a" },
   { key:"PENDING_APPROVAL",      label:"Pending Approval", color:"#fff3bf", text:"#7a5c00" },
   { key:"DRAFT",                 label:"In Progress",      color:"#f2f4f6", text:"#43474f" },
   { key:"NOT_STARTED",           label:"Not Started",      color:"#f2f4f6", text:"#737780" },

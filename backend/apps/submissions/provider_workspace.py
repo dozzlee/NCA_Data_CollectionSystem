@@ -1,4 +1,4 @@
-from django.db.models import Prefetch, Q
+from django.db.models import Prefetch, Q, Sum
 
 from .models import ExpectedSubmission, Submission
 
@@ -14,6 +14,8 @@ def provider_can_edit(user, submission):
         return False
     if user.organization_id != submission.expected.provider.organization_id:
         return False
+    if submission.regulatory_status != "DRAFT":
+        return False
     state = submission.expected.workflow_status
     if user.role == "PROVIDER_DATA_ENTRY":
         return state in DATA_ENTRY_EDIT_STATES
@@ -25,6 +27,10 @@ def provider_can_edit(user, submission):
 def permitted_actions(user, expected, latest=None):
     state = expected.workflow_status
     actions = ["VIEW"]
+    if latest and latest.regulatory_status != "DRAFT":
+        if hasattr(latest, "receipt"):
+            actions.append("DOWNLOAD_RECEIPT")
+        return actions
     if user.role == "PROVIDER_DATA_ENTRY":
         if latest and state in DATA_ENTRY_EDIT_STATES:
             actions.extend(["EDIT", "UPLOAD", "SUBMIT_FOR_APPROVAL"])
@@ -80,7 +86,13 @@ def apply_workspace_queue(queryset, user, queue):
     if queue == "history":
         return queryset.filter(workflow_status__in=OFFICIAL_STATES)
     if queue == "all":
-        return queryset
+        # Archived obligations are immutable historical snapshots. They are
+        # deliberately absent from both the active Forms list and the formal
+        # Submissions list, so including them here makes provider dashboard
+        # totals larger than the number of records a provider can actually
+        # open. Keep the records in the database, but exclude them from the
+        # operational dashboard aggregate.
+        return queryset.exclude(workflow_status="ARCHIVED")
     return queryset.none()
 
 
@@ -113,6 +125,12 @@ def filter_workspace_queryset(queryset, params):
             Q(versions__correction_items__status="OPEN")
             | Q(versions__resolved_correction_items__status="OPEN")
         )
+    if params.get("attention_required") in {"1", "true", "True"}:
+        queryset = queryset.filter(compliance_flags__status__in=["OPEN", "ACKNOWLEDGED", "IN_PROGRESS"]).distinct()
+    if params.get("compliance_status"):
+        queryset = queryset.filter(compliance_flags__status=params["compliance_status"]).distinct()
+    if params.get("compliance_flag_type"):
+        queryset = queryset.filter(compliance_flags__flag_type=params["compliance_flag_type"]).distinct()
     return queryset
 
 
@@ -122,6 +140,11 @@ def summary_for_user(user):
         action_states = ["NOT_STARTED", "DRAFT", "PROVIDER_CHANGES_REQUESTED"]
     else:
         action_states = list(APPROVER_QUEUE_STATES)
+    active_flag_filter = Q(compliance_flags__status__in=["OPEN", "ACKNOWLEDGED", "IN_PROGRESS"])
+    nca_flag_filter = Q(workflow_status="CORRECTION_REQUESTED")
+    active_penalties = queryset.filter(penalty_amount_ghs__gt=0).exclude(
+        workflow_status__in=["APPROVED", "REJECTED", "ARCHIVED"],
+    )
     return {
         "role": user.role,
         "action_required": queryset.filter(workflow_status__in=action_states).count(),
@@ -134,5 +157,17 @@ def summary_for_user(user):
         "awaiting_approver": queryset.filter(workflow_status__in=["PENDING_APPROVAL", "PROVIDER_RESUBMITTED"]).count(),
         "nca_corrections": queryset.filter(workflow_status="CORRECTION_REQUESTED").count(),
         "returned_to_data_entry": queryset.filter(workflow_status="PROVIDER_CHANGES_REQUESTED").count(),
-        "recently_submitted": queryset.filter(workflow_status__in=OFFICIAL_STATES).count(),
+        # Count obligations that have actually reached NCA at least once. Their
+        # current workflow may later be CORRECTION_REQUESTED with an editable
+        # draft revision, but they are still official submission activity.
+        "recently_submitted": queryset.filter(
+            Q(versions__submitted_at__isnull=False)
+            | Q(versions__regulatory_status__in=["SUBMITTED", "UNDER_REVIEW", "RETURNED_FOR_CORRECTION", "APPROVED", "REJECTED"]),
+        ).distinct().count(),
+        "open_compliance_flags": queryset.filter(
+            compliance_flags__status__in=["OPEN", "ACKNOWLEDGED", "IN_PROGRESS"],
+        ).values("compliance_flags").distinct().count(),
+        "flagged_submissions": queryset.filter(active_flag_filter | nca_flag_filter).distinct().count(),
+        "penalty_amount_ghs": active_penalties.aggregate(total=Sum("penalty_amount_ghs"))["total"] or 0,
+        "penalty_obligation_count": active_penalties.count(),
     }

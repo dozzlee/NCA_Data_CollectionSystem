@@ -74,6 +74,7 @@ export async function downloadAuthenticated(
   const contentType = res.headers.get("content-type") ?? "";
   if (!contentType.includes("text/csv") && !contentType.includes("application/octet-stream")
       && !contentType.includes("application/pdf")
+      && !contentType.includes("application/zip")
       && !contentType.includes("application/msword")
       && !contentType.includes("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
       && !contentType.includes("application/vnd.ms-excel")

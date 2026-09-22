@@ -60,6 +60,7 @@ import {
   periodYear,
   prepareSeries,
   sortPeriods,
+  seriesForGranularity,
 } from "@/lib/industry-dashboard/analytics";
 import {
   ChartDatum,
@@ -99,6 +100,9 @@ const VIEW_META: Record<
   DashboardViewId,
   { label: string; short: string; icon: React.ElementType; color: string; soft: string }
 > = {
+  broadcasting: {label:"Broadcasting Services",short:"Broadcasting",icon:RadioTower,color:"#a35212",soft:"#fff3e8"},
+  fibre: {label:"Fibre Broadband",short:"Fibre Broadband",icon:Wifi,color:"#137333",soft:"#e5f4ec"},
+  infrastructure: {label:"Infrastructure",short:"Infrastructure",icon:Layers3,color:"#617384",soft:"#edf1f5"},
   industry: {
     label: "Industry Overview",
     short: "Industry",
@@ -1887,6 +1891,12 @@ export function IndustryDashboard({ canManage = false, providerView = false }: {
   const detailTrigger = useRef<HTMLButtonElement | null>(null);
   const baselineDataset = useRef<IndustryDashboardDataset | null>(null);
 
+  useEffect(()=>{
+    const refresh=()=>setLoadVersion(value=>value+1);
+    window.addEventListener("focus",refresh);
+    return ()=>window.removeEventListener("focus",refresh);
+  },[]);
+
   useEffect(() => {
     let active = true;
     setLoadError(false);
@@ -1924,8 +1934,12 @@ export function IndustryDashboard({ canManage = false, providerView = false }: {
               provenance: "uploaded" as const,
             }
           : { ...chart, provenance: "baseline" as const }
-      ) ?? [],
-    [dataset, overrides]
+      ).map(chart=>({...chart,
+        series:chart.series.map(series=>seriesForGranularity(series,granularity)),
+        shareSeries:chart.shareSeries.map(series=>seriesForGranularity(series,granularity)),
+      }))
+      ?? [],
+    [dataset, overrides, granularity]
   );
   const chartMap = useMemo(
     () => new Map(charts.map((chart) => [chart.id, chart])),
@@ -1963,14 +1977,12 @@ export function IndustryDashboard({ canManage = false, providerView = false }: {
             dataset.sectors.find((sector) => sector.id === activeView)?.defaultRange ?? "10",
             10
           );
-    setRange({
-      start: dataset.periods[Math.max(0, dataset.periods.length - count)],
-      end: dataset.metadata.latestObservedPeriod,
-    });
+    const periods=sortPeriods([...new Set(charts.flatMap(chart=>chart.series.flatMap(series=>series.values.map(point=>point.period))))]);
+    setRange({start:periods[Math.max(0,periods.length-count)]??"",end:periods.at(-1)??""});
     setSearch("");
     setOperator("all");
     setTrendMode("absolute");
-  }, [activeView, dataset]);
+  }, [activeView, dataset, charts]);
 
   const visibleCharts = useMemo(() => {
     if (!dataset || !activeSection) return [];
@@ -2100,7 +2112,7 @@ export function IndustryDashboard({ canManage = false, providerView = false }: {
           <p className="mt-1 max-w-2xl text-[12px] leading-5 text-[#65707a]">An anonymized view of headline industry trends. Provider-level data and NCA source information are not included.</p>
         </header>
         <div className="flex justify-start"><GranularityTabs value={granularity} onChange={changeGranularity} /></div>
-        {granularity === "monthly" ? (
+        {granularity === "monthly" && !dataset.metadata.monthlyDataAvailable ? (
           <section className="rounded-[16px] border border-dashed border-[#cfd8e0] bg-white px-5 py-16 text-center" role="status">
             <CalendarRange className="mx-auto text-[#7e8d99]" size={30} aria-hidden="true" />
             <h2 className="mt-3 text-[15px] font-semibold text-[#36404a]">Monthly data is not available</h2>
@@ -2343,7 +2355,7 @@ export function IndustryDashboard({ canManage = false, providerView = false }: {
           <section className="hidden rounded-[15px] border border-[#dce3e9] bg-white p-4 shadow-[0_5px_16px_rgba(0,45,91,0.035)] lg:block">
             <FilterControls dataset={dataset} range={range} setRange={setRange} granularity={granularity} trendMode={trendMode} setTrendMode={setTrendMode} operator={operator} setOperator={setOperator} search={search} setSearch={setSearch} sort={sort} setSort={setSort}/>
           </section>
-          {granularity === "monthly" ? (
+          {granularity === "monthly" && !dataset.metadata.monthlyDataAvailable ? (
             <section className="rounded-[16px] border border-dashed border-[#cfd8e0] bg-white px-5 py-16 text-center" role="status">
               <CalendarRange className="mx-auto text-[#7e8d99]" size={30} aria-hidden="true" />
               <h2 className="mt-3 text-[15px] font-semibold text-[#36404a]">Monthly data is not available</h2>
@@ -2406,7 +2418,7 @@ export function IndustryDashboard({ canManage = false, providerView = false }: {
               </h2>
             </div>
             <p className="text-[10px] text-[#78828b]">
-              {granularity === "yearly" ? "Curated annual aggregation" : "Quarterly observations"} ·{" "}
+              {granularity === "yearly" ? "Annual observations and aggregation" : granularity === "monthly" ? "Approved monthly observations" : "Quarterly observations"} ·{" "}
               {range.start}–{range.end}
             </p>
           </section>
@@ -2479,7 +2491,7 @@ export function IndustryDashboard({ canManage = false, providerView = false }: {
               <FileSearch className="mx-auto text-[#9aa4ad]" size={29} aria-hidden="true" />
               <h2 className="mt-3 text-[14px] font-semibold text-[#36404a]">No indicators match</h2>
               <p className="mt-1 text-[11px] text-[#7c858e]">
-                Clear the search or choose another section.
+                {search ? "Clear the search or choose another section." : "Indicators will appear here when numeric form data for this service is approved by NCA."}
               </p>
               <button
                 type="button"

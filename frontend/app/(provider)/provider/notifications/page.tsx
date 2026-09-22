@@ -37,7 +37,7 @@ export default function ProviderNotificationsPage() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Submission notifications</h1>
-          <p className="mt-1 text-sm text-[#737780]">Provider approval, correction and NCA workflow updates.</p>
+          <p className="mt-1 text-sm text-[#737780]">Provider approval, flag and NCA workflow updates.</p>
         </div>
         {notices.some((item) => !item.is_read) && (
           <button onClick={markAll} className="text-sm font-semibold text-[#0066cc]">Mark all read</button>
@@ -54,7 +54,7 @@ export default function ProviderNotificationsPage() {
         {notices.map((item) => (
           <Link
             key={item.id}
-            href={`/provider/submissions/${item.expected_submission}`}
+            href={`/provider/forms/${item.expected_submission}`}
             onClick={async () => {
               if (!item.is_read) { await api.post(`/submission-notifications/${item.id}/mark-read/`); await queryClient.invalidateQueries({ queryKey:["submission-notification-summary"] }); }
             }}

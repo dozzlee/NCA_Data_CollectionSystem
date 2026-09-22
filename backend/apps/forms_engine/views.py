@@ -57,6 +57,13 @@ def reject_if_locked(form):
         raise serializers.ValidationError("Used form versions are immutable. Clone a new version.")
 
 
+def audit_form_change(request, action, instance, *, after=None):
+    record_audit(
+        user=request.user, action=action, entity_type=type(instance).__name__, entity_id=instance.pk,
+        after=after or {}, ip_address=request.META.get("REMOTE_ADDR"),
+    )
+
+
 # ── Form Templates ────────────────────────────────────────────────────────────
 
 class FormTemplateListView(generics.ListCreateAPIView):
@@ -68,7 +75,8 @@ class FormTemplateListView(generics.ListCreateAPIView):
         return FormTemplateListSerializer
 
     def perform_create(self, serializer):
-        serializer.save(prepared_by=self.request.user, status="DRAFT", approval_status="DRAFT")
+        form = serializer.save(prepared_by=self.request.user, status="DRAFT", approval_status="DRAFT")
+        audit_form_change(self.request, "FORM_TEMPLATE_CREATED", form, after={"form_code": form.form_code, "version": form.version})
 
 
 class FormWorkbookImportListCreateView(generics.ListCreateAPIView):
@@ -224,7 +232,9 @@ class FormTemplateDetailView(generics.RetrieveUpdateAPIView):
 
     def patch(self, request, *args, **kwargs):
         if locked(self.get_object()): return Response({"detail": "Published form versions used by submissions are immutable. Clone a new version."}, status=409)
-        return super().patch(request, *args, **kwargs)
+        response = super().patch(request, *args, **kwargs)
+        audit_form_change(request, "FORM_TEMPLATE_UPDATED", self.get_object(), after={"changed_fields": sorted(request.data)})
+        return response
 
 
 class FormFamilyListCreate(generics.ListCreateAPIView):
@@ -234,8 +244,9 @@ class FormFamilyListCreate(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         code=serializer.validated_data["code"]
-        serializer.save(frequency_decision_status="PENDING_DECISION" if code=="DC-DBS05" else "APPROVED",
+        family = serializer.save(frequency_decision_status="PENDING_DECISION" if code=="DC-DBS05" else "APPROVED",
             canonical_frequency="" if code=="DC-DBS05" else serializer.validated_data.get("canonical_frequency", ""))
+        audit_form_change(self.request, "FORM_FAMILY_CREATED", family, after={"code": family.code})
 
 
 class FormCodeCatalogListView(generics.ListAPIView):
@@ -561,6 +572,8 @@ class FormAssignmentListCreateView(APIView):
         if mode not in {"RECURRING", "MANUAL"}:
             return Response({"detail": "mode must be RECURRING or MANUAL."}, status=400)
         override_reason = str(request.data.get("override_reason", "")).strip()
+        message_subject = str(request.data.get("message_subject", "")).strip()
+        message_body = str(request.data.get("message_body", "")).strip()
         period = None
         if mode == "MANUAL":
             period = generics.get_object_or_404(ReportingPeriod.objects.select_for_update(), pk=request.data.get("period_id"))
@@ -616,12 +629,17 @@ class FormAssignmentListCreateView(APIView):
                 expected, _ = ExpectedSubmission.create_from_assignment(
                     provider=provider, form_template=form, period=period,
                     manual_assignment=assignment, actor=request.user,
+                    message_subject=message_subject,
+                    message_body=message_body,
                 )
+                submission = expected.versions.order_by("version").first()
+                assignment_event = submission.timeline_events.filter(event_type="FORM_ASSIGNED").order_by("-id").first()
                 obligations_created += 1
                 obligation_references.append({
                     "provider_id": provider.id, "provider_name": provider.registered_name,
                     "assignment_id": assignment.id, "expected_submission_id": expected.id,
-                    "submission_id": expected.versions.order_by("version").values_list("id", flat=True).first(),
+                    "submission_id": submission.id,
+                    "event_id": assignment_event.id if assignment_event else None,
                     "period_id": period.id, "period_name": period.name,
                     "due_at": expected.effective_due_at,
                 })
@@ -654,7 +672,8 @@ class SectionListCreateView(generics.ListCreateAPIView):
         form = generics.get_object_or_404(FormTemplate, pk=self.kwargs["pk"])
         reject_if_locked(form)
         max_order = FormSection.objects.filter(form_template=form).count()
-        serializer.save(form_template=form, sort_order=max_order + 1)
+        section = serializer.save(form_template=form, sort_order=max_order + 1)
+        audit_form_change(self.request, "FORM_SECTION_CREATED", section, after={"form_template_id": form.id})
 
 
 class SectionDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -669,10 +688,12 @@ class SectionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_update(self, serializer):
         reject_if_locked(serializer.instance.form_template)
-        serializer.save()
+        section = serializer.save()
+        audit_form_change(self.request, "FORM_SECTION_UPDATED", section, after={"changed_fields": sorted(serializer.validated_data)})
 
     def perform_destroy(self, instance):
         reject_if_locked(instance.form_template)
+        audit_form_change(self.request, "FORM_SECTION_DELETED", instance, after={"form_template_id": instance.form_template_id})
         instance.delete()
 
 
@@ -698,7 +719,8 @@ class HeadingListCreateView(generics.ListCreateAPIView):
             + list(section.grids.values_list("sort_order", flat=True))
             + [0]
         ) + 1
-        serializer.save(section=section, sort_order=serializer.validated_data.get("sort_order") or next_order)
+        heading = serializer.save(section=section, sort_order=serializer.validated_data.get("sort_order") or next_order)
+        audit_form_change(self.request, "FORM_HEADING_CREATED", heading, after={"section_id": section.id})
 
 
 class HeadingDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -714,10 +736,12 @@ class HeadingDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_update(self, serializer):
         reject_if_locked(serializer.instance.section.form_template)
-        serializer.save()
+        heading = serializer.save()
+        audit_form_change(self.request, "FORM_HEADING_UPDATED", heading, after={"changed_fields": sorted(serializer.validated_data)})
 
     def perform_destroy(self, instance):
         reject_if_locked(instance.section.form_template)
+        audit_form_change(self.request, "FORM_HEADING_DELETED", instance, after={"section_id": instance.section_id})
         instance.delete()
 
 
@@ -745,6 +769,7 @@ class FieldListCreateView(generics.ListCreateAPIView):
                 SelectOption(field=field, value="Yes", label="Yes", sort_order=1),
                 SelectOption(field=field, value="No",  label="No",  sort_order=2),
             ])
+        audit_form_change(self.request, "FORM_FIELD_CREATED", field, after={"section_id": section.id, "field_type": field.field_type})
 
 
 class FieldDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -763,10 +788,12 @@ class FieldDetailView(generics.RetrieveUpdateDestroyAPIView):
         heading = serializer.validated_data.get("heading")
         if heading and heading.section_id != serializer.instance.section_id:
             raise serializers.ValidationError({"heading": "The heading must belong to this section."})
-        serializer.save()
+        field = serializer.save()
+        audit_form_change(self.request, "FORM_FIELD_UPDATED", field, after={"changed_fields": sorted(serializer.validated_data)})
 
     def perform_destroy(self, instance):
         reject_if_locked(instance.section.form_template)
+        audit_form_change(self.request, "FORM_FIELD_DELETED", instance, after={"section_id": instance.section_id})
         instance.delete()
 
 
@@ -780,7 +807,8 @@ class FieldOptionListCreateView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         field = generics.get_object_or_404(FormField, pk=self.kwargs["fid"])
         reject_if_locked(field.section.form_template)
-        serializer.save(field=field, sort_order=field.options.count() + 1)
+        option = serializer.save(field=field, sort_order=field.options.count() + 1)
+        audit_form_change(self.request, "FORM_OPTION_CREATED", option, after={"field_id": field.id})
 
 
 class FieldOptionDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -793,10 +821,12 @@ class FieldOptionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_update(self, serializer):
         reject_if_locked(serializer.instance.field.section.form_template)
-        serializer.save()
+        option = serializer.save()
+        audit_form_change(self.request, "FORM_OPTION_UPDATED", option, after={"changed_fields": sorted(serializer.validated_data)})
 
     def perform_destroy(self, instance):
         reject_if_locked(instance.field.section.form_template)
+        audit_form_change(self.request, "FORM_OPTION_DELETED", instance, after={"field_id": instance.field_id})
         instance.delete()
 
 
@@ -813,7 +843,8 @@ class GridListCreateView(generics.ListCreateAPIView):
         section = generics.get_object_or_404(FormSection, pk=self.kwargs["sid"])
         reject_if_locked(section.form_template)
         max_order = FormGrid.objects.filter(section=section).count()
-        serializer.save(section=section, sort_order=max_order + 1)
+        grid = serializer.save(section=section, sort_order=max_order + 1)
+        audit_form_change(self.request, "FORM_GRID_CREATED", grid, after={"section_id": section.id})
 
 
 class GridDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -829,10 +860,12 @@ class GridDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_update(self, serializer):
         reject_if_locked(serializer.instance.section.form_template)
-        serializer.save()
+        grid = serializer.save()
+        audit_form_change(self.request, "FORM_GRID_UPDATED", grid, after={"changed_fields": sorted(serializer.validated_data)})
 
     def perform_destroy(self, instance):
         reject_if_locked(instance.section.form_template)
+        audit_form_change(self.request, "FORM_GRID_DELETED", instance, after={"section_id": instance.section_id})
         instance.delete()
 
 
@@ -846,7 +879,8 @@ class GridColumnCreateView(APIView):
         max_order = GridColumn.objects.filter(grid=grid).count()
         serializer = GridColumnSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(grid=grid, sort_order=max_order + 1)
+            column = serializer.save(grid=grid, sort_order=max_order + 1)
+            audit_form_change(request, "FORM_GRID_COLUMN_CREATED", column, after={"grid_id": grid.id})
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
@@ -861,10 +895,12 @@ class GridColumnDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_update(self, serializer):
         reject_if_locked(serializer.instance.grid.section.form_template)
-        serializer.save()
+        column = serializer.save()
+        audit_form_change(self.request, "FORM_GRID_COLUMN_UPDATED", column, after={"changed_fields": sorted(serializer.validated_data)})
 
     def perform_destroy(self, instance):
         reject_if_locked(instance.grid.section.form_template)
+        audit_form_change(self.request, "FORM_GRID_COLUMN_DELETED", instance, after={"grid_id": instance.grid_id})
         instance.delete()
 
 
@@ -883,6 +919,7 @@ class GridRowCreateView(APIView):
             row_label=request.data.get("row_label", ""),
             sort_order=max_order + 1,
         )
+        audit_form_change(request, "FORM_GRID_ROW_CREATED", row, after={"grid_id": grid.id})
         return Response({"id": row.id, "row_label": row.row_label, "sort_order": row.sort_order}, status=201)
 
 
@@ -896,10 +933,12 @@ class GridRowDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def perform_update(self, serializer):
         reject_if_locked(serializer.instance.grid.section.form_template)
-        serializer.save()
+        row = serializer.save()
+        audit_form_change(self.request, "FORM_GRID_ROW_UPDATED", row, after={"changed_fields": sorted(serializer.validated_data)})
 
     def perform_destroy(self, instance):
         reject_if_locked(instance.grid.section.form_template)
+        audit_form_change(self.request, "FORM_GRID_ROW_DELETED", instance, after={"grid_id": instance.grid_id})
         instance.delete()
 
 

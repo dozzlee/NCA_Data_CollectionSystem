@@ -1,9 +1,67 @@
 from rest_framework import serializers
+from django.core.exceptions import ValidationError as DjangoValidationError
 from .models import (
     ReportingPeriod, ExpectedSubmission, Submission, SubmissionValue, ReviewAction,
     SubmissionEvent, SubmissionNotification, ProviderApprovalDecision,
     ProviderWorkbookBaseline, WorkbookIndicatorMapping, MonthlyReportArtifact,
 )
+
+
+SUBMISSION_ACTION_LABELS = {
+    "FORM_ASSIGNED": "Assigned",
+    "SUBMISSION_STARTED": "Data Entry Started",
+    "SUBMITTED_FOR_APPROVAL": "Submitted for Internal Review",
+    "PROVIDER_CHANGES_REQUESTED": "Returned to Data Entry",
+    "PROVIDER_RESUBMITTED": "Resubmitted for Internal Review",
+    "PROVIDER_APPROVED": "Internally Approved",
+    "OFFICIALLY_SUBMITTED": "Submitted Officially to NCA",
+    "SUBMISSION_REVIEW_STARTED": "NCA Review Started",
+    "CORRECTION_REQUESTED": "Flagged and Returned",
+    "SUBMISSION_RESUBMITTED": "Resubmitted to NCA",
+    "RESUBMITTED": "Resubmitted to NCA",
+    "SUBMISSION_APPROVED": "Approved",
+    "SUBMISSION_REJECTED": "Rejected",
+    "DEADLINE_CHANGED": "Deadline Changed",
+    "SUBMISSION_CORRESPONDENCE": "Message Sent",
+    "ADD_NOTE": "Internal Note Added",
+}
+
+
+def _activity_for_expected(expected):
+    event = SubmissionEvent.objects.filter(
+        submission__expected=expected,
+    ).order_by("-created_at", "-id").first()
+    from apps.compliance.models import CommunicationRecord
+    communication = CommunicationRecord.objects.filter(
+        expected_submission=expected,
+    ).order_by("-created_at", "-id").first()
+    return event, communication
+
+
+def _latest_message_payload(record, event):
+    """Return correspondence content, falling back to legacy workflow events."""
+    if record:
+        body = record.body or ""
+        return {
+            "subject": record.subject,
+            "preview": " ".join(body.split())[:160],
+            "body": body,
+            "event_type": record.event_type,
+            "created_at": record.created_at,
+        }
+    if not event:
+        return None
+    body = event.message or ""
+    return {
+        "subject": SUBMISSION_ACTION_LABELS.get(
+            event.event_type,
+            event.event_type.replace("_", " ").title(),
+        ),
+        "preview": " ".join(body.split())[:160],
+        "body": body,
+        "event_type": event.event_type,
+        "created_at": event.created_at,
+    }
 
 
 class ReportingPeriodSerializer(serializers.ModelSerializer):
@@ -15,14 +73,24 @@ class ReportingPeriodSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data["created_by"] = self.context["request"].user
         instance = ReportingPeriod(**validated_data)
-        instance.full_clean()
+        try:
+            instance.full_clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                exc.message_dict if hasattr(exc, "message_dict") else exc.messages
+            ) from exc
         instance.save()
         return instance
 
     def update(self, instance, validated_data):
         for key, value in validated_data.items():
             setattr(instance, key, value)
-        instance.full_clean()
+        try:
+            instance.full_clean()
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                exc.message_dict if hasattr(exc, "message_dict") else exc.messages
+            ) from exc
         instance.save()
         return instance
 
@@ -48,6 +116,8 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
     submitted_at = serializers.SerializerMethodField()
     correction_count = serializers.SerializerMethodField()
     open_correction_count = serializers.SerializerMethodField()
+    open_compliance_flag_count = serializers.SerializerMethodField()
+    compliance_flag_types = serializers.SerializerMethodField()
     receipt_available = serializers.SerializerMethodField()
     receipt_reference = serializers.SerializerMethodField()
     permitted_actions = serializers.SerializerMethodField()
@@ -58,6 +128,38 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
     data_entry_team = serializers.SerializerMethodField()
     last_data_entry_editor = serializers.SerializerMethodField()
     sent_at = serializers.SerializerMethodField()
+    latest_message = serializers.SerializerMethodField()
+    latest_action = serializers.SerializerMethodField()
+    latest_action_at = serializers.SerializerMethodField()
+    latest_communication_at = serializers.SerializerMethodField()
+    penalty_amount_ghs = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+
+    def _activity(self, obj):
+        cache_name = "_serialized_expected_activity"
+        cached = getattr(obj, cache_name, None)
+        if cached is None:
+            cached = _activity_for_expected(obj)
+            setattr(obj, cache_name, cached)
+        return cached
+
+    def get_latest_action(self, obj):
+        event, _ = self._activity(obj)
+        if not event:
+            return None
+        return {
+            "code": event.event_type,
+            "label": SUBMISSION_ACTION_LABELS.get(event.event_type, event.event_type.replace("_", " ").title()),
+            "from_status": event.from_status,
+            "to_status": event.to_status,
+        }
+
+    def get_latest_action_at(self, obj):
+        event, _ = self._activity(obj)
+        return event.created_at if event else None
+
+    def get_latest_communication_at(self, obj):
+        _, communication = self._activity(obj)
+        return communication.created_at if communication else None
 
     def _latest(self, obj):
         prefetched = getattr(obj, "workspace_versions", None)
@@ -122,6 +224,12 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
             return 0
         return latest.correction_items.filter(status="OPEN").count() + latest.resolved_correction_items.filter(status="OPEN").count()
 
+    def get_open_compliance_flag_count(self, obj):
+        return obj.compliance_flags.exclude(status="RESOLVED").count()
+
+    def get_compliance_flag_types(self, obj):
+        return list(obj.compliance_flags.exclude(status="RESOLVED").values_list("flag_type", flat=True))
+
     def get_receipt_available(self, obj):
         latest = self._latest(obj)
         return bool(latest and hasattr(latest, "receipt"))
@@ -177,26 +285,39 @@ class ExpectedSubmissionSerializer(serializers.ModelSerializer):
         ).values_list("timeline_events__created_at", flat=True).order_by("timeline_events__created_at").first()
         return event or obj.created_at
 
+    def get_latest_message(self, obj):
+        event, record = self._activity(obj)
+        return _latest_message_payload(record, event)
+
     class Meta:
         model = ExpectedSubmission
         fields = [
             "id", "provider", "provider_name", "provider_sector", "provider_category",
             "form_template", "form_code", "form_name", "form_sector", "form_version", "form_created_at",
             "period", "period_name", "due_at", "effective_due_at", "due_at_override",
-            "workflow_status", "due_state",
+            "workflow_status", "provider_status", "form_reference", "due_state",
             "assigned_officer", "assigned_officer_name",
             "latest_submission_id", "submission_reference",
             "latest_submission_version", "completion_pct", "last_edited_by", "last_edited_by_name",
             "last_edited_at", "submitted_at", "correction_count", "open_correction_count",
+            "open_compliance_flag_count", "compliance_flag_types",
             "receipt_available", "receipt_reference", "permitted_actions", "assignment_source",
-            "ownership_label", "data_entry_team", "last_data_entry_editor", "sent_at",
+            "ownership_label", "data_entry_team", "last_data_entry_editor", "sent_at", "latest_message",
+            "latest_action", "latest_action_at", "latest_communication_at",
+            "penalty_amount_ghs", "penalty_reference", "penalty_note",
+            "penalty_updated_by", "penalty_updated_at",
             "created_at",
             "replacement", "migration_report",
         ]
-        read_only_fields = ["provider", "form_template", "period", "workflow_status", "due_state", "due_at_override", "created_at", "replacement", "migration_report"]
+        read_only_fields = [
+            "provider", "form_template", "period", "workflow_status", "due_state", "due_at_override",
+            "penalty_amount_ghs", "penalty_reference", "penalty_note", "penalty_updated_by", "penalty_updated_at",
+            "created_at", "replacement", "migration_report",
+        ]
 
 
 class SubmissionSerializer(serializers.ModelSerializer):
+    provider = serializers.IntegerField(source="expected.provider_id", read_only=True)
     provider_name = serializers.CharField(source="expected.provider.registered_name", read_only=True)
     form_code = serializers.SerializerMethodField()
     form_name = serializers.SerializerMethodField()
@@ -210,6 +331,39 @@ class SubmissionSerializer(serializers.ModelSerializer):
     last_edited_by_name = serializers.CharField(source="last_edited_by.name", read_only=True, default=None)
     receipt_reference = serializers.SerializerMethodField()
     provider_approval = serializers.SerializerMethodField()
+    form_reference = serializers.CharField(source="expected.form_reference", read_only=True)
+    latest_message = serializers.SerializerMethodField()
+    is_formal_submission = serializers.SerializerMethodField()
+    latest_action = serializers.SerializerMethodField()
+    latest_action_at = serializers.SerializerMethodField()
+    latest_communication_at = serializers.SerializerMethodField()
+
+    def _activity(self, obj):
+        cache_name = "_serialized_submission_activity"
+        cached = getattr(obj, cache_name, None)
+        if cached is None:
+            cached = _activity_for_expected(obj.expected)
+            setattr(obj, cache_name, cached)
+        return cached
+
+    def get_latest_action(self, obj):
+        event, _ = self._activity(obj)
+        if not event:
+            return None
+        return {
+            "code": event.event_type,
+            "label": SUBMISSION_ACTION_LABELS.get(event.event_type, event.event_type.replace("_", " ").title()),
+            "from_status": event.from_status,
+            "to_status": event.to_status,
+        }
+
+    def get_latest_action_at(self, obj):
+        event, _ = self._activity(obj)
+        return event.created_at if event else None
+
+    def get_latest_communication_at(self, obj):
+        _, communication = self._activity(obj)
+        return communication.created_at if communication else None
 
     def get_receipt_reference(self, obj):
         receipt = getattr(obj, "receipt", None)
@@ -239,18 +393,144 @@ class SubmissionSerializer(serializers.ModelSerializer):
             return None
         return ProviderApprovalDecisionSerializer(decision).data
 
+    def get_latest_message(self, obj):
+        event, record = self._activity(obj)
+        return _latest_message_payload(record, event)
+
+    def get_is_formal_submission(self, obj):
+        return obj.regulatory_status != "DRAFT"
+
     class Meta:
         model = Submission
         fields = [
-            "id", "submission_reference", "expected", "version", "completion_pct",
+            "id", "submission_reference", "form_reference", "expected", "version", "completion_pct",
             "submitted_by", "submitted_at", "reviewed_by", "reviewed_at", "created_at",
-            "provider_name", "form_code", "form_name", "period_name", "workflow_status", "kmz_required",
+            "provider", "provider_name", "form_code", "form_name", "period_name", "workflow_status", "kmz_required",
             "form_template_id", "form_version", "mapping_basis", "source_reference",
             "revision", "supersedes",
             "last_edited_by", "last_edited_by_name", "last_edited_at", "receipt_reference",
-            "provider_approval",
+            "provider_approval", "regulatory_status", "latest_message", "is_formal_submission",
+            "latest_action", "latest_action_at", "latest_communication_at",
         ]
         read_only_fields = ["submission_reference", "version", "created_at"]
+
+
+class FormalSubmissionListSerializer(SubmissionSerializer):
+    provider = serializers.IntegerField(source="expected.provider_id", read_only=True)
+    provider_sector = serializers.CharField(source="expected.provider.sector", read_only=True)
+    provider_category = serializers.CharField(source="expected.provider.category", read_only=True)
+    form_template = serializers.IntegerField(source="expected.form_template_id", read_only=True)
+    period = serializers.IntegerField(source="expected.period_id", read_only=True)
+    due_at = serializers.DateTimeField(source="expected.period.due_at", read_only=True)
+    effective_due_at = serializers.DateTimeField(source="expected.effective_due_at", read_only=True)
+    due_state = serializers.CharField(source="expected.due_state", read_only=True)
+    workflow_status = serializers.CharField(source="regulatory_status", read_only=True)
+    responsible_approver = serializers.SerializerMethodField()
+    receipt_available = serializers.SerializerMethodField()
+    latest_submission_id = serializers.IntegerField(source="id", read_only=True)
+    open_compliance_flag_count = serializers.SerializerMethodField()
+
+    def get_responsible_approver(self, obj):
+        decision = getattr(obj, "provider_approval", None)
+        return decision.approver.name if decision else None
+
+    def get_receipt_available(self, obj):
+        return hasattr(obj, "receipt")
+
+    def get_open_compliance_flag_count(self, obj):
+        return obj.expected.compliance_flags.filter(status__in=["OPEN", "ACKNOWLEDGED", "IN_PROGRESS"]).count()
+
+    class Meta(SubmissionSerializer.Meta):
+        fields = SubmissionSerializer.Meta.fields + [
+            "provider", "provider_sector", "provider_category", "form_template", "period",
+            "due_at", "effective_due_at", "due_state", "responsible_approver",
+            "receipt_available", "latest_submission_id", "open_compliance_flag_count",
+        ]
+
+
+class ProviderFormalTaskListSerializer(ExpectedSubmissionSerializer):
+    """One provider-facing row for a form task, backed by its latest formal version."""
+
+    form_task_id = serializers.IntegerField(source="id", read_only=True)
+    regulatory_status = serializers.SerializerMethodField()
+    provider_display_status = serializers.SerializerMethodField()
+    version = serializers.SerializerMethodField()
+    responsible_approver = serializers.SerializerMethodField()
+    receipt_available = serializers.SerializerMethodField()
+    open_compliance_flag_count = serializers.SerializerMethodField()
+    formal_versions = serializers.SerializerMethodField()
+
+    def _latest_formal(self, obj):
+        prefetched = getattr(obj, "latest_formal_versions", None)
+        if prefetched is not None:
+            return prefetched[0] if prefetched else None
+        return obj.versions.filter(
+            regulatory_status__in=[
+                "SUBMITTED", "UNDER_REVIEW", "RETURNED_FOR_CORRECTION", "APPROVED", "REJECTED",
+            ],
+        ).order_by("-version", "-id").first()
+
+    def get_latest_submission_id(self, obj):
+        latest = self._latest_formal(obj)
+        return latest.id if latest else None
+
+    def get_submission_reference(self, obj):
+        latest = self._latest_formal(obj)
+        return latest.submission_reference if latest else None
+
+    def get_latest_submission_version(self, obj):
+        latest = self._latest_formal(obj)
+        return latest.version if latest else None
+
+    def get_submitted_at(self, obj):
+        latest = self._latest_formal(obj)
+        return latest.submitted_at if latest else None
+
+    def get_regulatory_status(self, obj):
+        latest = self._latest_formal(obj)
+        return latest.regulatory_status if latest else None
+
+    def get_provider_display_status(self, obj):
+        latest = self._latest_formal(obj)
+        if latest and latest.regulatory_status == "RETURNED_FOR_CORRECTION":
+            return "FLAGGED"
+        return latest.regulatory_status if latest else None
+
+    def get_version(self, obj):
+        latest = self._latest_formal(obj)
+        return latest.version if latest else None
+
+    def get_responsible_approver(self, obj):
+        latest = self._latest_formal(obj)
+        decision = getattr(latest, "provider_approval", None) if latest else None
+        return decision.approver.name if decision else None
+
+    def get_receipt_available(self, obj):
+        latest = self._latest_formal(obj)
+        return bool(latest and hasattr(latest, "receipt"))
+
+    def get_open_compliance_flag_count(self, obj):
+        return obj.compliance_flags.filter(status__in=["OPEN", "ACKNOWLEDGED", "IN_PROGRESS"]).count()
+
+    def get_formal_versions(self, obj):
+        versions = getattr(obj, "latest_formal_versions", None)
+        if versions is None:
+            versions = obj.versions.filter(regulatory_status__in=[
+                "SUBMITTED", "UNDER_REVIEW", "RETURNED_FOR_CORRECTION", "APPROVED", "REJECTED",
+            ]).order_by("-version", "-id")
+        return [{
+            "id": item.id,
+            "version": item.version,
+            "submission_reference": item.submission_reference,
+            "regulatory_status": item.regulatory_status,
+            "submitted_at": item.submitted_at,
+        } for item in versions]
+
+    class Meta(ExpectedSubmissionSerializer.Meta):
+        fields = ExpectedSubmissionSerializer.Meta.fields + [
+            "form_task_id", "regulatory_status", "provider_display_status", "version",
+            "responsible_approver", "formal_versions",
+        ]
 
 
 class ProviderApprovalDecisionSerializer(serializers.ModelSerializer):
@@ -308,7 +588,7 @@ class SubmissionValueSerializer(serializers.ModelSerializer):
         fields = [
             "id", "submission", "field", "grid", "grid_row_id", "grid_column",
             "target_key_snapshot", "target_snapshot",
-            "value", "value_status", "explanation", "updated_by", "updated_at",
+            "value", "value_status", "explanation", "value_source", "source_reference", "updated_by", "updated_at",
             "non_filled_disposition", "disposition_note",
         ]
         read_only_fields = ["id", "updated_at"]

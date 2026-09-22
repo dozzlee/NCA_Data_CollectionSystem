@@ -122,7 +122,8 @@ class Command(BaseCommand):
             submission = Submission.objects.create(expected=replacement, version=1)
             SubmissionValue.objects.bulk_create([
                 SubmissionValue(submission=submission, value=source.value, value_status=source.value_status,
-                    explanation=source.explanation, updated_by=source.updated_by, **destination)
+                    explanation=source.explanation, value_source=source.value_source,
+                    source_reference=source.source_reference, updated_by=source.updated_by, **destination)
                 for source, destination in value_map
             ])
             from apps.submissions.workflow import emit_submission_event

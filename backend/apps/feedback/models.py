@@ -19,12 +19,36 @@ class FeedbackItem(models.Model):
     page_url = models.CharField(max_length=500, blank=True)
     submitted_at = models.DateTimeField(auto_now_add=True)
     acknowledged = models.BooleanField(default=False)
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
+    acknowledged_by = models.ForeignKey(
+        "users.User", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="feedback_acknowledged",
+    )
 
     class Meta:
         ordering = ["-submitted_at"]
 
     def __str__(self):
         return f"{self.category} — {self.subject}"
+
+
+class FeedbackNotification(models.Model):
+    feedback = models.ForeignKey(FeedbackItem, on_delete=models.CASCADE, related_name="notifications")
+    recipient = models.ForeignKey(
+        "users.User", on_delete=models.CASCADE, related_name="feedback_notifications"
+    )
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["feedback", "recipient"], name="unique_feedback_ack_recipient"
+            )
+        ]
 
 
 class SystemIssueTicket(models.Model):

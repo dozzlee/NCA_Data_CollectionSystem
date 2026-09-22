@@ -4,7 +4,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BarChart3, LayoutDashboard, Clock, CheckCircle, HelpCircle, LogOut, ShieldAlert, Bell } from "lucide-react";
+import { BarChart3, LayoutDashboard, Clock, FileText, HelpCircle, LogOut, Bell } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { SubmissionNotificationSummary, User } from "@/lib/types";
@@ -16,22 +16,21 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 const DATA_ENTRY_NAV = [
-  { href: "/provider/dashboard",    label: "My Forms",    icon: LayoutDashboard },
+  { href: "/provider/dashboard",    label: "Dashboard",    icon: LayoutDashboard },
   { href: "/industry-dashboard",    label: "Industry",    icon: BarChart3 },
-  { href: "/provider/history",      label: "History",     icon: Clock },
-  { href: "/provider/compliance",   label: "Corrections", icon: ShieldAlert },
-  { href: "/provider/inquiries",    label: "Technical Support",   icon: HelpCircle },
+  { href: "/provider/forms",        label: "Internal Review",       icon: FileText },
+  { href: "/provider/history",      label: "Submissions",     icon: Clock },
   { href: "/provider/notifications",label: "Updates",      icon: Bell },
+  { href: "/provider/inquiries",    label: "Technical Support",   icon: HelpCircle },
 ];
 
 const APPROVER_NAV = [
-  { href: "/provider/dashboard",         label: "My Forms",         icon: LayoutDashboard },
+  { href: "/provider/dashboard",         label: "Dashboard",         icon: LayoutDashboard },
   { href: "/industry-dashboard",         label: "Industry",         icon: BarChart3 },
-  { href: "/provider/pending-approval",  label: "Pending Approval", icon: CheckCircle },
-  { href: "/provider/history",           label: "History",          icon: Clock },
-  { href: "/provider/compliance",        label: "Compliance",       icon: ShieldAlert },
-  { href: "/provider/inquiries",         label: "Inquiries",        icon: HelpCircle },
+  { href: "/provider/forms",             label: "Internal Review",            icon: FileText },
+  { href: "/provider/history",           label: "Submissions",          icon: Clock },
   { href: "/provider/notifications",     label: "Updates",          icon: Bell },
+  { href: "/provider/inquiries",         label: "Inquiries",        icon: HelpCircle },
 ];
 
 export function ProviderTopBar() {
@@ -59,7 +58,7 @@ export function ProviderTopBar() {
   });
 
   return (
-    <header className="sticky top-0 z-40 border-b border-[#e6e8ea] bg-white">
+    <header className="workspace-header sticky top-0 z-40 border-b">
       <div className="mx-auto flex min-h-14 max-w-[1200px] flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2 sm:px-6">
         {/* Brand */}
         <div className="flex items-center gap-2.5 shrink-0">
@@ -83,7 +82,7 @@ export function ProviderTopBar() {
                 <Icon size={14} />
                 {label}
                 {href === "/provider/notifications" && Boolean(notificationSummary?.unread) && <span className="rounded-full bg-[#e31937] px-1.5 text-[10px] text-white">{notificationSummary!.unread}</span>}
-                {href === "/provider/pending-approval" && Boolean(notificationSummary?.pending_approval) && <span className="rounded-full bg-[#ffd100] px-1.5 text-[10px] text-[#191c1e]">{notificationSummary!.pending_approval}</span>}
+                {href === "/provider/forms" && Boolean(notificationSummary?.pending_approval) && <span className="rounded-full bg-[#ffd100] px-1.5 text-[10px] text-[#191c1e]">{notificationSummary!.pending_approval}</span>}
               </Link>
             );
           })}

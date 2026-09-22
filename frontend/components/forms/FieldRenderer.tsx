@@ -28,6 +28,7 @@ interface FieldRendererProps {
   readOnlyPresentation?: boolean;
   previousValue?: string | null;
   submissionId?: number;
+  importedFromExcel?: boolean;
 }
 
 const inputBase =
@@ -112,7 +113,7 @@ function AttachmentInput({ submissionId, field, disabled }: { submissionId?:numb
   </div>;
 }
 
-export function FieldRenderer({ field, value, valueStatus, explanation, onChange, disabled, allFieldValues, issues = [], correctionInstructions = [], onBlur, readOnlyPresentation = false, previousValue, submissionId }: FieldRendererProps) {
+export function FieldRenderer({ field, value, valueStatus, explanation, onChange, disabled, allFieldValues, issues = [], correctionInstructions = [], onBlur, readOnlyPresentation = false, previousValue, submissionId, importedFromExcel = false }: FieldRendererProps) {
   // Conditional visibility — hide if parent field's value doesn't match the required value
   if (
     field.conditional_on_field !== null &&
@@ -133,6 +134,7 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
     const statusLabel = valueStatus ? valueStatus.split("_").join(" ").toLowerCase() : "not provided";
     return (
       <div className="h-full rounded-[10px] border border-[#e6e8ea] bg-[#f9fafb] px-4 py-3">
+        {importedFromExcel&&<span className="mb-2 inline-flex rounded-full bg-[#e8f1fb] px-2 py-0.5 text-[9px] font-semibold text-[#004999]">Imported from Excel</span>}
         <div className="flex items-start justify-between gap-3">
           <p className="text-[12px] font-medium leading-snug text-[#43474f]">
             {field.label}{field.unit && <span className="ml-1 font-normal text-[#737780]">({field.unit})</span>}
@@ -146,7 +148,7 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
         {isNonFilled && <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-[#7a5c00]">{statusLabel}</p>}
         {explanation && <p className="mt-2 border-l-2 border-[#ffd100] pl-2 text-[11px] text-[#5e6269]">{explanation}</p>}
         <div className="mt-3"><DefinitionDisclosure definition={field.help_text} /></div>
-        {correctionInstructions.map((instruction, index) => <p key={index} className="mt-2 rounded-md bg-[#fff3bf] px-2 py-1.5 text-[11px] text-[#7a5c00]">Correction: {instruction}</p>)}
+        {correctionInstructions.map((instruction, index) => <p key={index} className="mt-2 rounded-md bg-[#fff3bf] px-2 py-1.5 text-[11px] text-[#7a5c00]">Flag: {instruction}</p>)}
         {issues.map((issue, index) => <p key={index} role="alert" className="mt-1 text-[11px] font-medium text-[#c0112a]">{issue}</p>)}
       </div>
     );
@@ -162,6 +164,7 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
 
   return (
     <div className="space-y-1.5" onBlur={onBlur}>
+      {importedFromExcel&&<span className="inline-flex rounded-full bg-[#e8f1fb] px-2 py-0.5 text-[9px] font-semibold text-[#004999]">Imported from Excel</span>}
       {/* Label */}
       <div className="flex items-start justify-between gap-2">
         <label className="text-[13px] font-medium text-[#191c1e] leading-snug">
@@ -191,7 +194,7 @@ export function FieldRenderer({ field, value, valueStatus, explanation, onChange
       </div>
 
       {isNumericFieldType(field.field_type) && <PreviousAndGrowth field={field} value={value} previousValue={previousValue} />}
-      {correctionInstructions.map((instruction, index) => <p key={index} className="rounded-md bg-[#fff3bf] px-2 py-1.5 text-[11px] text-[#7a5c00]">Correction: {instruction}</p>)}
+      {correctionInstructions.map((instruction, index) => <p key={index} className="rounded-md bg-[#fff3bf] px-2 py-1.5 text-[11px] text-[#7a5c00]">Flag: {instruction}</p>)}
       {issues.map((issue, index) => <p key={index} role="alert" className="text-[11px] font-medium text-[#c0112a]">{issue}</p>)}
 
       {/* Input — hidden if non-filled status is set */}

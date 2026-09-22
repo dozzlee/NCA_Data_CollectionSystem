@@ -56,6 +56,8 @@ function UsersPageContent() {
   const [form, setForm] = useState<NewUserForm>(EMPTY);
   const [newDivision, setNewDivision] = useState("");
   const [filterRole, setFilterRole] = useState(searchParams.get("role") ?? "");
+  const [resetUser, setResetUser] = useState<User | null>(null);
+  const [temporaryPassword, setTemporaryPassword] = useState("");
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
@@ -113,6 +115,18 @@ function UsersPageContent() {
       qc.invalidateQueries({ queryKey: ["users"] });
     },
     onError: () => toast("Failed to update user.", "error"),
+  });
+
+  const resetPasswordMut = useMutation({
+    mutationFn: () => api(`/auth/users/${resetUser?.id}/reset-password/`, {
+      method: "POST",
+      body: JSON.stringify({ temporary_password: temporaryPassword }),
+    }),
+    onSuccess: () => {
+      toast("Temporary password issued. The user must change it at next sign-in.", "success");
+      setResetUser(null); setTemporaryPassword("");
+    },
+    onError: (error: Error) => toast(error.message || "Password could not be reset.", "error"),
   });
 
   const users = data?.results ?? [];
@@ -229,6 +243,21 @@ function UsersPageContent() {
         </form>
       )}
 
+      {resetUser && (
+        <form onSubmit={e => { e.preventDefault(); resetPasswordMut.mutate(); }} className="rounded-[16px] border border-[#0066cc]/30 bg-[#f4f8fd] p-5">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="min-w-[260px] flex-1">
+              <h2 className="text-[15px] font-semibold">Reset password for {resetUser.name}</h2>
+              <p className="mt-1 text-[12px] text-[#737780]">Set a temporary password. No forms, submissions, provider information or other portal data will be changed.</p>
+              <label className={`${lbl} mt-4`}>Temporary password</label>
+              <input type="password" required minLength={8} autoComplete="new-password" className={inp} value={temporaryPassword} onChange={e => setTemporaryPassword(e.target.value)} />
+            </div>
+            <button type="button" onClick={() => { setResetUser(null); setTemporaryPassword(""); }} className="rounded-[8px] border border-[#c3c6d0] bg-white px-4 py-2 text-[13px]">Cancel</button>
+            <button type="submit" disabled={resetPasswordMut.isPending} className="rounded-[8px] bg-[#002d5b] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-50">{resetPasswordMut.isPending ? "Resetting…" : "Issue temporary password"}</button>
+          </div>
+        </form>
+      )}
+
       {/* Filters */}
       <div className="flex gap-3">
         <select value={filterRole} onChange={e => setFilterRole(e.target.value)}
@@ -275,12 +304,12 @@ function UsersPageContent() {
                     </span>
                   </td>
                   <td className="px-5 py-3.5">
-                    <button
+                    <div className="flex items-center gap-3"><button type="button" onClick={() => { setResetUser(u); setTemporaryPassword(""); }} className="text-[12px] font-medium text-[#0066cc] hover:underline">Reset password</button><button
                       onClick={() => toggleActiveMut.mutate(u.id)}
                       disabled={toggleActiveMut.isPending}
                       className="text-[12px] font-medium text-[#0066cc] hover:underline disabled:opacity-50">
                       {u.is_active ? "Deactivate" : "Reactivate"}
-                    </button>
+                    </button></div>
                   </td>
                 </tr>
               ))}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { SectionStepper } from "@/components/forms/SectionStepper";
@@ -9,6 +9,7 @@ import { FieldRenderer } from "@/components/forms/FieldRenderer";
 import { GridRenderer } from "@/components/forms/GridRenderer";
 import { KMZUploadPanel } from "@/components/forms/KMZUploadPanel";
 import { ExcelBackupPanel } from "@/components/forms/ExcelBackupPanel";
+import { EmailHandoffModal } from "@/components/communications/EmailHandoffModal";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { WorkflowBadge } from "@/components/ui/Badge";
 import {
@@ -23,15 +24,17 @@ import {
 } from "@/hooks/useFormEntry";
 import { api, ApiError } from "@/lib/api";
 import { Save, Send, ChevronRight, ChevronLeft, AlertTriangle, FileSpreadsheet, RefreshCw } from "lucide-react";
-import type { ExpectedSubmission, FormSection, FieldStatus } from "@/lib/types";
+import type { ExpectedSubmission, FormSection, FormTemplate, FieldStatus, SubmissionCommunication, SubmissionComplianceFlag } from "@/lib/types";
 
 // ─── Local value state for one section ───────────────────────────────────────
 
-type FieldValues = Record<string, { value: string; status: FieldStatus | ""; explanation: string }>;
-type GridCellValue = { grid_row_id: string; grid_column_id: number; value: string; value_status: FieldStatus | ""; explanation?: string };
+type FieldValues = Record<string, { value: string; status: FieldStatus | ""; explanation: string; value_source?:string }>;
+type GridCellValue = { grid_row_id: string; grid_column_id: number; value: string; value_status: FieldStatus | ""; explanation?: string; value_source?:string };
 type TimelineEvent = { id:number; event_type:string; message:string; from_status:string; to_status:string; actor_name:string|null; created_at:string };
 type ProviderReviewData = {
+  template?: FormTemplate & { sections: FormSection[] };
   correction_items:Array<{id:number;stage:string;target_type:string;target_id:string;instruction:string;status:string}>;
+  compliance_flags:SubmissionComplianceFlag[];
   provider_edits:Array<{id:number;actor_name:string;section_code:string;item_count:number;created_at:string}>;
   permitted_actions:string[];
   previous_month?: { period:{id?:number;name?:string;year:number;month:number;submission_id?:number}|null; values:Record<string,string|null> };
@@ -46,7 +49,8 @@ function formatDate(value: string | null | undefined) {
 function AssignmentSummary({ expected }: { expected: ExpectedSubmission }) {
   const team = (expected.data_entry_team ?? []).map((member) => member.name).join(", ") || "No active Data Entry users";
   const items = [
-    ["Submission ID", expected.submission_reference || "Pending"],
+    ["Form reference", expected.form_reference],
+    ["Submission ID", expected.provider_status === "CLOSED" ? (expected.submission_reference || "Pending") : "Created after Provider Approver submission"],
     ["Organisation", expected.provider_name],
     ["Reporting period", expected.period_name],
     ["Data Entry ownership", expected.ownership_label || "Shared Data Entry queue"],
@@ -55,6 +59,8 @@ function AssignmentSummary({ expected }: { expected: ExpectedSubmission }) {
     ["Form created", formatDate(expected.form_created_at)],
     ["Sent to provider", formatDate(expected.sent_at || expected.created_at)],
     ["Provider submitted", formatDate(expected.submitted_at)],
+    ["Penalty amount", `GH₵${Number(expected.penalty_amount_ghs || 0).toLocaleString("en-GH", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`],
+    ["Penalty reference", expected.penalty_reference || "No penalty assigned"],
   ];
   return (
     <section className="rounded-[14px] border border-[#dce3e9] bg-gradient-to-br from-white to-[#f7f9fb] p-4 shadow-[0_2px_8px_rgba(0,45,91,0.05)]">
@@ -75,7 +81,7 @@ function AssignmentSummary({ expected }: { expected: ExpectedSubmission }) {
 
 function useSectionFieldState(
   sectionFields: FormSection["fields"],
-  serverValues: { field?: number | null; value: string; value_status: string; explanation?: string }[] | undefined,
+  serverValues: { field?: number | null; value: string; value_status: string; explanation?: string; value_source?:string }[] | undefined,
   allowServerSync: boolean,
 ) {
   const [fieldValues, setFieldValues] = useState<FieldValues>({});
@@ -89,6 +95,7 @@ function useSectionFieldState(
         value: sv?.value ?? "",
         status: (sv?.value_status as FieldStatus) ?? "",
         explanation: sv?.explanation ?? "",
+        value_source: sv?.value_source,
       };
     });
     setFieldValues(init);
@@ -109,6 +116,7 @@ function SectionContent({
   correctionItems,
   registerSaveController,
   previousValues,
+  onSaved,
 }: {
   section: FormSection;
   submissionId: number;
@@ -119,6 +127,7 @@ function SectionContent({
   correctionItems: Array<{target_type:string;target_id:string;instruction:string;status:string}>;
   registerSaveController: (controller: { flush:()=>Promise<boolean>; hasUnsaved:()=>boolean } | null) => void;
   previousValues: Record<string, string | null>;
+  onSaved: () => void;
 }) {
   const serverValues = useSectionValues(submissionId, section.section_code);
   const saveMutation = useSaveSectionValues(submissionId);
@@ -140,7 +149,6 @@ function SectionContent({
 
   const [fieldValues, setFieldValues] = useSectionFieldState(section.fields, serverValues.data, !dirty && !saving);
   const [gridValues, setGridValues] = useState<Record<number, GridCellValue[]>>({});
-  const [excelUploads, setExcelUploads] = useState<any[]>([]);
   const [kmzUploads, setKmzUploads] = useState<any[]>([]);
   const queryClient = useQueryClient();
 
@@ -149,17 +157,6 @@ function SectionContent({
   useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
   useEffect(() => { savingRef.current = saving; }, [saving]);
   useEffect(() => { if (!dirtyRef.current && !savingRef.current) revisionRef.current = submissionRevision; }, [submissionRevision]);
-
-  useEffect(() => {
-    const fetchExcelUploads = async () => {
-      try {
-        setExcelUploads(await api.get<any[]>(`/submissions/${submissionId}/excel-backups/`));
-      } catch (err) {
-        setUploadError(err instanceof ApiError ? err.message : "Excel backup files could not be loaded.");
-      }
-    };
-    if (submissionId) fetchExcelUploads();
-  }, [submissionId]);
 
   useEffect(() => {
     const grouped: Record<number, GridCellValue[]> = {};
@@ -171,6 +168,7 @@ function SectionContent({
         value: value.value,
         value_status: value.value_status as FieldStatus,
         explanation: value.explanation ?? "",
+        value_source: value.value_source,
       });
     }
     if (!dirtyRef.current && !savingRef.current) setGridValues(grouped);
@@ -184,7 +182,7 @@ function SectionContent({
   }, [kmzRequired, submissionId]);
 
   function handleFieldChange(fieldId: number, value: string, status: FieldStatus | "", explanation: string) {
-    setFieldValues((prev) => ({ ...prev, [fieldId]: { value, status, explanation } }));
+    setFieldValues((prev) => ({ ...prev, [fieldId]: { value, status, explanation, value_source:"MANUAL" } }));
     localChangeVersion.current += 1;
     dirtyRef.current = true;
     setDirty(true);
@@ -220,6 +218,7 @@ function SectionContent({
       );
       const response = await saveMutation.mutateAsync({ sectionCode: section.section_code, values: [...fieldPayload, ...gridPayload], revision: revisionRef.current, clientSaveId, changeVersion:savedChangeVersion });
       revisionRef.current = response.resulting_revision;
+      onSaved();
       if (localChangeVersion.current === savedChangeVersion) {
         dirtyRef.current = false;
         setDirty(false);
@@ -245,7 +244,7 @@ function SectionContent({
     inFlightSave.current = null;
     if (succeeded && dirtyRef.current && localChangeVersion.current > savedChangeVersion) return saveRunnerRef.current();
     return succeeded && !dirtyRef.current;
-  }, [conflict, isEditable, saveMutation, section.section_code]);
+  }, [conflict, isEditable, onSaved, saveMutation, section.section_code]);
 
   useEffect(() => { saveRunnerRef.current = handleSave; }, [handleSave]);
 
@@ -271,14 +270,6 @@ function SectionContent({
     registerSaveController({ flush:handleSave, hasUnsaved:()=>dirtyRef.current || savingRef.current });
     return () => registerSaveController(null);
   }, [handleSave, registerSaveController]);
-
-  async function handleExcelUpload(file: File) {
-    setUploadError("");
-    const form = new FormData();
-    form.append("file", file);
-    await api.upload(`/submissions/${submissionId}/excel-backups/upload/`, form);
-    setExcelUploads(await api.get<any[]>(`/submissions/${submissionId}/excel-backups/`));
-  }
 
   if (serverValues.isLoading) {
     return (
@@ -368,6 +359,7 @@ function SectionContent({
                   onBlur={() => { if (dirty && !saving && !conflict) void handleSave(); }}
                   previousValue={previousValues[`field:${section.section_code}:${field.field_code}`.toLowerCase()]}
                   submissionId={submissionId}
+                  importedFromExcel={fv.value_source==="EXCEL_IMPORT"}
                 />
               </div>
             );
@@ -397,20 +389,9 @@ function SectionContent({
         </div>
       ))}
 
-      {/* Excel backup panel — available for all forms */}
-      <div className={isEditable ? "" : "opacity-90"}>
-        <ExcelBackupPanel
-          submissionId={submissionId}
-          uploads={excelUploads}
-          onUpload={handleExcelUpload}
-          disabled={!isEditable}
-          description="Upload an Excel file as a backup. This is stored for source control only and not analyzed."
-        />
-      </div>
-
       {correctionItems.filter((item) => item.status === "OPEN" && item.target_type === "SECTION" && item.target_id === section.section_code).map((item, index) => (
         <div key={`${item.target_id}-${index}`} className="rounded-[9px] border border-[#ffd100] bg-[#fff8d8] px-4 py-3 text-[12px] text-[#6c5100]">
-          <span className="font-semibold">Section correction:</span> {item.instruction}
+          <span className="font-semibold">Section flag:</span> {item.instruction}
         </div>
       ))}
 
@@ -436,6 +417,7 @@ function SectionContent({
 export default function FormEntryPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const workflowQueryClient = useQueryClient();
   const expectedId = Number(params.id);
   const saveControllerRef = useRef<{flush:()=>Promise<boolean>;hasUnsaved:()=>boolean} | null>(null);
@@ -471,13 +453,22 @@ export default function FormEntryPage() {
   });
 
   // Get or create submission
-  const latestSubmissionId = expected ? (expected as { latest_submission_id?: number }).latest_submission_id ?? null : null;
+  const actualLatestSubmissionId = expected ? (expected as { latest_submission_id?: number }).latest_submission_id ?? null : null;
+  const requestedVersionId = Number(searchParams.get("version"));
+  const latestSubmissionId = Number.isInteger(requestedVersionId) && requestedVersionId > 0 ? requestedVersionId : actualLatestSubmissionId;
+  const isHistoricalVersion = Boolean(latestSubmissionId && actualLatestSubmissionId && latestSubmissionId !== actualLatestSubmissionId);
   const submissionQ = useSubmission(latestSubmissionId);
   const submission = submissionQ.data;
   const timelineQ = useQuery<TimelineEvent[]>({
     queryKey: ["submission-timeline", latestSubmissionId],
     queryFn: () => api(`/submissions/${latestSubmissionId}/timeline/`),
     enabled: Boolean(latestSubmissionId),
+  });
+  const communicationsQ = useQuery<SubmissionCommunication[]>({
+    queryKey:["submission-communications",latestSubmissionId],
+    queryFn:()=>api(`/submissions/${latestSubmissionId}/communications/`),
+    enabled:Boolean(latestSubmissionId),
+    select:(items)=>items.map((item)=>item.sender===currentUser?.id ? item : {...item,email_handoff:null}),
   });
   const providerReviewQ = useQuery<ProviderReviewData>({
     queryKey: ["provider-review-data", latestSubmissionId],
@@ -492,10 +483,17 @@ export default function FormEntryPage() {
   });
 
   const formQ = useFormTemplate(expected?.form_template ?? 0);
-  const form = formQ.data;
+  const form = providerReviewQ.data?.template ?? formQ.data;
 
   const completionQ = useSubmissionCompletion(submission?.id ?? null);
   const completion = completionQ.data;
+  const handleSectionSaved = useCallback(() => {
+    void Promise.all([
+      providerReviewQ.refetch(),
+      completionQ.refetch(),
+      submissionQ.refetch(),
+    ]);
+  }, [completionQ, providerReviewQ, submissionQ]);
 
   const startMutation = useStartSubmission();
   const submitMutation = useSubmitForApproval(submission?.id ?? 0);
@@ -504,11 +502,15 @@ export default function FormEntryPage() {
   const [correctionReason, setCorrectionReason] = useState("");
   const [correctionTargets, setCorrectionTargets] = useState<string[]>([]);
   const [approvalOpen, setApprovalOpen] = useState(false);
+  const [officialConfirmOpen, setOfficialConfirmOpen] = useState(false);
+  const [officialSubmitting, setOfficialSubmitting] = useState(false);
   const [attestation, setAttestation] = useState(false);
   const [approvalNote, setApprovalNote] = useState("");
   const [changeSummary, setChangeSummary] = useState("");
   const [actionError, setActionError] = useState("");
   const [receiptReference, setReceiptReference] = useState<string | null>(null);
+  const [correspondenceText, setCorrespondenceText] = useState("");
+  const [handoffEventId, setHandoffEventId] = useState<number|null>(null);
 
   async function handleStart() {
     if (!expectedId) return;
@@ -529,7 +531,7 @@ export default function FormEntryPage() {
   const currentSection = sections[currentSectionIndex];
   const periodForms = periodFormsQ.data?.results ?? [];
 
-  const isEditable = Boolean(providerReviewQ.data?.permitted_actions.includes("EDIT"));
+  const isEditable = !isHistoricalVersion && Boolean(providerReviewQ.data?.permitted_actions.includes("EDIT"));
   const correctionOptions = useMemo(() => sections.flatMap((section) => [
     { key:`SECTION:${section.section_code}`, label:`Section: ${section.title}` },
     ...section.fields.map((field) => ({ key:`FIELD:${field.id}`, label:`${section.title} · ${field.label}` })),
@@ -549,13 +551,34 @@ export default function FormEntryPage() {
         setSubmitError("Your latest changes could not be saved. Retry the save before submitting.");
         return;
       }
-      await submitMutation.mutateAsync();
-      await Promise.all([
-        expectedQ.refetch(), providerReviewQ.refetch(), completionQ.refetch(), periodFormsQ.refetch(),
-      ]);
+      const response = await submitMutation.mutateAsync();
+      if (response.event_id) setHandoffEventId(response.event_id);
+      await refreshProviderWorkflow();
     } catch (error) {
       setSubmitError(error instanceof ApiError ? error.message : "Submission failed. Please try again.");
       completionQ.refetch();
+    }
+  }
+
+  async function handleOfficialSubmit() {
+    if (!submission?.id) return;
+    setActionError("");
+    setOfficialSubmitting(true);
+    try {
+      const response=await api.post<{receipt_reference:string;event_id:number}>(
+        `/submissions/${submission.id}/provider-review/approve/`,
+        {attestation,approval_note:approvalNote,change_summary:changeSummary},
+      );
+      setReceiptReference(response.receipt_reference);
+      setOfficialConfirmOpen(false);
+      setApprovalOpen(false);
+      setHandoffEventId(response.event_id);
+      await refreshProviderWorkflow();
+    } catch (error) {
+      setOfficialConfirmOpen(false);
+      setActionError(error instanceof Error?error.message:"Official submission failed.");
+    } finally {
+      setOfficialSubmitting(false);
     }
   }
 
@@ -574,6 +597,7 @@ export default function FormEntryPage() {
     await Promise.all([
       expectedQ.refetch(), providerReviewQ.refetch(), completionQ.refetch(),
       periodFormsQ.refetch(), timelineQ.refetch(), submissionQ.refetch(),
+      communicationsQ.refetch(),
       workflowQueryClient.invalidateQueries({queryKey:["provider-workspace"]}),
       workflowQueryClient.invalidateQueries({queryKey:["provider-workspace-summary"]}),
       workflowQueryClient.invalidateQueries({queryKey:["provider-approval-queue"]}),
@@ -605,7 +629,7 @@ export default function FormEntryPage() {
       <div className="space-y-4">
         <Link href="/provider/dashboard"
           className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#737780] hover:text-[#0066cc] transition-colors">
-          <ChevronLeft size={14} /> Back to My Forms
+          <ChevronLeft size={14} /> Back to Dashboard
         </Link>
         <AssignmentSummary expected={expected} />
         <div className="flex flex-col items-center justify-center min-h-[300px] text-center">
@@ -643,7 +667,7 @@ export default function FormEntryPage() {
       {/* Back navigation */}
       <button type="button" onClick={() => void leaveForm("/provider/dashboard")}
         className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#737780] hover:text-[#0066cc] transition-colors">
-        <ChevronLeft size={14} /> Back to My Forms
+        <ChevronLeft size={14} /> Back to Dashboard
       </button>
 
       {/* Page header */}
@@ -695,7 +719,7 @@ export default function FormEntryPage() {
                 Return to Data Entry
               </button>
               <button
-                onClick={() => setApprovalOpen(true)}
+                onClick={() => { setActionError(""); setApprovalOpen(true); }}
                 className="flex items-center gap-2 rounded-[8px] bg-[#001836] px-4 py-2.5 text-[13px] font-semibold text-white hover:bg-[#002d5b] transition-colors"
               >
                 <Send size={13} /> Submit to NCA
@@ -706,6 +730,8 @@ export default function FormEntryPage() {
       </div>
 
       <AssignmentSummary expected={expected} />
+
+      {submission && <ExcelBackupPanel submissionId={submission.id} sections={sections} disabled={!isEditable} />}
 
       {isApprover && !isEditable && ["NOT_STARTED", "DRAFT", "PROVIDER_CHANGES_REQUESTED"].includes(expected.workflow_status) && (
         <div className="rounded-[10px] border border-[#b9d4ef] bg-[#eef6ff] px-4 py-3 text-[12px] text-[#264f73]">
@@ -731,36 +757,25 @@ export default function FormEntryPage() {
 
       {correctionOpen && (
         <div className="rounded-[12px] border border-[#ffd100] bg-[#fffdf5] p-4">
-          <h2 className="text-[14px] font-semibold text-[#191c1e]">Return for correction</h2>
+          <h2 className="text-[14px] font-semibold text-[#191c1e]">Flag and return</h2>
           <p className="mt-1 text-[12px] text-[#737780]">Select one or more exact sections or fields and provide instructions. Data Entry can edit only those targets.</p>
           <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr]">
             <div className="max-h-48 overflow-y-auto rounded-lg border bg-white p-2">{correctionOptions.map((option) => <label key={option.key} className="flex items-start gap-2 px-2 py-1.5 text-xs"><input type="checkbox" checked={correctionTargets.includes(option.key)} onChange={(e) => setCorrectionTargets((current) => e.target.checked ? [...current, option.key] : current.filter((key) => key !== option.key))} /><span>{option.label}</span></label>)}</div>
             <textarea value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} rows={2}
-              className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px]" placeholder="Required correction instructions" />
+              className="rounded-[8px] border border-[#c3c6d0] bg-white px-3 py-2 text-[13px]" placeholder="Required flag instructions" />
           </div>
           <div className="mt-3 flex justify-end gap-2">
             <button type="button" onClick={() => setCorrectionOpen(false)} className="rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[12px]">Cancel</button>
             <button type="button" disabled={!correctionReason.trim() || correctionTargets.length === 0 || !submission?.id}
               onClick={async () => {
                 if (!submission?.id) return;
+                const targets = correctionTargets.map((target) => { const separator=target.indexOf(":"); return {type:target.slice(0,separator),id:target.slice(separator+1),instruction:correctionReason.trim()}; });
                 try {
-                  setActionError("");
-                  await api.post(`/submissions/${submission.id}/provider-review/request-correction/`, {
-                    reason: correctionReason.trim(),
-                    targets: correctionTargets.map((target) => {
-                      const separator = target.indexOf(":");
-                      return { type: target.slice(0, separator), id: target.slice(separator + 1), instruction: correctionReason.trim() };
-                    }),
-                  });
-                  setCorrectionOpen(false);
-                  setCorrectionReason("");
-                  setCorrectionTargets([]);
-                  await refreshProviderWorkflow();
-                } catch (error) {
-                  setActionError(error instanceof ApiError ? error.message : "The correction request could not be sent. Please retry.");
-                }
+                  const response=await api.post<{event_id:number}>(`/submissions/${submission.id}/provider-review/request-correction/`,{reason:correctionReason.trim(),targets});
+                  setCorrectionOpen(false);setCorrectionReason("");setCorrectionTargets([]);setHandoffEventId(response.event_id);await refreshProviderWorkflow();
+                } catch (error) { setActionError(error instanceof Error?error.message:"The flagged return could not be completed."); }
               }}
-              className="rounded-[8px] bg-[#002d5b] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">Send correction request</button>
+              className="rounded-[8px] bg-[#002d5b] px-4 py-2 text-[12px] font-semibold text-white disabled:opacity-50">Send flagged return</button>
           </div>
           {actionError && <p role="alert" className="mt-3 text-xs text-red-700">{actionError}</p>}
         </div>
@@ -768,13 +783,17 @@ export default function FormEntryPage() {
 
       {approvalOpen && <div className="rounded-xl border border-[#0066cc] bg-[#f7fbff] p-5">
         <h2 className="font-semibold">Final provider approval</h2><p className="mt-1 text-xs text-[#43474f]">A fresh readiness check is performed before NCA receives the official version.</p>
-        <div className="mt-4 grid gap-3 md:grid-cols-2"><div className="rounded-lg bg-white p-3 text-xs"><strong>Readiness</strong><p className="mt-1">{completion?.blocking_issues.length ?? 0} errors · {completion?.missing_indicator_count ?? 0} blank indicators · {completion?.open_correction_item_count ?? 0} open corrections</p></div><div className="rounded-lg bg-white p-3 text-xs"><strong>Approver edits</strong><p className="mt-1">{providerReviewQ.data?.provider_edits.length ?? 0} edit batches are recorded for this version.</p></div></div>
-        <label className="mt-4 block text-xs font-medium">Approval note (optional)<textarea value={approvalNote} onChange={(e) => setApprovalNote(e.target.value)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2" rows={2} /></label>
-        {(providerReviewQ.data?.provider_edits.length ?? 0) > 0 && <label className="mt-3 block text-xs font-medium">Required change summary<textarea value={changeSummary} onChange={(e) => setChangeSummary(e.target.value)} className="mt-1 w-full rounded-lg border bg-white px-3 py-2" rows={3} placeholder="Summarize what you changed and why." /></label>}
+        <div className="mt-4 grid gap-3 md:grid-cols-2"><div className="rounded-lg bg-white p-3 text-xs"><strong>Readiness</strong><p className="mt-1">{completion?.blocking_issues.length ?? 0} errors · {completion?.missing_indicator_count ?? 0} blank indicators · {completion?.open_correction_item_count ?? 0} open flags</p></div><div className="rounded-lg bg-white p-3 text-xs"><strong>Approver edits</strong><p className="mt-1">{providerReviewQ.data?.provider_edits.length ?? 0} edit batches are recorded for this version.</p></div></div>
+        {(providerReviewQ.data?.provider_edits.length ?? 0) > 0 && <label className="mt-4 block text-xs font-medium">Summary of changes (optional)<textarea value={changeSummary} onChange={(e) => { setChangeSummary(e.target.value); setActionError(""); }} className="mt-1 w-full rounded-lg border bg-white px-3 py-2" rows={2} placeholder="Briefly describe the corrections made before resubmission" /></label>}
+        <label className="mt-4 block text-xs font-medium">Approval note (optional)<textarea value={approvalNote} onChange={(e) => { setApprovalNote(e.target.value); setActionError(""); }} className="mt-1 w-full rounded-lg border bg-white px-3 py-2" rows={2} /></label>
         <label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={attestation} onChange={(e) => setAttestation(e.target.checked)} className="mt-1" /><span>I attest that I reviewed this return and that the information supplied is accurate to the best of my knowledge. Any blank indicators will remain visible to NCA.</span></label>
         {actionError && <p role="alert" className="mt-3 text-xs text-red-700">{actionError}</p>}
-        <div className="mt-4 flex justify-end gap-2"><button onClick={() => setApprovalOpen(false)} className="rounded-lg border px-4 py-2 text-xs">Cancel</button><button disabled={!attestation || ((providerReviewQ.data?.provider_edits.length ?? 0) > 0 && !changeSummary.trim()) || !completion?.transition_ready} onClick={async () => { try { setActionError(""); const response = await api.post<{receipt_reference:string}>(`/submissions/${submission?.id}/provider-review/approve/`, { attestation, approval_note:approvalNote, change_summary:changeSummary }); setReceiptReference(response.receipt_reference); setApprovalOpen(false); await refreshProviderWorkflow(); } catch (error) { setActionError(error instanceof ApiError ? error.message : "Official submission failed."); } }} className="rounded-lg bg-[#001836] px-5 py-2 text-xs font-semibold text-white disabled:opacity-50">Submit officially to NCA</button></div>
+        <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setApprovalOpen(false)} className="rounded-lg border px-4 py-2 text-xs">Cancel</button><button type="button" disabled={!attestation || !completion?.transition_ready} onClick={()=>setOfficialConfirmOpen(true)} className="rounded-lg bg-[#001836] px-5 py-2 text-xs font-semibold text-white disabled:opacity-50">Submit officially to NCA</button></div>
       </div>}
+
+      {officialConfirmOpen&&<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><section role="dialog" aria-modal="true" aria-labelledby="official-submit-title" className="w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl"><header className="border-b bg-[#f7f9fb] px-6 py-5"><div className="flex items-start gap-3"><span className="rounded-full bg-amber-100 p-2 text-amber-700"><AlertTriangle size={20}/></span><div><h2 id="official-submit-title" className="text-lg font-semibold text-[#191c1e]">Confirm official submission to NCA</h2><p className="mt-1 text-sm text-[#737780]">Review these details before creating the official regulatory submission.</p></div></div></header><div className="space-y-4 p-6"><dl className="grid gap-3 rounded-xl border bg-[#fafbfd] p-4 text-sm sm:grid-cols-2"><div><dt className="text-xs font-semibold uppercase text-[#737780]">Form</dt><dd className="mt-1 font-medium">{expected.form_name}</dd></div><div><dt className="text-xs font-semibold uppercase text-[#737780]">Reporting period</dt><dd className="mt-1 font-medium">{expected.period_name}</dd></div><div><dt className="text-xs font-semibold uppercase text-[#737780]">Reference</dt><dd className="mt-1 break-all font-mono text-xs">{submission?.submission_reference||expected.form_reference}</dd></div><div><dt className="text-xs font-semibold uppercase text-[#737780]">Completion</dt><dd className="mt-1 font-medium">{Number(completion?.completion_pct??0).toFixed(0)}%</dd></div><div><dt className="text-xs font-semibold uppercase text-[#737780]">Blank indicators</dt><dd className="mt-1 font-medium">{completion?.missing_indicator_count??0}</dd></div><div><dt className="text-xs font-semibold uppercase text-[#737780]">Open flags</dt><dd className="mt-1 font-medium">{completion?.open_correction_item_count??0}</dd></div></dl>{approvalNote.trim()&&<div><p className="text-xs font-semibold uppercase text-[#737780]">Approval note</p><p className="mt-1 whitespace-pre-wrap rounded-lg border p-3 text-sm">{approvalNote}</p></div>}{changeSummary.trim()&&<div><p className="text-xs font-semibold uppercase text-[#737780]">Change summary</p><p className="mt-1 whitespace-pre-wrap rounded-lg border p-3 text-sm">{changeSummary}</p></div>}<div className="rounded-xl bg-[#fff8e1] p-4 text-sm text-[#6b4800]"><strong>Final confirmation:</strong> You have attested that the information is accurate. Once confirmed, this version will be submitted officially to NCA and cannot continue as an editable provider draft.</div></div><footer className="flex justify-end gap-3 border-t px-6 py-4"><button type="button" disabled={officialSubmitting} onClick={()=>setOfficialConfirmOpen(false)} className="rounded-lg border px-4 py-2 text-sm font-semibold">Go back</button><button type="button" disabled={officialSubmitting} onClick={handleOfficialSubmit} className="rounded-lg bg-[#001836] px-5 py-2 text-sm font-semibold text-white disabled:opacity-50">{officialSubmitting?"Submitting…":"Confirm and submit to NCA"}</button></footer></section></div>}
+
+      {handoffEventId&&submission&&<EmailHandoffModal submissionId={submission.id} eventId={handoffEventId} onClose={()=>setHandoffEventId(null)}/>}
 
       {(receiptReference || submission?.receipt_reference) && <div className="flex items-center justify-between rounded-xl border border-green-200 bg-green-50 p-4 text-sm"><span>Official receipt: <strong>{receiptReference || submission?.receipt_reference}</strong></span><button onClick={() => import("@/lib/api").then(({downloadAuthenticated}) => downloadAuthenticated(`/submissions/${submission?.id}/receipt/`, {}, `submission-receipt-${submission?.id}.pdf`))} className="font-semibold text-[#0066cc]">Download receipt</button></div>}
 
@@ -803,6 +822,17 @@ export default function FormEntryPage() {
           </div>
         </section>
       )}
+
+      {(providerReviewQ.data?.compliance_flags.length ?? 0) > 0 && <section className="rounded-[12px] border border-[#e6e8ea] bg-white p-4">
+        <h2 className="text-[13px] font-semibold text-[#191c1e]">Compliance flags</h2><p className="mt-1 text-[11px] text-[#737780]">Flags associated with this submission are shown here.</p>
+        <div className="mt-3 space-y-2">{providerReviewQ.data!.compliance_flags.map(flag=><article key={flag.id} className="rounded-lg border border-amber-200 bg-amber-50 p-3"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-semibold">{flag.flag_type.replaceAll("_"," ")}</p><span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold">{flag.status.replaceAll("_"," ")}</span></div><p className="mt-1 text-xs text-[#43474f]">{flag.description}</p><p className="mt-2 text-[10px] text-[#737780]">{flag.completion_percentage}% complete · {flag.missing_field_count} missing</p></article>)}</div>
+      </section>}
+
+      <section className="rounded-[12px] border border-[#e6e8ea] bg-white p-4">
+        <div className="flex items-center justify-between"><div><h2 className="text-[13px] font-semibold text-[#191c1e]">Communication history</h2><p className="mt-1 text-[11px] text-[#737780]">Portal notifications and submission-related correspondence are recorded together.</p></div></div>
+        {isApprover&&submission&&<div className="mt-4 rounded-xl border bg-[#f7f9fb] p-3"><label className="text-xs font-semibold" htmlFor="nca-correspondence">Write to NCA</label><textarea id="nca-correspondence" value={correspondenceText} onChange={event=>setCorrespondenceText(event.target.value)} placeholder="Enter the submission-related message to send to NCA." className="mt-2 min-h-24 w-full rounded-lg border bg-white p-3 text-xs"/><div className="mt-2 flex justify-end"><button disabled={!correspondenceText.trim()} onClick={async()=>{const response=await api.post<{event_id:number}>(`/submissions/${submission.id}/communications/send/`,{message:correspondenceText});setCorrespondenceText("");setHandoffEventId(response.event_id);await refreshProviderWorkflow();}} className="rounded-lg bg-[#002d5b] px-4 py-2 text-xs font-semibold text-white disabled:opacity-40">Send internal message</button></div></div>}
+        {communicationsQ.isLoading?<p className="mt-3 text-xs text-[#737780]">Loading communication…</p>:(communicationsQ.data?.length??0)===0?<p className="mt-3 rounded-lg bg-[#f7f9fb] p-3 text-xs text-[#737780]">No communication has been recorded for this form yet.</p>:<div className="mt-3 space-y-3">{communicationsQ.data!.map(item=><article key={item.id} className="rounded-lg border p-3"><div className="flex flex-wrap items-center gap-2"><span className="rounded-full bg-[#e8f1fb] px-2 py-0.5 text-[9px] font-semibold text-[#004999]">Internal correspondence</span>{item.submission_version!=null&&<span className="rounded-full bg-[#e8f1fb] px-2 py-0.5 text-[9px] font-semibold text-[#004999]">Version {item.submission_version}</span>}{item.email_handoff&&<span className="rounded-full bg-[#f2f4f6] px-2 py-0.5 text-[9px] font-semibold uppercase text-[#5e6269]">External draft {item.email_handoff.status.toLowerCase()}</span>}<span className="ml-auto text-[10px] text-[#737780]">{new Date(item.created_at).toLocaleString()}</span></div>{item.subject&&<h3 className="mt-2 text-xs font-semibold">{item.subject}</h3>}{item.submission_reference&&<p className="mt-1 font-mono text-[9px] text-[#004999]">{item.submission_reference}</p>}<p className="mt-1 text-[10px] text-[#737780]">From: {item.sender_name || "NCA Data Collection System"}</p>{item.recipients.length>0&&<p className="mt-1 text-[10px] text-[#737780]">To: {item.recipients.map(recipient=>recipient.email).join(", ")}</p>}<p className="mt-2 whitespace-pre-wrap text-[11px] leading-5 text-[#43474f]">{item.body}</p>{item.email_handoff&&submission&&<button type="button" onClick={()=>setHandoffEventId(item.email_handoff!.event)} className="mt-3 rounded-lg border border-[#0066cc] px-3 py-1.5 text-[11px] font-semibold text-[#0066cc]">Open external email draft</button>}</article>)}</div>}
+      </section>
 
       {completion && completion.missing_indicator_count > 0 && (
         <div className="rounded-[8px] border border-[#b9d4ef] bg-[#eef6ff] px-4 py-3 text-[12px] text-[#264f73]">
@@ -839,7 +869,7 @@ export default function FormEntryPage() {
               return (
                 <button type="button"
                   key={item.id}
-                  onClick={() => void leaveForm(`/provider/submissions/${item.id}`)}
+                  onClick={() => void leaveForm(`/provider/forms/${item.id}`)}
                   className={`rounded-[8px] border px-3 py-2 text-[12px] transition-colors ${
                     active
                       ? "border-[#0066cc] bg-[#e8f1fb] text-[#004999]"
@@ -892,6 +922,7 @@ export default function FormEntryPage() {
               correctionItems={providerReviewQ.data?.correction_items ?? []}
               registerSaveController={registerSaveController}
               previousValues={providerReviewQ.data?.previous_month?.values ?? {}}
+              onSaved={handleSectionSaved}
             />
           )}
 

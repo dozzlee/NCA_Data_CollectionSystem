@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import type { FormTemplate, ReportingPeriod } from "@/lib/types";
 import { PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 import { useToast } from "@/components/ui/Toast";
+import { EmailHandoffModal } from "@/components/communications/EmailHandoffModal";
 
 interface ProviderCandidate {
   provider_id: number;
@@ -38,7 +39,7 @@ interface AssignmentResult {
   recurring_schedules_created: number;
   delivery_type: "IMMEDIATE" | "SCHEDULED";
   blocked: number;
-  obligations: Array<{ provider_id:number; provider_name:string; expected_submission_id:number; submission_id:number; period_id:number; period_name:string; due_at:string }>;
+  obligations: Array<{ provider_id:number; provider_name:string; expected_submission_id:number; submission_id:number; event_id:number|null; period_id:number; period_name:string; due_at:string }>;
 }
 
 export function FormSendDialog({ template, open, onClose }: { template: FormTemplate; open: boolean; onClose: () => void }) {
@@ -48,7 +49,10 @@ export function FormSendDialog({ template, open, onClose }: { template: FormTemp
   const [selected, setSelected] = useState<number[]>([]);
   const [search, setSearch] = useState("");
   const [overrideReason, setOverrideReason] = useState("");
+  const [messageSubject, setMessageSubject] = useState("");
+  const [messageBody, setMessageBody] = useState("");
   const [result, setResult] = useState<AssignmentResult | null>(null);
+  const [handoffQueue,setHandoffQueue]=useState<Array<{submissionId:number;eventId:number}>>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -56,8 +60,11 @@ export function FormSendDialog({ template, open, onClose }: { template: FormTemp
     setSelected([]);
     setSearch("");
     setOverrideReason("");
+    setMessageSubject(`New form assigned: ${template.form_code}`);
+    setMessageBody(`Please complete ${template.name} for the selected reporting period by the stated deadline.`);
     setResult(null);
-  }, [open, template.id]);
+    setHandoffQueue([]);
+  }, [open, template.id, template.form_code, template.name]);
 
   useEffect(() => {
     if (!open) return;
@@ -79,7 +86,7 @@ export function FormSendDialog({ template, open, onClose }: { template: FormTemp
   const send = useMutation<AssignmentResult>({
     mutationFn: () => api(`/form-templates/${template.id}/assignments/`, {
       method: "POST",
-      body: JSON.stringify({ mode: "MANUAL", period_id: Number(periodId), provider_ids: selected, override_reason: overrideReason }),
+      body: JSON.stringify({ mode: "MANUAL", period_id: Number(periodId), provider_ids: selected, override_reason: overrideReason, message_subject: messageSubject, message_body: messageBody }),
     }),
     onSuccess: (result) => {
       if (result.delivery_type !== "IMMEDIATE") {
@@ -87,10 +94,13 @@ export function FormSendDialog({ template, open, onClose }: { template: FormTemp
         return;
       }
       setResult(result);
+      setHandoffQueue(result.obligations.filter(item=>item.event_id).map(item=>({submissionId:item.submission_id,eventId:item.event_id!})));
       toast(result.obligations_created ? `${result.obligations_created} provider form${result.obligations_created === 1 ? "" : "s"} sent.` : "Already sent for the selected provider and period.", "success");
       queryClient.invalidateQueries({ queryKey: ["form-assignments", template.id] });
       queryClient.invalidateQueries({ queryKey: ["direct-send-preview", template.id] });
       queryClient.invalidateQueries({ queryKey: ["expected-submissions"] });
+      queryClient.invalidateQueries({ queryKey: ["nca-submissions"] });
+      queryClient.invalidateQueries({ queryKey: ["nca-formal-submissions"] });
     },
     onError: (error: Error) => toast(error.message, "error"),
   });
@@ -103,10 +113,12 @@ export function FormSendDialog({ template, open, onClose }: { template: FormTemp
   const selectedRows = candidates.filter(item => selected.includes(item.provider_id));
   const selectedMismatches = selectedRows.filter(item => item.mismatch);
   const selectedBlocked = selectedRows.some(item => !item.ready || item.duplicate || (item.mismatch && !overrideReason.trim()));
-  const canSend = Boolean(periodId && selected.length && !selectedBlocked && !send.isPending && !preview.isFetching);
+  const canSend = Boolean(periodId && selected.length && messageSubject.trim() && messageBody.trim() && !selectedBlocked && !send.isPending && !preview.isFetching);
 
   if (!open) return null;
+  const activeHandoff=handoffQueue[0];
   return (
+    <>
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm" onMouseDown={event => event.target === event.currentTarget && onClose()}>
       <div role="dialog" aria-modal="true" aria-labelledby="send-form-title" className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
         <div className="flex items-start justify-between border-b px-6 py-5">
@@ -125,6 +137,15 @@ export function FormSendDialog({ template, open, onClose }: { template: FormTemp
             {(periods.data?.results ?? []).map(period => <option key={period.id} value={period.id}>{period.name} · due {new Date(period.due_at).toLocaleDateString()}</option>)}
           </select>
           {!periods.isLoading && !(periods.data?.results ?? []).length && <p className="mt-2 text-xs text-amber-700">There is no active reporting period matching this form’s frequency.</p>}
+
+          <div className="mt-5 grid gap-3">
+            <label className="text-xs font-semibold uppercase tracking-wide text-[#737780]">Message subject
+              <input value={messageSubject} onChange={event => setMessageSubject(event.target.value)} maxLength={180} className="mt-1 block w-full rounded-lg border border-[#c3c6d0] px-3 py-2.5 text-sm font-normal normal-case tracking-normal text-[#191c1e] focus:border-[#0066cc] focus:outline-none" />
+            </label>
+            <label className="text-xs font-semibold uppercase tracking-wide text-[#737780]">Instructions to provider
+              <textarea value={messageBody} onChange={event => setMessageBody(event.target.value)} rows={3} className="mt-1 block w-full rounded-lg border border-[#c3c6d0] p-3 text-sm font-normal normal-case tracking-normal text-[#191c1e] focus:border-[#0066cc] focus:outline-none" />
+            </label>
+          </div>
 
           <div className="mt-5 flex items-end justify-between gap-3">
             <div><h3 className="text-sm font-semibold">Providers</h3><p className="mt-0.5 text-xs text-[#737780]">Providers without both portal roles remain visible but cannot receive the form.</p></div>
@@ -166,5 +187,7 @@ export function FormSendDialog({ template, open, onClose }: { template: FormTemp
         <div className="flex justify-end gap-3 border-t px-6 py-4"><button onClick={onClose} className="rounded-lg border border-[#c3c6d0] px-4 py-2 text-sm">{result ? "Close" : "Cancel"}</button>{!result && <button onClick={() => send.mutate()} disabled={!canSend} className="inline-flex items-center gap-2 rounded-lg bg-[#001836] px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"><Send size={15}/>{send.isPending ? "Sending…" : "Confirm & send"}</button>}</div>
       </div>
     </div>
+    {activeHandoff&&<EmailHandoffModal submissionId={activeHandoff.submissionId} eventId={activeHandoff.eventId} onClose={()=>setHandoffQueue(queue=>queue.slice(1))}/>}
+    </>
   );
 }

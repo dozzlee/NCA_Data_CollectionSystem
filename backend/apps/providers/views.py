@@ -49,6 +49,14 @@ class ProviderListView(generics.ListCreateAPIView):
             return ProviderProfileListSerializer
         return ProviderProfileSerializer
 
+    def perform_create(self, serializer):
+        provider = serializer.save()
+        record_audit(
+            user=self.request.user, action="PROVIDER_CREATED", entity_type="ProviderProfile", entity_id=provider.id,
+            after={"provider_code": provider.provider_code, "status": provider.status, "category": provider.category},
+            ip_address=self.request.META.get("REMOTE_ADDR"),
+        )
+
 
 class ProviderDetailView(generics.RetrieveUpdateAPIView):
     """
@@ -68,6 +76,18 @@ class ProviderDetailView(generics.RetrieveUpdateAPIView):
         if self.request.user.is_provider and self.request.user.organization_id:
             queryset = queryset.filter(organization_id=self.request.user.organization_id)
         return queryset
+
+    def perform_update(self, serializer):
+        provider = serializer.instance
+        before = {"provider_code": provider.provider_code, "status": provider.status, "category": provider.category}
+        provider = serializer.save()
+        record_audit(
+            user=self.request.user, action="PROVIDER_UPDATED", entity_type="ProviderProfile", entity_id=provider.id,
+            before=before,
+            after={"provider_code": provider.provider_code, "status": provider.status, "category": provider.category,
+                   "changed_fields": sorted(serializer.validated_data)},
+            ip_address=self.request.META.get("REMOTE_ADDR"),
+        )
 
 
 class ProviderContactListView(generics.ListCreateAPIView):
@@ -91,7 +111,11 @@ class ProviderContactListView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         provider = generics.get_object_or_404(ProviderProfile, pk=self.kwargs["pk"])
-        serializer.save(provider=provider)
+        contact = serializer.save(provider=provider)
+        record_audit(
+            user=self.request.user, action="PROVIDER_CONTACT_CREATED", entity_type="ProviderContact", entity_id=contact.id,
+            after={"provider_id": provider.id}, ip_address=self.request.META.get("REMOTE_ADDR"),
+        )
 
 
 class ProviderContactDetailView(generics.RetrieveUpdateAPIView):
@@ -117,6 +141,14 @@ class ProviderContactDetailView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         return generics.get_object_or_404(
             ProviderContact, pk=self.kwargs["cid"], provider_id=self.kwargs["pk"]
+        )
+
+    def perform_update(self, serializer):
+        contact = serializer.save()
+        record_audit(
+            user=self.request.user, action="PROVIDER_CONTACT_UPDATED", entity_type="ProviderContact", entity_id=contact.id,
+            after={"provider_id": contact.provider_id, "changed_fields": sorted(serializer.validated_data)},
+            ip_address=self.request.META.get("REMOTE_ADDR"),
         )
 
 

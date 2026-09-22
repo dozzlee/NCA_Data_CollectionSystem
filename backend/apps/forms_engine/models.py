@@ -20,12 +20,12 @@ FIELD_TYPES = [
 
 FORM_CODES = [
     ("MNO-MONTHLY", "MNO Monthly Return"),
-    ("DC-TB02", "Pay TV Broadcasting Annual"),
-    ("DC-ISP06", "Internet Service Provider Annual"),
-    ("DC-ITC04", "Infrastructure Tower Operator Annual"),
-    ("TOWER-MAIN-ANNUAL", "Infrastructure Tower Main Annual"),
-    ("DC-DBS05", "Domestic/Inland Fibre Annual"),
-    ("DC-SUB03", "International Submarine Fibre Annual"),
+    ("DC-TB02", "Pay TV Broadcasting Bi-Annual"),
+    ("DC-ISP06", "Internet Service Provider Bi-Annual"),
+    ("DC-ITC04", "Infrastructure Tower Operator Bi-Annual"),
+    ("TOWER-MAIN-ANNUAL", "Infrastructure Tower Main Bi-Annual"),
+    ("DC-DBS05", "Domestic/Inland Fibre Bi-Annual"),
+    ("DC-SUB03", "International Submarine Fibre Bi-Annual"),
 ]
 
 # Section 11 only requires KMZ route/topology evidence for the domestic fibre form.
