@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
-import type { User, UserRole, ProviderProfile } from "@/lib/types";
+import type { User, UserRole, ProviderProfile, NCADivision } from "@/lib/types";
 import { PROVIDER_CATEGORY_LABELS } from "@/lib/utils";
 
 const ROLES: { value: UserRole; label: string; group: string }[] = [
@@ -35,7 +35,7 @@ const ROLE_LABELS: Record<UserRole, string> = {
 
 interface NewUserForm {
   name: string; email: string; password: string;
-  role: UserRole; organization: string;
+  role: UserRole; organization: string; division: string; grade: string;
 }
 
 interface ToggleActiveResponse {
@@ -43,7 +43,7 @@ interface ToggleActiveResponse {
   email: string;
 }
 
-const EMPTY: NewUserForm = { name:"", email:"", password:"", role:"NCA_OFFICER", organization:"" };
+const EMPTY: NewUserForm = { name:"", email:"", password:"", role:"NCA_OFFICER", organization:"", division:"", grade:"" };
 
 const inp = "w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none focus:ring-2 focus:ring-[#0066cc]/20";
 const lbl = "block text-[11px] font-semibold uppercase tracking-wide text-[#737780] mb-1";
@@ -54,7 +54,10 @@ function UsersPageContent() {
   const searchParams = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState<NewUserForm>(EMPTY);
+  const [newDivision, setNewDivision] = useState("");
   const [filterRole, setFilterRole] = useState(searchParams.get("role") ?? "");
+  const [resetUser, setResetUser] = useState<User | null>(null);
+  const [temporaryPassword, setTemporaryPassword] = useState("");
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
@@ -72,12 +75,19 @@ function UsersPageContent() {
     queryFn: () => api("/providers/"),
   });
 
+  const { data: divisionsData } = useQuery<{ results: NCADivision[] }>({
+    queryKey: ["nca-divisions"],
+    queryFn: () => api("/nca-divisions/"),
+  });
+
   const createMut = useMutation({
     mutationFn: () => api("/auth/users/", {
       method: "POST",
       body: JSON.stringify({
         name: form.name, email: form.email, password: form.password,
         role: form.role, organization_id: form.organization || null,
+        division_id: form.role === "NCA_VIEWER" ? Number(form.division) : null,
+        grade: form.role === "NCA_VIEWER" ? form.grade : "",
       }),
     }),
     onSuccess: () => {
@@ -88,6 +98,15 @@ function UsersPageContent() {
     onError: () => toast("Failed to create user. Check that the email is unique.", "error"),
   });
 
+  const createDivisionMut = useMutation({
+    mutationFn: () => api("/nca-divisions/", {
+      method: "POST",
+      body: JSON.stringify({ name: newDivision.trim(), code: newDivision.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") }),
+    }),
+    onSuccess: () => { setNewDivision(""); qc.invalidateQueries({ queryKey: ["nca-divisions"] }); toast("Division added.", "success"); },
+    onError: () => toast("Could not add division. Check that its name is unique.", "error"),
+  });
+
   const toggleActiveMut = useMutation({
     mutationFn: (userId: string) =>
       api<ToggleActiveResponse>(`/auth/users/${userId}/toggle-active/`, { method: "POST" }),
@@ -96,6 +115,18 @@ function UsersPageContent() {
       qc.invalidateQueries({ queryKey: ["users"] });
     },
     onError: () => toast("Failed to update user.", "error"),
+  });
+
+  const resetPasswordMut = useMutation({
+    mutationFn: () => api(`/auth/users/${resetUser?.id}/reset-password/`, {
+      method: "POST",
+      body: JSON.stringify({ temporary_password: temporaryPassword }),
+    }),
+    onSuccess: () => {
+      toast("Temporary password issued. The user must change it at next sign-in.", "success");
+      setResetUser(null); setTemporaryPassword("");
+    },
+    onError: (error: Error) => toast(error.message || "Password could not be reset.", "error"),
   });
 
   const users = data?.results ?? [];
@@ -127,6 +158,16 @@ function UsersPageContent() {
       </div>
 
       {/* Create form */}
+      <div className="rounded-[16px] border border-[#eceef0] bg-white p-5">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div><h2 className="text-[15px] font-semibold">NCA divisions</h2><p className="mt-1 text-[12px] text-[#737780]">Managed values used when creating data requester accounts.</p></div>
+          <form className="flex gap-2" onSubmit={e => { e.preventDefault(); if(newDivision.trim()) createDivisionMut.mutate(); }}>
+            <input className={inp} required value={newDivision} onChange={e => setNewDivision(e.target.value)} placeholder="Division name" />
+            <button disabled={createDivisionMut.isPending} className="shrink-0 rounded-[8px] bg-[#0066cc] px-4 py-2 text-[13px] font-semibold text-white">Add division</button>
+          </form>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">{(divisionsData?.results ?? []).map(d => <span key={d.id} className={`rounded-full px-3 py-1 text-[12px] ${d.is_active?"bg-[#e8f1fb] text-[#004999]":"bg-[#f2f4f6] text-[#737780]"}`}>{d.name}</span>)}</div>
+      </div>
       {showCreate && (
         <form onSubmit={e => { e.preventDefault(); createMut.mutate(); }}
           className="rounded-[16px] border border-[#eceef0] bg-white p-6 space-y-4">
@@ -150,7 +191,7 @@ function UsersPageContent() {
             <div>
               <label className={lbl}>Role</label>
               <select className={inp} value={form.role}
-                onChange={e => setForm(f => ({ ...f, role: e.target.value as UserRole, organization: "" }))}>
+                onChange={e => setForm(f => ({ ...f, role: e.target.value as UserRole, organization: "", division: "", grade: "" }))}>
                 {ROLES.map(r => (
                   <option key={r.value} value={r.value}>{r.group}: {r.label}</option>
                 ))}
@@ -177,6 +218,19 @@ function UsersPageContent() {
                 <input className={inp} value="NCA" disabled />
               </div>
             )}
+            {form.role === "NCA_VIEWER" && <>
+              <div>
+                <label className={lbl}>NCA Division</label>
+                <select className={inp} required value={form.division} onChange={e => setForm(f => ({ ...f, division: e.target.value }))}>
+                  <option value="">Select division…</option>
+                  {(divisionsData?.results ?? []).filter(d => d.is_active).map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className={lbl}>Grade</label>
+                <input className={inp} required value={form.grade} onChange={e => setForm(f => ({ ...f, grade: e.target.value }))} placeholder="e.g. Principal Manager" />
+              </div>
+            </>}
           </div>
           <div className="rounded-[8px] bg-[#fff3bf] border border-[#ffd100]/50 px-4 py-3 text-[12px] text-[#7a5c00]">
             <p className="font-semibold">Admin configuration does not grant provider submission authority.</p>
@@ -186,6 +240,21 @@ function UsersPageContent() {
             className="rounded-[8px] bg-[#001836] px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-[#002d5b] disabled:opacity-50">
             {createMut.isPending ? "Creating…" : "Create User"}
           </button>
+        </form>
+      )}
+
+      {resetUser && (
+        <form onSubmit={e => { e.preventDefault(); resetPasswordMut.mutate(); }} className="rounded-[16px] border border-[#0066cc]/30 bg-[#f4f8fd] p-5">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="min-w-[260px] flex-1">
+              <h2 className="text-[15px] font-semibold">Reset password for {resetUser.name}</h2>
+              <p className="mt-1 text-[12px] text-[#737780]">Set a temporary password. No forms, submissions, provider information or other portal data will be changed.</p>
+              <label className={`${lbl} mt-4`}>Temporary password</label>
+              <input type="password" required minLength={8} autoComplete="new-password" className={inp} value={temporaryPassword} onChange={e => setTemporaryPassword(e.target.value)} />
+            </div>
+            <button type="button" onClick={() => { setResetUser(null); setTemporaryPassword(""); }} className="rounded-[8px] border border-[#c3c6d0] bg-white px-4 py-2 text-[13px]">Cancel</button>
+            <button type="submit" disabled={resetPasswordMut.isPending} className="rounded-[8px] bg-[#002d5b] px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-50">{resetPasswordMut.isPending ? "Resetting…" : "Issue temporary password"}</button>
+          </div>
         </form>
       )}
 
@@ -227,7 +296,7 @@ function UsersPageContent() {
                     </span>
                   </td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">
-                    {u.organization?.name ?? "—"}
+                    {u.role === "NCA_VIEWER" ? `${u.division?.name ?? "Profile incomplete"}${u.grade ? ` · ${u.grade}` : ""}` : (u.organization?.name ?? "NCA")}
                   </td>
                   <td className="px-5 py-3.5">
                     <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${u.is_active ? "bg-[#e5f4eb] text-[#1f7a4d]" : "bg-[#f2f4f6] text-[#737780]"}`}>
@@ -235,12 +304,12 @@ function UsersPageContent() {
                     </span>
                   </td>
                   <td className="px-5 py-3.5">
-                    <button
+                    <div className="flex items-center gap-3"><button type="button" onClick={() => { setResetUser(u); setTemporaryPassword(""); }} className="text-[12px] font-medium text-[#0066cc] hover:underline">Reset password</button><button
                       onClick={() => toggleActiveMut.mutate(u.id)}
                       disabled={toggleActiveMut.isPending}
                       className="text-[12px] font-medium text-[#0066cc] hover:underline disabled:opacity-50">
                       {u.is_active ? "Deactivate" : "Reactivate"}
-                    </button>
+                    </button></div>
                   </td>
                 </tr>
               ))}

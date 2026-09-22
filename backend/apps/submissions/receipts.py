@@ -11,7 +11,7 @@ from .models import SubmissionReceipt
 def create_receipt(submission):
     if hasattr(submission, "receipt"): return submission.receipt
     reference = f"NCA-{submission.submitted_at:%Y%m%d}-{submission.id:08d}-V{submission.version}"
-    snapshot = {"submission_id": submission.id, "version": submission.version,
+    snapshot = {"submission_reference": submission.submission_reference, "submission_id": submission.id, "version": submission.version,
         "provider": submission.expected.provider.registered_name, "form_code": submission.expected.form_template.form_code,
         "form_version": submission.expected.form_template.version, "period": submission.expected.period.name,
         "submitted_by": submission.submitted_by.email, "submitted_at": submission.submitted_at.isoformat()}

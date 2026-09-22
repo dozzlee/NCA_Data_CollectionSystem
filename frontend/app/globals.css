@@ -1,8 +1,8 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
   color-scheme: light;
@@ -36,6 +36,13 @@
   --radius-sm:            8px;
   --radius-lg:            16px;
   --radius-pill:          9999px;
+
+  /* Institutional glass surfaces use the existing NCA palette. */
+  --workspace-background: #f7f9fb;
+  --glass-surface-strong: rgba(255, 255, 255, 0.9);
+  --glass-border: rgba(0, 45, 91, 0.12);
+  --glass-blur: 12px;
+  --glass-transition: 180ms ease-out;
 }
 
 * {
@@ -58,11 +65,46 @@ body {
 
 /* Glass card utility */
 .glass-card {
-  background: var(--surface-glass);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.20);
+  background: var(--glass-surface-strong);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
   box-shadow: var(--shadow-glass);
+}
+
+.workspace-background { background: var(--workspace-background); }
+.workspace-header {
+  background: #fff;
+  border-color: var(--glass-border);
+  box-shadow: 0 3px 14px rgba(0, 45, 91, 0.04);
+}
+.dashboard-surface {
+  background: #fff;
+  border: 1px solid rgba(0, 45, 91, 0.11);
+  border-radius: 16px;
+}
+.dashboard-surface-interactive { transition: background-color var(--glass-transition), border-color var(--glass-transition); }
+.dashboard-surface-interactive:hover { background: #f7f9fb; border-color: rgba(0, 102, 204, 0.3); }
+.workspace-sidebar {
+  background: linear-gradient(180deg, rgba(0, 45, 91, 0.95), rgba(0, 24, 54, 0.98));
+  border-right: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset -1px 0 rgba(255, 255, 255, 0.08), 8px 0 24px rgba(0, 24, 54, 0.08);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+.workspace-sidebar a[aria-current="page"] {
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--primary);
+}
+@supports not (backdrop-filter: blur(1px)) {
+  .glass-card, .workspace-header { background: #fff; }
+  .workspace-sidebar { background: var(--primary-container); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+@media print {
+  body, .workspace-background, .workspace-header, .glass-card { background: #fff !important; box-shadow: none !important; backdrop-filter: none !important; }
 }
 
 /* Data mono numbers */

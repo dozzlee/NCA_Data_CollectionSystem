@@ -1,5 +1,7 @@
 from django.contrib import admin
-from .models import ProviderProfile, ProviderContact
+from .models import ProviderProfile, ProviderContact, ProviderFormAssignment
+
+admin.site.register(ProviderFormAssignment)
 
 
 class ProviderContactInline(admin.TabularInline):
@@ -10,7 +12,7 @@ class ProviderContactInline(admin.TabularInline):
 
 @admin.register(ProviderProfile)
 class ProviderProfileAdmin(admin.ModelAdmin):
-    list_display = ["registered_name", "trade_name", "category", "licence_number", "status", "primary_email"]
+    list_display = ["provider_code", "registered_name", "trade_name", "category", "licence_number", "status", "primary_email"]
     list_filter = ["category", "status"]
-    search_fields = ["registered_name", "trade_name", "licence_number", "primary_email"]
+    search_fields = ["provider_code", "registered_name", "trade_name", "licence_number", "primary_email"]
     inlines = [ProviderContactInline]

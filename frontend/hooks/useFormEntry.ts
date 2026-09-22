@@ -6,6 +6,7 @@ type FormTemplateDetail = FormTemplate & { sections: FormSection[] };
 
 interface Submission {
   id: number;
+  submission_reference: string;
   expected: number;
   version: number;
   completion_pct: string;
@@ -15,6 +16,11 @@ interface Submission {
   period_name: string;
   kmz_required: boolean;
   submitted_at: string | null;
+  revision: number;
+  last_edited_by: string | null;
+  last_edited_by_name: string | null;
+  last_edited_at: string | null;
+  receipt_reference: string | null;
 }
 
 interface SectionCompletion {
@@ -29,7 +35,15 @@ interface CompletionData {
   completion_pct: number;
   can_submit: boolean;
   missing_required_count: number;
+  missing_indicator_count: number;
   missing_by_type: Record<string, number>;
+  completeness_warnings: {
+    code: string;
+    type: string;
+    id: number | string;
+    section_code: string;
+    label: string;
+  }[];
   blocking_issues: {
     code: string;
     type: string;
@@ -38,6 +52,11 @@ interface CompletionData {
     label: string;
   }[];
   sections: SectionCompletion[];
+  transition_ready: boolean;
+  open_correction_item_count: number;
+  open_correction_items: Array<{ id:number; stage:string; target_type:string; target_id:string; instruction:string }>;
+  warning_count: number;
+  validation_issues: Array<{ id:number; severity:string; target_type:string; target_id:string; code:string; message:string; details:Record<string, unknown> }>;
 }
 
 interface SubmissionValue {
@@ -49,6 +68,8 @@ interface SubmissionValue {
   value: string;
   value_status: string;
   explanation?: string;
+  value_source?: "MANUAL" | "EXCEL_IMPORT" | "SYSTEM";
+  source_reference?: string;
 }
 
 export function useFormTemplate(id: number) {
@@ -95,14 +116,17 @@ export function useSectionValues(submissionId: number | null, sectionCode: strin
 export function useSaveSectionValues(submissionId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ sectionCode, values }: { sectionCode: string; values: SubmissionValue[] }) =>
-      api.put<{ saved: number; completion_pct: number }>(
+    mutationFn: ({ sectionCode, values, revision, clientSaveId, changeVersion }: { sectionCode: string; values: SubmissionValue[]; revision?: number; clientSaveId: string; changeVersion: number }) =>
+      api.put<{ saved: number; completion_pct: number; revision: number; client_save_id:string; base_revision:number; resulting_revision:number; persisted_change_version:number; replayed:boolean; last_edited_by_name:string; last_edited_at:string }>(
         `/submissions/${submissionId}/sections/${sectionCode}/values/`,
-        { values }
+        { values, revision, client_save_id:clientSaveId, change_version:changeVersion }
       ),
-    onSuccess: (_, { sectionCode }) => {
+    onSuccess: (response, { sectionCode }) => {
       qc.invalidateQueries({ queryKey: ["section-values", submissionId, sectionCode] });
       qc.invalidateQueries({ queryKey: ["submission-completion", submissionId] });
+      qc.setQueryData<Submission>(["submission", submissionId], (current) =>
+        current ? { ...current, revision: response.revision, last_edited_by_name:response.last_edited_by_name, last_edited_at:response.last_edited_at } : current
+      );
     },
   });
 }
@@ -112,8 +136,13 @@ export function useStartSubmission() {
   return useMutation({
     mutationFn: (expectedId: number) =>
       api.post<Submission>(`/expected-submissions/${expectedId}/start/`),
-    onSuccess: () => {
+    onSuccess: (_response, expectedId) => {
       qc.invalidateQueries({ queryKey: ["expected-submissions"] });
+      qc.invalidateQueries({ queryKey: ["expected-submission", expectedId] });
+      qc.invalidateQueries({ queryKey: ["provider-workspace"] });
+      qc.invalidateQueries({ queryKey: ["provider-workspace-summary"] });
+      qc.invalidateQueries({ queryKey: ["submission-notifications"] });
+      qc.invalidateQueries({ queryKey: ["submission-notification-summary"] });
     },
   });
 }
@@ -121,10 +150,18 @@ export function useStartSubmission() {
 export function useSubmitForApproval(submissionId: number) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post(`/submissions/${submissionId}/submit-for-approval/`),
+    mutationFn: () => api.post<{event_id:number;internal_notification_created:boolean}>(`/submissions/${submissionId}/submit-for-approval/`, {}),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["submission", submissionId] });
+      qc.invalidateQueries({ queryKey: ["provider-review-data", submissionId] });
+      qc.invalidateQueries({ queryKey: ["submission-completion", submissionId] });
       qc.invalidateQueries({ queryKey: ["expected-submissions"] });
+      qc.invalidateQueries({ queryKey: ["provider-workspace"] });
+      qc.invalidateQueries({ queryKey: ["provider-workspace-summary"] });
+      qc.invalidateQueries({ queryKey: ["provider-approval-queue"] });
+      qc.invalidateQueries({ queryKey: ["submission-notifications"] });
+      qc.invalidateQueries({ queryKey: ["submission-notification-summary"] });
+      qc.invalidateQueries({ queryKey: ["provider-period-forms"] });
     },
   });
 }

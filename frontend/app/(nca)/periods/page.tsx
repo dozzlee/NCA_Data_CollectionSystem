@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import type { ReportingPeriod, Frequency, User } from "@/lib/types";
@@ -14,10 +14,11 @@ const STATUS_COLORS: Record<string, string> = {
   CLOSED: "bg-[#ffe8e8] text-[#c0112a]",
 };
 
-const FREQUENCIES: Frequency[] = ["MONTHLY", "SEMI_ANNUAL", "ANNUAL"];
+const FREQUENCIES: Frequency[] = ["MONTHLY", "QUARTERLY", "SEMI_ANNUAL"];
 const FREQ_LABELS: Record<Frequency, string> = {
   MONTHLY: "Monthly",
-  SEMI_ANNUAL: "Semi-Annual",
+  QUARTERLY: "Quarterly",
+  SEMI_ANNUAL: "Bi-Annual",
   ANNUAL: "Annual",
 };
 
@@ -26,6 +27,7 @@ interface CreatePeriodForm {
   frequency: Frequency;
   year: string;
   month: string;
+  quarter: string;
   opens_at: string;
   due_at: string;
 }
@@ -45,8 +47,8 @@ const CREATE_PERIOD_FIELDS: Array<{
 ];
 
 const EMPTY_FORM: CreatePeriodForm = {
-  name: "", frequency: "ANNUAL", year: String(new Date().getFullYear()),
-  month: "", opens_at: "", due_at: "",
+  name: "", frequency: "MONTHLY", year: String(new Date().getFullYear()),
+  month: "", quarter: "", opens_at: "", due_at: "",
 };
 
 export default function PeriodsPage() {
@@ -60,7 +62,7 @@ export default function PeriodsPage() {
   });
   const canManagePeriods = me?.capabilities.can_manage_periods ?? false;
 
-  const { data, isLoading } = useQuery<{ results: ReportingPeriod[] }>({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<{ results: ReportingPeriod[] }>({
     queryKey: ["periods"],
     queryFn: () => api("/periods/?ordering=-year"),
   });
@@ -74,7 +76,15 @@ export default function PeriodsPage() {
       setForm(EMPTY_FORM);
       qc.invalidateQueries({ queryKey: ["periods"] });
     },
-    onError: () => toast("Failed to create period.", "error"),
+    onError: (error) => {
+      const data = error instanceof ApiError ? error.data : undefined;
+      const messages = data && typeof data === "object"
+        ? Object.values(data as Record<string, unknown>)
+            .flatMap((value) => Array.isArray(value) ? value : [value])
+            .filter((value): value is string => typeof value === "string")
+        : [];
+      toast(messages[0] ?? (error instanceof Error ? error.message : "Failed to create period."), "error");
+    },
   });
 
   function handleCreate(e: React.FormEvent) {
@@ -84,6 +94,7 @@ export default function PeriodsPage() {
       frequency: form.frequency,
       year: Number(form.year),
       month: form.month ? Number(form.month) : null,
+      quarter: form.quarter ? Number(form.quarter) : null,
       opens_at: form.opens_at,
       due_at: form.due_at,
       status: "DRAFT",
@@ -147,10 +158,19 @@ export default function PeriodsPage() {
                 <input
                   type="number"
                   min={1} max={12}
+                  required
                   value={form.month}
                   onChange={(e) => setForm((f) => ({ ...f, month: e.target.value }))}
                   className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none"
                 />
+              </div>
+            )}
+            {form.frequency === "QUARTERLY" && (
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Quarter (1–4)</label>
+                <input type="number" min={1} max={4} required value={form.quarter}
+                  onChange={(e) => setForm((f) => ({ ...f, quarter: e.target.value }))}
+                  className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] text-[#191c1e] focus:border-[#0066cc] focus:outline-none" />
               </div>
             )}
           </div>
@@ -165,6 +185,19 @@ export default function PeriodsPage() {
       )}
 
       {/* Periods list */}
+      {isError && (
+        <div className="flex items-center justify-between rounded-[12px] border border-[#f2b8b5] bg-[#fff2f1] px-4 py-3 text-[13px] text-[#b3261e]">
+          <span>Reporting periods could not be loaded. Your existing periods have not been removed.</span>
+          <button
+            type="button"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="font-semibold underline disabled:opacity-50"
+          >
+            {isFetching ? "Retrying…" : "Retry"}
+          </button>
+        </div>
+      )}
       <div className="rounded-[16px] border border-[#eceef0] bg-white overflow-hidden">
         <table className="w-full text-left">
           <thead className="border-b border-[#eceef0] bg-[#f7f9fb]">
@@ -183,6 +216,8 @@ export default function PeriodsPage() {
                     ))}
                   </tr>
                 ))
+              : isError
+              ? null
               : periods.length === 0
               ? (
                 <tr>
@@ -195,7 +230,7 @@ export default function PeriodsPage() {
                 <tr key={p.id} className="hover:bg-[#f7f9fb] transition-colors">
                   <td className="px-5 py-3.5">
                     <p className="text-[13px] font-medium text-[#191c1e]">{p.name}</p>
-                    <p className="text-[11px] text-[#737780]">{p.year}{p.month ? ` / M${p.month}` : ""}</p>
+                    <p className="text-[11px] text-[#737780]">{p.year}{p.month ? ` / M${p.month}` : p.quarter ? ` / Q${p.quarter}` : ""}</p>
                   </td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{FREQ_LABELS[p.frequency]}</td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">

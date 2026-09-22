@@ -12,5 +12,4 @@ urlpatterns = [
     path("governance/restore-drills/", views.RestoreList.as_view()),
     path("governance/restore-drills/<int:pk>/sign-off/", views.sign_off_restore),
     path("governance/task-runs/", views.TaskRunList.as_view()),
-    path("governance/readiness/", views.readiness),
 ]

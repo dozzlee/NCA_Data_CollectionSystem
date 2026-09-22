@@ -1,5 +1,6 @@
 import uuid
 from django.db import models
+from django.core.exceptions import ValidationError
 
 
 class ProviderProfile(models.Model):
@@ -24,6 +25,7 @@ class ProviderProfile(models.Model):
     ]
 
     provider_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    provider_code = models.CharField(max_length=12, unique=True, default="")
     organization = models.OneToOneField(
         "users.Organization", on_delete=models.PROTECT, null=True, blank=True,
         related_name="provider_profile"
@@ -49,6 +51,14 @@ class ProviderProfile(models.Model):
     def __str__(self):
         return self.registered_name
 
+    def save(self, *args, **kwargs):
+        self.provider_code = (self.provider_code or f"P{self.provider_id.hex[:10]}").strip().upper()
+        if self.pk:
+            previous = type(self).objects.filter(pk=self.pk).values_list("provider_code", flat=True).first()
+            if previous and previous != self.provider_code and self.expected_submissions.exists():
+                raise ValidationError({"provider_code": "The provider code cannot change after submissions exist."})
+        super().save(*args, **kwargs)
+
     class Meta:
         ordering = ["registered_name"]
 
@@ -71,3 +81,23 @@ class ProviderContact(models.Model):
 
     class Meta:
         ordering = ["name"]
+
+
+class ProviderFormAssignment(models.Model):
+    OBLIGATIONS = [("REQUIRED", "Required"), ("OPTIONAL", "Optional"), ("EXEMPT", "Exempt")]
+    provider = models.ForeignKey(ProviderProfile, on_delete=models.PROTECT, related_name="form_assignments")
+    form_family = models.ForeignKey("forms_engine.FormFamily", on_delete=models.PROTECT, related_name="provider_assignments")
+    obligation = models.CharField(max_length=20, choices=OBLIGATIONS, default="REQUIRED")
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)
+    source_reference = models.CharField(max_length=500)
+    confirmed_by = models.ForeignKey("users.User", null=True, on_delete=models.SET_NULL, related_name="confirmed_provider_form_assignments")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["provider__registered_name", "form_family__code", "-effective_from"]
+        constraints = [models.UniqueConstraint(fields=["provider", "form_family", "effective_from"], name="unique_official_provider_form_effective_date")]
+
+    def __str__(self):
+        return f"{self.provider.registered_name} / {self.form_family.code}"

@@ -128,6 +128,7 @@ export default function ProvidersPage() {
                     <p className="text-[13px] font-semibold text-[#191c1e] group-hover:text-[#0066cc] transition-colors">
                       {p.registered_name}
                     </p>
+                    <p className="font-mono text-[10px] font-semibold text-[#004999]">{p.provider_code}</p>
                     {p.trade_name && <p className="text-[11px] text-[#737780]">{p.trade_name}</p>}
                   </td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{SECTOR_LABELS[p.sector]}</td>

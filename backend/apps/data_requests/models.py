@@ -16,6 +16,7 @@ class DataRequest(models.Model):
     requester_name = models.CharField(max_length=255)
     requester_email = models.EmailField()
     requesting_division = models.CharField(max_length=255)
+    requester_grade_snapshot = models.CharField(max_length=120, blank=True)
     title = models.CharField(max_length=255)
     purpose = models.TextField()
     requested_format = models.CharField(max_length=5, choices=FORMATS)

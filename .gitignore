@@ -29,6 +29,7 @@ backend/private_exports/
 
 # Node / Next.js
 node_modules/
+.dependency-backups/
 .next/
 out/
 *.tsbuildinfo
@@ -63,6 +64,8 @@ backups/
 
 # Browser automation artifacts
 .playwright-cli/
+frontend/test-results/
+frontend/playwright-report/
 
 # Secrets
 .env.local

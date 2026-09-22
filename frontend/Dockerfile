@@ -1,10 +1,11 @@
 FROM node:20-alpine AS base
+RUN corepack enable
 
 # Dependencies
 FROM base AS deps
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
 # Builder
 FROM base AS builder
@@ -13,7 +14,7 @@ ARG DJANGO_INTERNAL_URL=http://backend:8000
 ENV DJANGO_INTERNAL_URL=${DJANGO_INTERNAL_URL}
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN pnpm build
 
 # Runner
 FROM base AS runner

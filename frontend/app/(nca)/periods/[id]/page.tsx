@@ -11,11 +11,17 @@ import { useToast } from "@/components/ui/Toast";
 import type { ReportingPeriod, ExpectedSubmission, FormTemplate, ProviderProfile, User } from "@/lib/types";
 import { PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 
+type ReminderResult = { count:number; reminders:Array<{ expected_submission_id:number; provider:string; submission_reference:string; email:{ recipients:Array<{email:string}>; subject:string; body:string } }> };
+
 export default function PeriodDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
   const qc = useQueryClient();
   const [confirmActivate, setConfirmActivate] = useState(false);
+  const [reminderSelection, setReminderSelection] = useState<number[]>([]);
+  const [reminderSubject, setReminderSubject] = useState("");
+  const [reminderMessage, setReminderMessage] = useState("");
+  const [reminderResult, setReminderResult] = useState<ReminderResult | null>(null);
   const { data: me } = useQuery<User>({
     queryKey: ["me"],
     queryFn: () => api("/auth/me/"),
@@ -82,6 +88,19 @@ export default function PeriodDetailPage() {
       qc.invalidateQueries({ queryKey: ["period-expected", id] });
     },
     onError: () => toast("Failed to activate period.", "error"),
+  });
+
+  const reminderMutation = useMutation({
+    mutationFn: () => api<ReminderResult>(`/periods/${id}/send-reminders/`, {
+      method: "POST",
+      body: JSON.stringify({ expected_submission_ids: reminderSelection, subject: reminderSubject, message: reminderMessage, client_request_id: crypto.randomUUID() }),
+    }),
+    onSuccess: data => {
+      setReminderResult(data);
+      toast(`${data.count} reminder email draft${data.count === 1 ? "" : "s"} prepared.`, "success");
+      qc.invalidateQueries({ queryKey: ["period-expected", id] });
+    },
+    onError: (error: Error) => toast(error.message || "Reminder emails could not be prepared.", "error"),
   });
 
   const submissions = expectedData?.results ?? [];
@@ -169,6 +188,14 @@ export default function PeriodDetailPage() {
           </div>
         ))}
       </div>
+
+      {canManagePeriods && period.status === "ACTIVE" && submissions.length > 0 && <section className="rounded-[16px] border border-[#d8e5f2] bg-white p-5">
+        <div><h2 className="text-[16px] font-semibold">Send manual email reminders</h2><p className="mt-1 text-[12px] text-[#737780]">Select outstanding provider forms. Each provider receives its own portal notification and addressed email draft.</p></div>
+        <div className="mt-4 max-h-56 divide-y overflow-y-auto rounded-lg border">{submissions.filter(item=>!["SUBMITTED","UNDER_REVIEW","RESUBMITTED","APPROVED","REJECTED","ARCHIVED"].includes(item.workflow_status)).map(item=><label key={item.id} className="flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-[#f7f9fb]"><input type="checkbox" checked={reminderSelection.includes(item.id)} onChange={()=>setReminderSelection(values=>values.includes(item.id)?values.filter(value=>value!==item.id):[...values,item.id])}/><span className="flex-1 text-sm"><strong>{item.provider_name}</strong> · {item.form_name}<span className="ml-2 text-xs text-[#737780]">{item.workflow_status.replaceAll("_"," ")}</span></span></label>)}</div>
+        <div className="mt-4 grid gap-3"><label className="text-xs font-semibold text-[#43474f]">Email subject<input value={reminderSubject} onChange={event=>setReminderSubject(event.target.value)} placeholder={`Reminder: forms due for ${period.name}`} className="mt-1 w-full rounded-lg border px-3 py-2.5 text-sm font-normal"/></label><label className="text-xs font-semibold text-[#43474f]">Email message<textarea value={reminderMessage} onChange={event=>setReminderMessage(event.target.value)} rows={4} placeholder={`Please complete and submit your outstanding form for ${period.name} by ${new Date(period.due_at).toLocaleDateString()}.`} className="mt-1 w-full rounded-lg border px-3 py-2.5 text-sm font-normal"/></label></div>
+        <button onClick={()=>reminderMutation.mutate()} disabled={reminderMutation.isPending||!reminderSelection.length||!reminderSubject.trim()||!reminderMessage.trim()} className="mt-4 rounded-lg bg-[#001836] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40">{reminderMutation.isPending?"Preparing reminders…":"Prepare reminder emails"}</button>
+        {reminderResult&&<div className="mt-5 space-y-2 border-t pt-4"><p className="text-sm font-semibold">Prepared email drafts</p>{reminderResult.reminders.map(item=>{const recipients=item.email.recipients.map(value=>value.email).join(",");const href=`mailto:${recipients}?subject=${encodeURIComponent(item.email.subject)}&body=${encodeURIComponent(item.email.body)}`;return <div key={item.expected_submission_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[#f7f9fb] p-3 text-sm"><span><strong>{item.provider}</strong> · {item.submission_reference}</span><a href={href} className="font-semibold text-[#0066cc]">Open in Email</a></div>})}</div>}
+      </section>}
 
       {/* ── DRAFT: Assignment panels ─────────────────────────────────────── */}
       {canManagePeriods && period.status === "DRAFT" && (
@@ -331,13 +358,14 @@ export default function PeriodDetailPage() {
               {submissions.map(s => (
                 <tr key={s.id} className="hover:bg-[#f7f9fb] transition-colors">
                   <td className="px-5 py-3.5 text-[13px] font-medium text-[#191c1e]">{s.provider_name}</td>
-                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{s.form_code}</td>
+                  <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{s.form_code}{s.submission_reference&&<span className="mt-1 block max-w-[240px] break-all font-mono text-[10px] text-[#004999]">{s.submission_reference}</span>}</td>
                   <td className="px-5 py-3.5"><WorkflowBadge status={s.workflow_status} /></td>
                   <td className="px-5 py-3.5"><DueStateBadge state={s.due_state} /></td>
                   <td className="px-5 py-3.5 text-[13px] text-[#43474f]">{s.assigned_officer_name ?? "—"}</td>
                   <td className="px-5 py-3.5">
-                    <Link href={`/submissions/${s.id}/review`}
+                    {s.latest_submission_id ? <Link href={`/submissions/${s.latest_submission_id}/review`}
                       className="text-[13px] font-medium text-[#0066cc] hover:underline">View →</Link>
+                      : <span title="No submission version exists for this obligation." className="text-[13px] text-[#737780]">Unavailable</span>}
                   </td>
                 </tr>
               ))}

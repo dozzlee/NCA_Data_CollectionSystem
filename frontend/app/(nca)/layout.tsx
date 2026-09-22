@@ -12,7 +12,7 @@ export default function NCALayout({ children }: { children: React.ReactNode }) {
 
   return (
     <RoleRouteGuard area="NCA">
-      <div className="flex h-screen overflow-hidden bg-[#f7f9fb]">
+      <div className="workspace-background flex h-screen overflow-hidden">
         <Sidebar />
         <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
           <TopBar />

@@ -1,4 +1,4 @@
-export type SectorId = "mobile" | "fixed" | "bwa";
+export type SectorId = "mobile" | "fixed" | "bwa" | "broadcasting" | "fibre" | "infrastructure";
 export type DashboardViewId = "industry" | SectorId;
 export type ChartKind = "line" | "area" | "bar" | "combo";
 export type DashboardVisualKind =
@@ -13,7 +13,7 @@ export type DashboardVisualKind =
   | "lineBand";
 export type ChartEmphasis = "hero" | "wide" | "standard" | "compact";
 export type AggregationMode = "yearEnd" | "sum" | "average";
-export type Granularity = "quarterly" | "yearly";
+export type Granularity = "monthly" | "quarterly" | "yearly";
 export type TrendMode = "absolute" | "qoq" | "yoy" | "index";
 export type SortMode = "source" | "title" | "latest";
 export type Provenance = "baseline" | "uploaded";
@@ -125,8 +125,8 @@ export type IndustryDashboardDataset = {
     reviewedAt: string;
     latestObservedPeriod: string;
     targetsAvailable: false;
-    monthlyDataAvailable: false;
-    sourceWorkbooks: Record<SectorId, string>;
+    monthlyDataAvailable: boolean;
+    sourceWorkbooks: Partial<Record<SectorId, string>>;
   };
   summary: {
     chartPlacements: number;

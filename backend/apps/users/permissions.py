@@ -122,4 +122,12 @@ class IsNCAOrReadOnly(BasePermission):
             return False
         if request.method in ("GET", "HEAD", "OPTIONS"):
             return request.user.role in (NCA_OPERATIONS_ROLES | PROVIDER_ROLES)
-        return request.user.role == SYSTEM_ADMIN
+        return request.user.role in NCA_EDITOR_ROLES
+
+
+class CanSendProviderCorrespondence(BasePermission):
+    """General/compliance correspondence is not available to Provider Data Entry."""
+    message = "Only a Provider Approver may contact NCA about compliance or general inquiries."
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.role != DATA_ENTRY)
