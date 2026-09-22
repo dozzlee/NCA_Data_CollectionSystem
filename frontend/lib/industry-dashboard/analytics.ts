@@ -47,7 +47,25 @@ export function periodIndex(period: string) {
 }
 
 export function sortPeriods(periods: string[]) {
-  return [...periods].sort((a, b) => periodIndex(a) - periodIndex(b));
+  const index = (p:string) => periodYear(p)*12 + (/^\d{4}-\d{2}$/.test(p) ? Number(p.slice(5)) : periodQuarter(p)*3 || 12);
+  return [...periods].sort((a, b) => index(a) - index(b));
+}
+
+export function seriesForGranularity(series:IndicatorSeries, granularity:Granularity):IndicatorSeries {
+  const monthly = series.values.filter(p=>/^\d{4}-\d{2}$/.test(p.period));
+  if(granularity==="monthly") return {...series,values:monthly};
+  const quarterly = series.values.filter(p=>/^Q[1-4] \d{4}$/.test(p.period));
+  if(granularity==="quarterly") return {...series,values:quarterly};
+  // Annual submissions take precedence; never add monthly and quarterly
+  // observations from the same year together.
+  const years = [...new Set(series.values.map(p=>periodYear(p.period)))];
+  return {...series,values:years.sort().flatMap(year=>{
+    const annual=series.values.find(p=>p.period===String(year));
+    if(annual)return [annual];
+    const quarters=quarterly.filter(p=>periodYear(p.period)===year);
+    const points=quarters.length?quarters:monthly.filter(p=>periodYear(p.period)===year);
+    return aggregateSeries({...series,values:points}).values;
+  })};
 }
 
 export function nextQuarter(period: string, offset = 1) {
@@ -91,7 +109,7 @@ function transformSeries(
   granularity: Granularity
 ): IndicatorSeries {
   if (mode === "absolute") return series;
-  const yearOffset = granularity === "quarterly" ? 4 : 1;
+  const yearOffset = granularity === "monthly" ? 12 : granularity === "quarterly" ? 4 : 1;
   const first = series.values.find((point) => point.value !== null)?.value ?? null;
 
   return {
@@ -166,7 +184,7 @@ export function prepareSeries(
   );
   return selected.map((series) =>
     transformSeries(
-      options.granularity === "yearly" ? aggregateSeries(series) : series,
+      seriesForGranularity(series, options.granularity),
       options.trendMode,
       options.granularity
     )
@@ -178,15 +196,18 @@ export function buildChartData(
   range: { start: string; end: string },
   granularity: Granularity
 ) {
+  const rangeIndex=(period:string)=>granularity==="monthly"
+    ? periodYear(period)*12+Number(period.slice(5))
+    : granularity==="quarterly"?periodIndex(period):periodYear(period);
   const startIndex =
-    granularity === "quarterly" ? periodIndex(range.start) : periodYear(range.start);
+    rangeIndex(range.start);
   const endIndex =
-    granularity === "quarterly" ? periodIndex(range.end) : periodYear(range.end);
+    rangeIndex(range.end);
   const periods = sortPeriods(
     Array.from(new Set(series.flatMap((item) => item.values.map((point) => point.period))))
   ).filter((period) => {
     const index =
-      granularity === "quarterly" ? periodIndex(period) : Number.parseInt(period, 10);
+      rangeIndex(period);
     return index >= startIndex && index <= endIndex;
   });
 
@@ -215,7 +236,7 @@ export function getHeadlineMetric(
   const periodPosition = chart.series[0]?.values.findIndex(
     (point) => point.period === endPeriod
   );
-  const index = periodPosition === undefined || periodPosition < 0 ? 0 : periodPosition;
+  const index = periodPosition === undefined ? -1 : periodPosition;
   const preferred = series.find((item) =>
     /^(industry total|total |bwa subscriptions|usage per subscription|sms per subscription)/i.test(
       item.name
@@ -229,10 +250,12 @@ export function getHeadlineMetric(
     (operatorSeries.length === 1 ? operatorSeries[0] : series.length === 1 ? series[0] : null);
 
   const valueAt = (offset: number) => {
-    if (selected) return selected.values[index - offset]?.value ?? null;
+    const period = chart.series[0]?.values[index-offset]?.period;
+    if (!period) return null;
+    if (selected) return selected.values.find(p=>p.period===period)?.value ?? null;
     if (operatorSeries.length) {
       const values = operatorSeries
-        .map((item) => item.values[index - offset]?.value)
+        .map((item) => item.values.find(p=>p.period===period)?.value)
         .filter((value): value is number => typeof value === "number");
       return values.length ? values.reduce((sum, value) => sum + value, 0) : null;
     }
@@ -242,7 +265,7 @@ export function getHeadlineMetric(
   return {
     value: valueAt(0),
     previous: valueAt(1),
-    yearAgo: valueAt(4),
+    yearAgo: valueAt(/^\d{4}-\d{2}$/.test(endPeriod)?12:/^Q/.test(endPeriod)?4:1),
     period: endPeriod,
     seriesName: selected?.name ?? (operatorSeries.length ? "Operator total" : series[0]?.name ?? ""),
     derivedFromSum: !selected && operatorSeries.length > 1,

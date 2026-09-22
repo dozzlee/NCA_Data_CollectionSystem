@@ -1,8 +1,9 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Upload, FileCheck, AlertTriangle, X } from "lucide-react";
+import { Upload, FileCheck, AlertTriangle, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { downloadAuthenticated } from "@/lib/api";
 
 interface KMZUpload {
   id: number;
@@ -11,6 +12,9 @@ interface KMZUpload {
   review_status: "PENDING" | "ACCEPTED" | "REJECTED";
   review_note?: string;
   uploaded_at: string;
+  scan_status: "PENDING" | "SCANNING" | "CLEAN" | "FAILED";
+  download_ready: boolean;
+  sha256: string;
 }
 
 interface KMZUploadPanelProps {
@@ -103,7 +107,10 @@ export function KMZUploadPanel({
       {uploads.length > 0 && (
         <div className="space-y-2">
           {uploads.map((u) => {
-            const s = STATUS_CONFIG[u.review_status];
+            const review = STATUS_CONFIG[u.review_status];
+            const s = u.scan_status === "CLEAN" ? review : u.scan_status === "FAILED"
+              ? { label:"Scan failed", color:"text-[#E31937]", bg:"bg-[#ffe8e8]" }
+              : { label:u.scan_status === "SCANNING" ? "Scanning" : "Quarantined", color:"text-[#7a5c00]", bg:"bg-[#fff3bf]" };
             return (
               <div key={u.id} className="flex items-center gap-3 rounded-[8px] border border-[#e6e8ea] px-3 py-2">
                 <FileCheck size={14} className="shrink-0 text-[#0066cc]" />
@@ -114,6 +121,7 @@ export function KMZUploadPanel({
                 <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", s.bg, s.color)}>
                   {s.label}
                 </span>
+                {u.download_ready && <button type="button" aria-label={`Download ${u.file_name}`} onClick={() => downloadAuthenticated(`/submissions/${submissionId}/kmz-uploads/${u.id}/download/`, {}, u.file_name)} className="text-[#0066cc]"><Download size={14} /></button>}
               </div>
             );
           })}

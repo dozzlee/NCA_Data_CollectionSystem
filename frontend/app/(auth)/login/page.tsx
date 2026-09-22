@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { Eye, EyeOff, AlertCircle } from "lucide-react";
-import { setAuthTokens } from "@/lib/auth";
+import { clearAuthTokens } from "@/lib/auth";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -17,24 +18,31 @@ export default function LoginPage() {
     setError(null);
 
     try {
+      clearAuthTokens();
+      const csrfResponse = await fetch("/api/v1/auth/csrf/", { credentials: "same-origin" });
+      if (!csrfResponse.ok) throw new Error("CSRF initialization failed.");
+      const { csrfToken } = await csrfResponse.json() as { csrfToken: string };
       const res = await fetch("/api/v1/auth/login/", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
         body: JSON.stringify({ email, password }),
       });
 
       if (!res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => null);
         const msg = data?.non_field_errors?.[0] ?? data?.detail ?? "Invalid credentials.";
         setError(msg);
         return;
       }
 
       const data = await res.json();
-      setAuthTokens({ access: data.access, refresh: data.refresh });
-
       // Route by role
       const role: string = data.user?.role ?? "";
+      if (data.user?.must_change_password) {
+        window.location.assign("/change-password");
+        return;
+      }
       window.location.assign(
         role === "NCA_VIEWER" ? "/data-requests" : role.startsWith("NCA") ? "/dashboard" : "/provider/dashboard"
       );
@@ -54,8 +62,8 @@ export default function LoginPage() {
         style={{ background: "linear-gradient(160deg, #002d5b 0%, #001836 100%)" }}>
 
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-[10px] bg-[#E31937] text-[10px] font-bold text-white tracking-wider">
-            NCA
+          <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full bg-white">
+            <Image src="/nca-logo.png" alt="National Communications Authority" width={56} height={56} preload className="h-full w-full object-contain" />
           </div>
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-white/50">National Communications Authority</p>
@@ -73,8 +81,8 @@ export default function LoginPage() {
           <div className="grid grid-cols-1 gap-3">
             {[
               { label: "Manual web forms", desc: "Grouped sections, draft saving, required field validation" },
-              { label: "Traceable review", desc: "Field statuses, correction tracking, audit trail" },
-              { label: "Compliance monitoring", desc: "Due states, overdue alerts, email follow-up" },
+              { label: "Traceable review", desc: "Field statuses, flag tracking, audit trail" },
+              { label: "Compliance monitoring", desc: "Due states, overdue alerts and traceable portal correspondence" },
             ].map(({ label, desc }) => (
               <div key={label} className="flex items-start gap-3 rounded-[10px] border border-white/10 bg-white/05 px-4 py-3">
                 <div className="mt-0.5 h-2 w-2 rounded-full bg-[#0066cc] shrink-0" />
@@ -98,7 +106,7 @@ export default function LoginPage() {
 
           {/* Mobile brand */}
           <div className="flex items-center gap-2.5 lg:hidden">
-            <div className="flex h-8 w-8 items-center justify-center rounded-[8px] bg-[#E31937] text-[9px] font-bold text-white tracking-wider">NCA</div>
+            <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-white ring-1 ring-[#dfe3e8]"><Image src="/nca-logo.png" alt="National Communications Authority" width={36} height={36} className="h-full w-full object-contain" /></div>
             <p className="text-[14px] font-semibold text-[#191c1e]">Data Collection System</p>
           </div>
 
@@ -124,9 +132,7 @@ export default function LoginPage() {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <label className="block text-[13px] font-medium text-[#191c1e]">Password</label>
-                <button type="button" className="text-[12px] font-medium text-[#0066cc] hover:text-[#002d5b] transition-colors">
-                  Forgot password?
-                </button>
+                <span className="text-[11px] text-[#737780]">Contact your administrator to reset it.</span>
               </div>
               <div className="relative">
                 <input
@@ -166,7 +172,7 @@ export default function LoginPage() {
           </form>
 
           <p className="text-[11px] text-[#737780] text-center leading-relaxed">
-            Multi-factor authentication, account lockout, and session timeout are enforced per NCA security policy.
+            Account lockout and inactivity timeout protect this portal. Multi-factor authentication is planned for a later security release.
           </p>
         </div>
       </div>

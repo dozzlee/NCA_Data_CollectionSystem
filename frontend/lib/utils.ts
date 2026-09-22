@@ -10,9 +10,11 @@ export const WORKFLOW_LABELS: Record<WorkflowStatus, string> = {
   NOT_STARTED: "Not Started",
   DRAFT: "Draft",
   PENDING_APPROVAL: "Pending Approval",
+  PROVIDER_CHANGES_REQUESTED: "Provider Changes Requested",
+  PROVIDER_RESUBMITTED: "Resubmitted to Approver",
   SUBMITTED: "Submitted",
   UNDER_REVIEW: "Under Review",
-  CORRECTION_REQUESTED: "Correction Requested",
+  CORRECTION_REQUESTED: "Flag Requested",
   RESUBMITTED: "Resubmitted",
   APPROVED: "Approved",
   REJECTED: "Rejected",
@@ -61,11 +63,27 @@ export function formatDateTime(iso: string): string {
   });
 }
 
+/** Compact transmission timestamp used in submission registers: 9/2/2026 10:40 PM. */
+export function formatTransmissionDateTime(iso: string): string {
+  return new Date(iso)
+    .toLocaleString("en-US", {
+      month: "numeric",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+    .replace(",", "");
+}
+
 export function getWorkflowStatusColor(status: WorkflowStatus): string {
   const map: Partial<Record<WorkflowStatus, string>> = {
     NOT_STARTED:          "bg-[#f2f4f6] text-[#737780]",
     DRAFT:                "bg-[#e8f1fb] text-[#004999]",
     PENDING_APPROVAL:     "bg-[#fff3bf] text-[#7a5c00]",
+    PROVIDER_CHANGES_REQUESTED: "bg-[#ffe8e8] text-[#c0112a]",
+    PROVIDER_RESUBMITTED: "bg-[#fff3bf] text-[#7a5c00]",
     SUBMITTED:            "bg-[#e8f1fb] text-[#0066cc]",
     UNDER_REVIEW:         "bg-[#ede9ff] text-[#5b21b6]",
     CORRECTION_REQUESTED: "bg-[#ffe8e8] text-[#c0112a]",
@@ -114,6 +132,8 @@ export const STATUS_CHART_COLORS: Partial<Record<WorkflowStatus, string>> = {
   NOT_STARTED: "#c3c6d0",
   DRAFT: "#93c5fd",
   PENDING_APPROVAL: "#fde68a",
+  PROVIDER_CHANGES_REQUESTED: "#fb923c",
+  PROVIDER_RESUBMITTED: "#fbbf24",
   SUBMITTED: "#818cf8",
   UNDER_REVIEW: "#c084fc",
   CORRECTION_REQUESTED: "#fb923c",

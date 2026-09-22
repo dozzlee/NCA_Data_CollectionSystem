@@ -28,6 +28,9 @@ def _field_is_applicable(field, values_by_field):
 
 def calculate_submission_readiness(submission, validation_scope="FULL"):
     template = submission.expected.form_template
+    # Formula rules may materialize system-calculated values, so validation must
+    # run before completeness is calculated.
+    validation_run = run_validation(submission, validation_scope)
     values = list(
         submission.values.select_related(
             "field__section",
@@ -43,33 +46,56 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
     }
 
     blockers = []
+    completeness_warnings = []
+    # Count every blank indicator (including optional indicators) separately
+    # from transition blockers and required-field completion metrics.
+    blank_indicator_count = 0
     required_total = 0
     completed_total = 0
     section_required = defaultdict(int)
     section_completed = defaultdict(int)
 
     fields = (
-        FormField.objects.filter(section__form_template=template, is_required=True)
+        FormField.objects.filter(section__form_template=template)
         .select_related("section", "conditional_on_field")
     )
     for field in fields:
         if not _field_is_applicable(field, values_by_field):
             continue
+        # Completion measures all applicable indicators; requiredness only
+        # controls whether missing data blocks submission.
         required_total += 1
         section_required[field.section.section_code] += 1
+        if field.field_type == "attachment":
+            current = submission.field_attachments.filter(field=field, is_current=True, scan_status="CLEAN").exists()
+            if current:
+                completed_total += 1
+                section_completed[field.section.section_code] += 1
+            else:
+                if field.is_required:
+                    blockers.append({"code": "REQUIRED_ATTACHMENT", "type": "ATTACHMENT", "id": field.id,
+                        "section_code": field.section.section_code, "label": f"{field.label}: upload a clean Word, Excel, or PDF file"})
+            continue
         value = values_by_field.get(field.id)
         if _is_value_complete(value):
             completed_total += 1
             section_completed[field.section.section_code] += 1
             continue
-        code = "EXPLANATION_REQUIRED" if value and value.value_status in ACCEPTED_NON_FILLED else "REQUIRED_FIELD"
-        blockers.append({
-            "code": code,
+        blank_indicator_count += 1
+        issue = {
+            "code": "EXPLANATION_REQUIRED" if value and value.value_status in ACCEPTED_NON_FILLED else "MISSING_INDICATOR",
             "type": "FIELD",
             "id": field.id,
             "section_code": field.section.section_code,
             "label": field.label,
-        })
+        }
+        if field.field_type == "declaration":
+            issue["code"] = "REQUIRED_DECLARATION"
+            blockers.append(issue)
+        elif value and value.value_status in ACCEPTED_NON_FILLED:
+            blockers.append(issue)
+        else:
+            completeness_warnings.append(issue)
 
     grids = (
         FormGrid.objects.filter(section__form_template=template)
@@ -82,13 +108,21 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
             rows_by_grid[value.grid_id].add(value.grid_row_id)
 
     for grid in grids:
-        required_columns = [column for column in grid.columns.all() if column.is_required]
+        columns = list(grid.columns.all())
         if grid.row_mode == "FIXED":
             row_ids = [str(row.id) for row in grid.fixed_rows.all()]
         else:
             row_ids = sorted(rows_by_grid.get(grid.id, set()))
+            if len(row_ids) < grid.min_rows:
+                completeness_warnings.append({
+                    "code": "MISSING_GRID_ROWS", "type": "GRID", "id": grid.id,
+                    "section_code": grid.section.section_code, "label": f"{grid.title} requires at least {grid.min_rows} row(s)",
+                })
         for row_id in row_ids:
-            for column in required_columns:
+            for column in columns:
+                value = grid_values.get((grid.id, row_id, column.id))
+                if not _is_value_complete(value):
+                    blank_indicator_count += 1
                 required_total += 1
                 section_required[grid.section.section_code] += 1
                 value = grid_values.get((grid.id, row_id, column.id))
@@ -96,8 +130,8 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
                     completed_total += 1
                     section_completed[grid.section.section_code] += 1
                     continue
-                blockers.append({
-                    "code": "REQUIRED_GRID_CELL",
+                completeness_warnings.append({
+                    "code": "MISSING_GRID_CELL",
                     "type": "GRID_CELL",
                     "id": f"{grid.id}:{row_id}:{column.id}",
                     "section_code": grid.section.section_code,
@@ -110,7 +144,10 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
             required_total += 1
             section_code = requirement.section.section_code if requirement.section else ""
             section_required[section_code] += 1
-            if submission.kmz_uploads.filter(requirement=requirement, scan_status="CLEAN").exists():
+            clean_upload = submission.kmz_uploads.filter(requirement=requirement, scan_status="CLEAN").exists()
+            # Provider submission needs a clean file; final NCA approval separately
+            # requires the regulatory review disposition to be ACCEPTED.
+            if clean_upload:
                 completed_total += 1
                 section_completed[section_code] += 1
                 continue
@@ -122,7 +159,6 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
                 "label": requirement.get_category_display(),
             })
 
-    validation_run = run_validation(submission, validation_scope)
     for result in validation_run.results.filter(severity="BLOCK"):
         blockers.append({"code": result.code, "type": result.target_type, "id": result.target_id, "section_code": "", "label": result.message})
 
@@ -132,8 +168,8 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
     blockers = [b for b in blockers if b["code"] in non_overridable or str(b["id"]) not in waived]
     completion_pct = round((completed_total / required_total) * 100, 2) if required_total else 100.0
     missing_types = defaultdict(int)
-    for blocker in blockers:
-        missing_types[blocker["type"]] += 1
+    for warning in completeness_warnings:
+        missing_types[warning["type"]] += 1
 
     sections = []
     for section in template.sections.all():
@@ -147,14 +183,31 @@ def calculate_submission_readiness(submission, validation_scope="FULL"):
             "complete": provided >= required,
         })
 
+    validation_issues = [
+        {
+            "id": result.id,
+            "severity": result.severity,
+            "target_type": result.target_type,
+            "target_id": result.target_id,
+            "code": result.code,
+            "message": result.message,
+            "details": result.details,
+        }
+        for result in validation_run.results.all()
+    ]
     return {
         "completion_pct": completion_pct,
         "can_submit": not blockers,
-        "missing_required_count": len(blockers),
+        "missing_indicator_count": blank_indicator_count,
+        # Compatibility field retained for existing clients; it now describes
+        # requested indicators that are blank, not workflow blockers.
+        "missing_required_count": len(completeness_warnings),
         "missing_by_type": dict(missing_types),
+        "completeness_warnings": completeness_warnings,
         "blocking_issues": blockers,
         "validation_run_id": validation_run.id,
         "warning_count": validation_run.results.filter(severity="WARN").count(),
+        "validation_issues": validation_issues,
         "sections": sections,
     }
 

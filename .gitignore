@@ -29,6 +29,7 @@ backend/private_exports/
 
 # Node / Next.js
 node_modules/
+.dependency-backups/
 .next/
 out/
 *.tsbuildinfo
@@ -60,9 +61,13 @@ Thumbs.db
 
 # Backups (generated locally, never committed)
 backups/
+.tmp/
+backend/*.sqlite3
 
 # Browser automation artifacts
 .playwright-cli/
+frontend/test-results/
+frontend/playwright-report/
 
 # Secrets
 .env.local

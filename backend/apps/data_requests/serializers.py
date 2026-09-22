@@ -3,6 +3,7 @@ from apps.forms_engine.models import FormField, FormTemplate, GridColumn
 from apps.providers.models import ProviderProfile
 from apps.submissions.models import ReportingPeriod
 from apps.audit.services import record_audit
+from apps.users.models import User
 from .models import DataRequest, DataRequestEvent, DataRequestArtifact, DataRequestNotification
 
 
@@ -23,24 +24,45 @@ class DataRequestSerializer(serializers.ModelSerializer):
     events = EventSerializer(many=True, read_only=True)
     artifact = ArtifactSerializer(read_only=True)
     reviewer_name = serializers.CharField(source="reviewer.name", read_only=True, allow_null=True)
+    dataset_names = serializers.SerializerMethodField()
+    period_names = serializers.SerializerMethodField()
+    provider_names = serializers.SerializerMethodField()
+
+    def get_dataset_names(self, obj):
+        ids = [int(value) for value in obj.scope.get("form_template_ids", [])]
+        names = dict(FormTemplate.objects.filter(id__in=ids).values_list("id", "name"))
+        return [names[item_id] for item_id in ids if item_id in names]
+
+    def get_period_names(self, obj):
+        ids = [int(value) for value in obj.scope.get("period_ids", [])]
+        names = dict(ReportingPeriod.objects.filter(id__in=ids).values_list("id", "name"))
+        return [names[item_id] for item_id in ids if item_id in names]
+
+    def get_provider_names(self, obj):
+        ids = [int(value) for value in obj.scope.get("provider_ids", [])]
+        if not ids:
+            from .services import eligible_submissions
+            ids = list(dict.fromkeys(submission.expected.provider_id for submission in eligible_submissions(obj.scope)))
+        providers = {item.id: item.trade_name or item.registered_name for item in ProviderProfile.objects.filter(id__in=ids)}
+        return [providers[item_id] for item_id in ids if item_id in providers]
 
     class Meta:
         model = DataRequest
         fields = "__all__"
         read_only_fields = [
-            "requester", "requester_name", "requester_email", "status", "reviewer",
+            "requester", "requester_name", "requester_email", "requesting_division", "requester_grade_snapshot", "status", "reviewer",
             "approval_manifest", "projected_row_count", "decision_note", "submitted_at",
             "updated_at", "approved_at", "completed_at", "expected_delivery_at", "events", "artifact",
         ]
 
     def validate_scope(self, scope):
-        required = {"form_template_ids", "period_ids", "provider_scope"}
+        required = {"form_template_ids", "period_ids"}
         if not required.issubset(scope):
             raise serializers.ValidationError("Choose at least one dataset, reporting period and provider scope.")
         if not scope.get("form_template_ids") or not scope.get("period_ids"):
             raise serializers.ValidationError("Choose at least one dataset and reporting period.")
-        provider_scope = scope.get("provider_scope")
-        if provider_scope not in {"ALL", "SECTOR", "CATEGORY", "SELECTED"}:
+        provider_scope = scope.get("provider_scope", "DATASET")
+        if provider_scope not in {"DATASET", "ALL", "SECTOR", "CATEGORY", "SELECTED"}:
             raise serializers.ValidationError("Invalid provider scope.")
         if provider_scope == "SECTOR" and not scope.get("sector"):
             raise serializers.ValidationError("Choose a sector.")
@@ -72,24 +94,27 @@ class DataRequestSerializer(serializers.ModelSerializer):
             "field_ids": field_ids,
             "grid_column_ids": column_ids,
             "provider_scope": provider_scope,
-            "sector": scope.get("sector", ""),
-            "provider_category": scope.get("provider_category", ""),
+            "sector": "" if provider_scope == "DATASET" else scope.get("sector", ""),
+            "provider_category": "" if provider_scope == "DATASET" else scope.get("provider_category", ""),
             "provider_ids": provider_ids if provider_scope == "SELECTED" else [],
         }
 
     def create(self, validated_data):
         user = self.context["request"].user
+        if not user.division_id or not user.grade.strip():
+            raise serializers.ValidationError({"profile": "Ask an Administrator to assign your division and grade before creating a request."})
         from .services import eligible_submissions
         projected = sum(submission.values.count() for submission in eligible_submissions(validated_data["scope"]))
         item = DataRequest.objects.create(
             requester=user, requester_name=user.name, requester_email=user.email,
+            requesting_division=user.division.name, requester_grade_snapshot=user.grade.strip(),
             projected_row_count=projected, **validated_data
         )
-        add_event(item, user, "SUBMITTED", "", "SUBMITTED", "Request submitted for review.")
+        add_event(item, user, "SUBMITTED", "", "SUBMITTED", "Request submitted for review.", notify_admins=True)
         return item
 
 
-def add_event(item, actor, event_type, from_status, to_status, message, metadata=None, notify=False):
+def add_event(item, actor, event_type, from_status, to_status, message, metadata=None, notify=False, notify_admins=False):
     event = DataRequestEvent.objects.create(
         request=item, actor=actor, actor_name=getattr(actor, "name", ""), actor_email=getattr(actor, "email", ""),
         event_type=event_type, from_status=from_status, to_status=to_status, message=message, metadata=metadata or {},
@@ -98,6 +123,12 @@ def add_event(item, actor, event_type, from_status, to_status, message, metadata
         DataRequestNotification.objects.create(
             recipient=item.requester, request=item, title=event_type.replace("_", " ").title(), message=message
         )
+    if notify_admins:
+        DataRequestNotification.objects.bulk_create([
+            DataRequestNotification(recipient=admin, request=item,
+                title=event_type.replace("_", " ").title(), message=message)
+            for admin in User.objects.filter(role__in={"NCA_ADMIN", "NCA_OFFICER"}, is_active=True).exclude(pk=getattr(actor, "pk", None))
+        ])
     record_audit(
         user=actor,
         action=f"DATA_REQUEST_{event_type}",

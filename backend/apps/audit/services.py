@@ -1,9 +1,33 @@
 import hashlib
 import hmac
+import json
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from .models import AuditEvent, AuditAnchor
+
+
+SENSITIVE_AUDIT_KEYS = {
+    "password", "password1", "password2", "token", "access_token", "refresh_token",
+    "secret", "client_secret", "authorization", "cookie", "cookies", "raw_value",
+    "field_values", "values", "body", "content",
+}
+
+
+def _redact_audit_metadata(value):
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, item in value.items():
+            normalized = str(key).lower().replace("-", "_")
+            if normalized in SENSITIVE_AUDIT_KEYS or "password" in normalized or "secret" in normalized or normalized.endswith("_token"):
+                digest = hashlib.sha256(json.dumps(item, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+                cleaned[key] = {"redacted": True, "sha256": digest}
+            else:
+                cleaned[key] = _redact_audit_metadata(item)
+        return cleaned
+    if isinstance(value, list):
+        return [_redact_audit_metadata(item) for item in value]
+    return value
 
 
 @transaction.atomic
@@ -13,7 +37,8 @@ def record_audit(*, user, action, entity_type, entity_id, before=None, after=Non
     return AuditEvent.objects.create(
         user=user, user_email=getattr(user, "email", ""), role=getattr(user, "role", ""),
         organization=getattr(getattr(user, "organization", None), "name", ""), action=action,
-        entity_type=entity_type, entity_id=str(entity_id), before_value=before, after_value=after,
+        entity_type=entity_type, entity_id=str(entity_id),
+        before_value=_redact_audit_metadata(before), after_value=_redact_audit_metadata(after),
         ip_address=ip_address, previous_hash=previous_hash,
     )
 

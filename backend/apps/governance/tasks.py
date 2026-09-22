@@ -1,3 +1,4 @@
+import calendar
 import os
 from datetime import timedelta
 
@@ -8,10 +9,9 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.audit.services import anchor_day, record_audit
-from apps.compliance.emailing import render_template
-from apps.compliance.models import EmailLog, EmailTemplate, TransactionalOutbox
+from apps.compliance.models import EmailTemplate
 from apps.data_requests.models import DataRequestArtifact
-from apps.submissions.models import ExpectedSubmission, ReminderPolicy, SubmissionOverride
+from apps.submissions.models import ExpectedSubmission, ReminderPolicy, SubmissionEvent, SubmissionOverride
 from .models import LegalHold, OperationalTaskRun, RECORD_CLASSES, RecordRetentionPolicy
 
 
@@ -39,6 +39,12 @@ def _fail(run, exc):
     run.save(update_fields=["status", "completed_at", "details"])
 
 
+def _one_calendar_month_before(value):
+    year = value.year if value.month > 1 else value.year - 1
+    month = value.month - 1 if value.month > 1 else 12
+    return value.replace(year=year, month=month, day=min(value.day, calendar.monthrange(year, month)[1]))
+
+
 @shared_task(bind=True, max_retries=3)
 def evaluate_reminders(self, scheduled_key=None):
     key = scheduled_key or timezone.now().strftime("%Y%m%d%H")
@@ -59,21 +65,76 @@ def evaluate_reminders(self, scheduled_key=None):
                     ).first()
                     if not template: continue
                     identity = f"reminder:{policy.id}:{rule_index}:{expected.id}:{timezone.localdate().isoformat()}"
-                    if EmailLog.objects.filter(idempotency_key=identity).exists(): continue
-                    subject, body, _ = render_template(template, expected)
-                    contacts = expected.provider.contacts.filter(is_active=True, notify_on_reminder=True)
-                    recipient_roles = [role.strip() for role in rule.get("recipient_roles", []) if role.strip()]
-                    if recipient_roles:
-                        contacts = contacts.filter(notification_role__in=recipient_roles)
-                    recipients = [{"email": c.email, "name": c.name} for c in contacts] or [{"email": expected.provider.primary_email, "name": expected.provider.registered_name}]
+                    if SubmissionEvent.objects.filter(
+                        submission__expected=expected, event_type=template_type,
+                        metadata__policy_id=policy.id, metadata__rule_index=rule_index,
+                        metadata__run_date=timezone.localdate().isoformat(),
+                    ).exists(): continue
                     actor = policy.approved_by or policy.prepared_by
-                    email = EmailLog.objects.create(template=template, subject=subject, body=body, recipients=recipients,
-                        provider=expected.provider, expected_submission=expected, period=expected.period,
-                        generated_by=actor, status="QUEUED", queued_at=timezone.now(), idempotency_key=identity)
-                    TransactionalOutbox.objects.create(topic="email.queued", aggregate_type="EmailLog", aggregate_id=str(email.id),
-                        payload={"email_id": email.id, "provider_key": "UNCONFIGURED"}, idempotency_key=identity)
+                    submission = expected.versions.order_by("-version", "-id").first()
+                    if not submission:
+                        continue
+                    from apps.submissions.workflow import emit_submission_event
+                    from apps.compliance.communications import create_system_record, queue_automatic_communication
+                    event = emit_submission_event(
+                        submission=submission, actor=actor, event_type=template_type,
+                        message=f"{template.get_template_type_display()} for {submission.submission_reference}.",
+                        from_status=expected.workflow_status, to_status=expected.workflow_status,
+                        audience="PROVIDER", notify=["PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER"],
+                        metadata={"policy_id": policy.id, "rule_index": rule_index, "offset_days": offset,
+                                  "run_date": timezone.localdate().isoformat()},
+                    )
+                    create_system_record(submission=submission, event=event)
+                    queue_automatic_communication(
+                        submission=submission, event=event, action=template_type,
+                        actor=actor, payload={"next_action": "Review and complete the assigned form in the portal."},
+                        template=template, idempotency_key=identity,
+                    )
                     count += 1
-        _finish(run, count, {"sending_enabled": False})
+        # Bi-annual forms have a governed notice exactly one calendar month
+        # before their 30 June or 31 December deadline. This does not depend on
+        # a manually configured day-offset policy.
+        today = timezone.localdate()
+        template = EmailTemplate.objects.filter(
+            template_type="REMINDER", status="APPROVED",
+        ).order_by("-version", "-id").first()
+        if template:
+            semi_annual = ExpectedSubmission.objects.filter(
+                form_template__frequency="SEMI_ANNUAL",
+            ).exclude(workflow_status__in=[
+                "SUBMITTED", "UNDER_REVIEW", "RESUBMITTED", "APPROVED", "ARCHIVED",
+            ]).select_related("period", "form_template", "provider").prefetch_related("versions")
+            for expected in semi_annual:
+                if _one_calendar_month_before(expected.effective_due_at.date()) != today:
+                    continue
+                if SubmissionEvent.objects.filter(
+                    submission__expected=expected, event_type="REMINDER",
+                    metadata__run_date=today.isoformat(),
+                ).exists():
+                    continue
+                submission = expected.versions.order_by("-version", "-id").first()
+                if not submission:
+                    continue
+                from apps.submissions.workflow import emit_submission_event
+                from apps.compliance.communications import create_system_record, queue_automatic_communication
+                actor = expected.period.created_by
+                event = emit_submission_event(
+                    submission=submission, actor=actor, event_type="REMINDER",
+                    message=f"Bi-annual filing notice for {submission.submission_reference}.",
+                    from_status=expected.workflow_status, to_status=expected.workflow_status,
+                    audience="PROVIDER", notify=["PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER"],
+                    metadata={"automatic_bi_annual": True, "months_before": 1,
+                              "run_date": today.isoformat()},
+                )
+                create_system_record(submission=submission, event=event)
+                queue_automatic_communication(
+                    submission=submission, event=event, action="REMINDER", actor=actor,
+                    payload={"next_action": "Complete the bi-annual form before its deadline."},
+                    template=template,
+                    idempotency_key=f"bi-annual-reminder:{expected.id}:{today.isoformat()}",
+                )
+                count += 1
+        _finish(run, count, {"external_handoff": "AVAILABLE"})
         return {"status": "SUCCEEDED", "count": count}
     except Exception as exc:
         _fail(run, exc); raise self.retry(exc=exc)

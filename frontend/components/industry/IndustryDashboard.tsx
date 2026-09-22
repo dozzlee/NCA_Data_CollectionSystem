@@ -47,6 +47,7 @@ import {
   useState,
 } from "react";
 import { cn } from "@/lib/utils";
+import { downloadAuthenticated } from "@/lib/api";
 import {
   PALETTE,
   buildChartData,
@@ -56,8 +57,10 @@ import {
   formatValue,
   getHeadlineMetric,
   percentChange,
+  periodYear,
   prepareSeries,
   sortPeriods,
+  seriesForGranularity,
 } from "@/lib/industry-dashboard/analytics";
 import {
   ChartDatum,
@@ -97,6 +100,9 @@ const VIEW_META: Record<
   DashboardViewId,
   { label: string; short: string; icon: React.ElementType; color: string; soft: string }
 > = {
+  broadcasting: {label:"Broadcasting Services",short:"Broadcasting",icon:RadioTower,color:"#a35212",soft:"#fff3e8"},
+  fibre: {label:"Fibre Broadband",short:"Fibre Broadband",icon:Wifi,color:"#137333",soft:"#e5f4ec"},
+  infrastructure: {label:"Infrastructure",short:"Infrastructure",icon:Layers3,color:"#617384",soft:"#edf1f5"},
   industry: {
     label: "Industry Overview",
     short: "Industry",
@@ -163,7 +169,7 @@ function modalAnimation(reduceMotion: boolean | null) {
 
 function useDialogFocus(
   open: boolean,
-  closeRef: RefObject<HTMLButtonElement>,
+  closeRef: RefObject<HTMLButtonElement | null>,
   onClose: () => void
 ) {
   useEffect(() => {
@@ -487,6 +493,8 @@ function ChartCard({
   onDetails,
   onOperatorChange,
   viewLabel,
+  showProvenance,
+  showActions = true,
 }: {
   chart: IndustryChart;
   range: Range;
@@ -499,6 +507,8 @@ function ChartCard({
   onDetails: (chart: IndustryChart, trigger: HTMLButtonElement) => void;
   onOperatorChange: (operator: string) => void;
   viewLabel: string;
+  showProvenance: boolean;
+  showActions?: boolean;
 }) {
   const [shareMode, setShareMode] = useState(false);
   const [tableOpen, setTableOpen] = useState(false);
@@ -559,9 +569,6 @@ function ChartCard({
         "Period",
         "Series",
         "Value",
-        "Source workbook",
-        "Source sheet",
-        "Provenance",
       ],
     ];
     for (const datum of data) {
@@ -575,9 +582,6 @@ function ChartCard({
           datum.period,
           item.name,
           typeof datum[item.name] === "number" ? (datum[item.name] as number) : null,
-          chart.sourceWorkbook,
-          chart.sourceSheet,
-          chart.provenance ?? "baseline",
         ]);
       }
     }
@@ -605,25 +609,27 @@ function ChartCard({
             <span className="text-[10px] font-semibold uppercase tracking-[0.075em] text-[#7b838c]">
               {VIEW_META[chart.sectorId].short}
             </span>
-            <span
-              className={cn(
-                "rounded-full px-2 py-0.5 text-[9px] font-semibold",
-                chart.provenance === "uploaded"
-                  ? "bg-[#e3f7ef] text-[#15704d]"
-                  : "bg-[#eef2f6] text-[#62707c]"
-              )}
-            >
-              {chart.provenance === "uploaded" ? "Uploaded" : "Workbook baseline"}
-            </span>
+            {showProvenance && (
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[9px] font-semibold",
+                  chart.provenance === "uploaded"
+                    ? "bg-[#e3f7ef] text-[#15704d]"
+                    : "bg-[#eef2f6] text-[#62707c]"
+                )}
+              >
+                {chart.provenance === "uploaded" ? "Uploaded" : "Workbook baseline"}
+              </span>
+            )}
           </div>
           <h3 className="mt-1.5 text-[14px] font-semibold leading-5 text-[#1a1d21]">
             {chart.title}
           </h3>
           <p className="mt-1 text-[10px] text-[#858d96]">
-            {chart.unitLabel} · {chart.sourceSheet}
+            {chart.unitLabel}{showProvenance && chart.sourceSheet ? ` · ${chart.sourceSheet}` : ""}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        {showActions && <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             className={ICON_BUTTON}
@@ -649,7 +655,7 @@ function ChartCard({
           >
             <Maximize2 size={15} aria-hidden="true" />
           </button>
-        </div>
+        </div>}
       </header>
 
       <div className="mt-3 flex min-h-6 flex-wrap items-center justify-between gap-2">
@@ -724,6 +730,7 @@ function DetailDrawer({
   operatorNames,
   reduceMotion,
   charts,
+  showProvenance,
 }: {
   chart: IndustryChart | null;
   open: boolean;
@@ -735,6 +742,7 @@ function DetailDrawer({
   operatorNames: string[];
   reduceMotion: boolean | null;
   charts: IndustryChart[];
+  showProvenance: boolean;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   useDialogFocus(open, closeRef, onClose);
@@ -814,10 +822,12 @@ function DetailDrawer({
               </section>
               <section className="grid gap-3 sm:grid-cols-2">
                 {[
-                  ["Source workbook", chart.sourceWorkbook],
-                  ["Source sheet", chart.sourceSheet],
                   ["Display unit", chart.unitLabel],
-                  ["Data provenance", chart.provenance === "uploaded" ? "Uploaded workbook" : "Bundled workbook baseline"],
+                  ...(showProvenance ? [
+                    ["Source workbook", chart.sourceWorkbook],
+                    ["Source sheet", chart.sourceSheet],
+                    ["Data provenance", chart.provenance === "uploaded" ? "Uploaded workbook" : "Bundled workbook baseline"],
+                  ] : []),
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-[12px] border border-[#dfe5eb] bg-white p-4">
                     <p className="text-[9px] font-semibold uppercase tracking-[0.07em] text-[#838b94]">
@@ -895,12 +905,22 @@ function DetailDrawer({
   );
 }
 
+function GranularityTabs({ value, onChange }: { value: Granularity; onChange: (value: Granularity) => void }) {
+  return (
+    <div className="inline-flex rounded-[10px] border border-[#dce3e9] bg-[#f3f6f8] p-1" role="tablist" aria-label="Dashboard granularity">
+      {(["monthly", "quarterly", "yearly"] as Granularity[]).map((item) => (
+        <button key={item} type="button" role="tab" aria-selected={value === item} onClick={() => onChange(item)}
+          className={cn("h-8 rounded-[7px] px-4 text-[10px] font-semibold capitalize transition", value === item ? "bg-white text-[#173d64] shadow-sm" : "text-[#6f7a85] hover:text-[#34414d]")}>{item}</button>
+      ))}
+    </div>
+  );
+}
+
 function FilterControls({
   dataset,
   range,
   setRange,
   granularity,
-  setGranularity,
   trendMode,
   setTrendMode,
   operator,
@@ -914,7 +934,6 @@ function FilterControls({
   range: Range;
   setRange: (range: Range) => void;
   granularity: Granularity;
-  setGranularity: (value: Granularity) => void;
   trendMode: TrendMode;
   setTrendMode: (value: TrendMode) => void;
   operator: string;
@@ -924,8 +943,14 @@ function FilterControls({
   sort: SortMode;
   setSort: (value: SortMode) => void;
 }) {
+  const periodOptions = granularity === "yearly"
+    ? Array.from(new Set(dataset.periods.map((period) => String(periodYear(period)))))
+    : granularity === "monthly"
+      ? dataset.periods.filter((period) => /^\d{4}-(0[1-9]|1[0-2])$/.test(period) || /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}$/i.test(period))
+      : dataset.periods.filter((period) => /^Q[1-4]\s+\d{4}$/.test(period));
+  const periodsAvailable = periodOptions.length > 0;
   return (
-    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_0.8fr_0.9fr_1fr_1.2fr_0.8fr]">
+    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-[1fr_1fr_0.9fr_1fr_1.2fr_0.8fr]">
       <label className="grid gap-1">
         <span className="text-[9px] font-semibold uppercase tracking-[0.065em] text-[#747d87]">
           From
@@ -935,9 +960,11 @@ function FilterControls({
           onChange={(event) => setRange({ ...range, start: event.target.value })}
           className={CONTROL}
           aria-label="Start period"
+          disabled={!periodsAvailable}
         >
-          {dataset.periods
-            .filter((period) => dataset.periods.indexOf(period) <= dataset.periods.indexOf(range.end))
+          {!periodsAvailable && <option>Monthly unavailable</option>}
+          {periodOptions
+            .filter((period) => periodOptions.indexOf(period) <= periodOptions.indexOf(range.end))
             .map((period) => (
               <option key={period}>{period}</option>
             ))}
@@ -952,29 +979,14 @@ function FilterControls({
           onChange={(event) => setRange({ ...range, end: event.target.value })}
           className={CONTROL}
           aria-label="End period"
+          disabled={!periodsAvailable}
         >
-          {dataset.periods
-            .filter((period) => dataset.periods.indexOf(period) >= dataset.periods.indexOf(range.start))
+          {!periodsAvailable && <option>Monthly unavailable</option>}
+          {periodOptions
+            .filter((period) => periodOptions.indexOf(period) >= periodOptions.indexOf(range.start))
             .map((period) => (
               <option key={period}>{period}</option>
             ))}
-        </select>
-      </label>
-      <label className="grid gap-1">
-        <span className="text-[9px] font-semibold uppercase tracking-[0.065em] text-[#747d87]">
-          Granularity
-        </span>
-        <select
-          value={granularity}
-          onChange={(event) => setGranularity(event.target.value as Granularity)}
-          className={CONTROL}
-          aria-label="Granularity"
-        >
-          <option value="monthly" disabled>
-            Monthly · unavailable
-          </option>
-          <option value="quarterly">Quarterly</option>
-          <option value="yearly">Yearly</option>
         </select>
       </label>
       <label className="grid gap-1">
@@ -1853,7 +1865,7 @@ function CoverageView({
   );
 }
 
-export function IndustryDashboard() {
+export function IndustryDashboard({ canManage = false, providerView = false }: { canManage?: boolean; providerView?: boolean }) {
   const reduceMotion = useReducedMotion();
   const [dataset, setDataset] = useState<IndustryDashboardDataset | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -1879,10 +1891,16 @@ export function IndustryDashboard() {
   const detailTrigger = useRef<HTMLButtonElement | null>(null);
   const baselineDataset = useRef<IndustryDashboardDataset | null>(null);
 
+  useEffect(()=>{
+    const refresh=()=>setLoadVersion(value=>value+1);
+    window.addEventListener("focus",refresh);
+    return ()=>window.removeEventListener("focus",refresh);
+  },[]);
+
   useEffect(() => {
     let active = true;
     setLoadError(false);
-    fetch("/data/industry-dashboard.json")
+    fetch("/api/v1/industry-dashboard/data/", { credentials: "include" })
       .then((response) => {
         if (!response.ok) throw new Error("Dataset request failed.");
         return response.json() as Promise<IndustryDashboardDataset>;
@@ -1916,8 +1934,12 @@ export function IndustryDashboard() {
               provenance: "uploaded" as const,
             }
           : { ...chart, provenance: "baseline" as const }
-      ) ?? [],
-    [dataset, overrides]
+      ).map(chart=>({...chart,
+        series:chart.series.map(series=>seriesForGranularity(series,granularity)),
+        shareSeries:chart.shareSeries.map(series=>seriesForGranularity(series,granularity)),
+      }))
+      ?? [],
+    [dataset, overrides, granularity]
   );
   const chartMap = useMemo(
     () => new Map(charts.map((chart) => [chart.id, chart])),
@@ -1955,14 +1977,12 @@ export function IndustryDashboard() {
             dataset.sectors.find((sector) => sector.id === activeView)?.defaultRange ?? "10",
             10
           );
-    setRange({
-      start: dataset.periods[Math.max(0, dataset.periods.length - count)],
-      end: dataset.metadata.latestObservedPeriod,
-    });
+    const periods=sortPeriods([...new Set(charts.flatMap(chart=>chart.series.flatMap(series=>series.values.map(point=>point.period))))]);
+    setRange({start:periods[Math.max(0,periods.length-count)]??"",end:periods.at(-1)??""});
     setSearch("");
     setOperator("all");
     setTrendMode("absolute");
-  }, [activeView, dataset]);
+  }, [activeView, dataset, charts]);
 
   const visibleCharts = useMemo(() => {
     if (!dataset || !activeSection) return [];
@@ -2068,41 +2088,49 @@ export function IndustryDashboard() {
     ]);
   };
 
-  const exportVisible = () => {
-    const rows: (string | number | null)[][] = [
-      ["Dashboard", "Section", "Chart", "Unit", "Period", "Series", "Value", "Source workbook", "Source sheet", "Provenance"],
-    ];
-    for (const chart of visibleCharts) {
-      const series = prepareSeries(chart, {
-        shareMode: false,
-        operator,
-        operatorNames,
-        granularity,
-        trendMode,
-      });
-      const data = buildChartData(series, range, granularity);
-      for (const datum of data) {
-        for (const item of series) {
-          rows.push([
-            viewLabel,
-            activeSection?.label ?? "Overview",
-            chart.title,
-            chartUnit(chart, trendMode, false),
-            datum.period,
-            item.name,
-            typeof datum[item.name] === "number" ? (datum[item.name] as number) : null,
-            chart.sourceWorkbook,
-            chart.sourceSheet,
-            chart.provenance ?? "baseline",
-          ]);
-        }
-      }
-    }
-    downloadCsv(
-      `industry-${activeView}-${range.end.replace(" ", "-")}.csv`,
-      rows
+  const exportVisible = async () => {
+    await downloadAuthenticated(
+      "/industry-dashboard/export/?format=xlsx", {}, "nca_industry_dashboard_aggregate.xlsx"
     );
   };
+
+  const changeGranularity = (next: Granularity) => {
+    if (next === "yearly") {
+      setRange({ start: String(periodYear(range.start)), end: String(periodYear(range.end)) });
+    } else if (next === "quarterly" && granularity === "yearly") {
+      setRange({ start: `Q1 ${range.start}`, end: `Q4 ${range.end}` });
+    }
+    setGranularity(next);
+  };
+
+  if (providerView) {
+    return (
+      <div className="mx-auto w-full max-w-[1500px] space-y-4 pb-10">
+        <header className="rounded-[17px] border border-[#d9e1e8] bg-white px-5 py-5 shadow-[0_8px_26px_rgba(0,45,91,0.055)] sm:px-6">
+          <p className="text-[9px] font-semibold uppercase tracking-[0.075em] text-[#0a66c2]">NCA aggregate information</p>
+          <h1 className="mt-2 text-[25px] font-semibold tracking-[-0.035em] text-[#15191d]">Industry indicators</h1>
+          <p className="mt-1 max-w-2xl text-[12px] leading-5 text-[#65707a]">An anonymized view of headline industry trends. Provider-level data and NCA source information are not included.</p>
+        </header>
+        <div className="flex justify-start"><GranularityTabs value={granularity} onChange={changeGranularity} /></div>
+        {granularity === "monthly" && !dataset.metadata.monthlyDataAvailable ? (
+          <section className="rounded-[16px] border border-dashed border-[#cfd8e0] bg-white px-5 py-16 text-center" role="status">
+            <CalendarRange className="mx-auto text-[#7e8d99]" size={30} aria-hidden="true" />
+            <h2 className="mt-3 text-[15px] font-semibold text-[#36404a]">Monthly data is not available</h2>
+            <p className="mt-1 text-[11px] text-[#7c858e]">The authorized dashboard source currently contains quarterly observations. No monthly values have been estimated.</p>
+          </section>
+        ) : (
+          <>
+            {metricCharts.length > 0 && <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-6" aria-label="Latest aggregate indicator values">
+              {metricCharts.map((chart,index)=><MetricCard key={chart.id} chart={chart} rangeEnd={range.end} operator="all" operatorNames={[]} index={index} reduceMotion={reduceMotion}/>) }
+            </section>}
+            <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-12" aria-label="Aggregate industry charts">
+              {visibleCharts.map((chart,index)=>{const heroIndex=visibleCharts.slice(0,index+1).filter(item=>item.presentation.emphasis==="hero").length-1;return <div key={chart.id} className={chartGridClass(chart,heroIndex)}><ChartCard chart={chart} range={range} granularity={granularity} trendMode="absolute" operator="all" operatorNames={[]} globalTable={false} reduceMotion={reduceMotion} viewLabel="Industry" showProvenance={false} showActions={false} onOperatorChange={()=>{}} onDetails={()=>{}}/></div>})}
+            </section>
+          </>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-[1720px] space-y-4 pb-10">
@@ -2140,7 +2168,7 @@ export function IndustryDashboard() {
               >
                 {[
                   ["analytics", PanelTop, "Analytics"],
-                  ["coverage", BookOpen, "Coverage & Sources"],
+                  ...(canManage ? [["coverage", BookOpen, "Coverage & Sources"]] : []),
                 ].map(([value, Icon, label]) => (
                   <button
                     key={String(value)}
@@ -2162,15 +2190,15 @@ export function IndustryDashboard() {
               </div>
               {mode === "analytics" && (
                 <>
-                  <button
+                  {canManage && <button
                     type="button"
                     onClick={() => setUploadOpen(true)}
                     className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-[#dce3e9] bg-white px-3 text-[10px] font-semibold text-[#40505f] hover:bg-[#f6f8fa]"
                   >
                     <Upload size={14} aria-hidden="true" />
                     Upload workbook
-                  </button>
-                  {hasUpload && (
+                  </button>}
+                  {canManage && hasUpload && (
                     <button
                       type="button"
                       onClick={() => setCustomOpen(true)}
@@ -2269,7 +2297,7 @@ export function IndustryDashboard() {
                   onClick={exportVisible}
                 >
                   <Download size={13} aria-hidden="true" />
-                  Export view
+                   Export aggregate XLSX
                 </button>
                 <button
                   type="button"
@@ -2279,7 +2307,7 @@ export function IndustryDashboard() {
                   <Sparkles size={13} aria-hidden="true" />
                   Forecast
                 </button>
-                {hasUpload && (
+                {canManage && hasUpload && (
                   <button
                     type="button"
                     className="inline-flex h-9 items-center gap-2 rounded-[9px] border border-[#e0d4ed] bg-[#faf7fd] px-3 text-[10px] font-semibold text-[#6f3e9d]"
@@ -2323,24 +2351,17 @@ export function IndustryDashboard() {
         <CoverageView dataset={dataset} onExport={exportCoverage} />
       ) : (
         <>
+          <div className="flex justify-start"><GranularityTabs value={granularity} onChange={changeGranularity} /></div>
           <section className="hidden rounded-[15px] border border-[#dce3e9] bg-white p-4 shadow-[0_5px_16px_rgba(0,45,91,0.035)] lg:block">
-            <FilterControls
-              dataset={dataset}
-              range={range}
-              setRange={setRange}
-              granularity={granularity}
-              setGranularity={setGranularity}
-              trendMode={trendMode}
-              setTrendMode={setTrendMode}
-              operator={operator}
-              setOperator={setOperator}
-              search={search}
-              setSearch={setSearch}
-              sort={sort}
-              setSort={setSort}
-            />
+            <FilterControls dataset={dataset} range={range} setRange={setRange} granularity={granularity} trendMode={trendMode} setTrendMode={setTrendMode} operator={operator} setOperator={setOperator} search={search} setSearch={setSearch} sort={sort} setSort={setSort}/>
           </section>
-
+          {granularity === "monthly" && !dataset.metadata.monthlyDataAvailable ? (
+            <section className="rounded-[16px] border border-dashed border-[#cfd8e0] bg-white px-5 py-16 text-center" role="status">
+              <CalendarRange className="mx-auto text-[#7e8d99]" size={30} aria-hidden="true" />
+              <h2 className="mt-3 text-[15px] font-semibold text-[#36404a]">Monthly data is not available</h2>
+              <p className="mt-1 text-[11px] text-[#7c858e]">The authorized dashboard source currently contains quarterly observations. No monthly values have been estimated.</p>
+            </section>
+          ) : (<>
           <section className="flex gap-2 overflow-x-auto pb-0.5" aria-label="Indicator sections">
             {sections.map((section) => (
               <button
@@ -2397,7 +2418,7 @@ export function IndustryDashboard() {
               </h2>
             </div>
             <p className="text-[10px] text-[#78828b]">
-              {granularity === "yearly" ? "Curated annual aggregation" : "Quarterly observations"} ·{" "}
+              {granularity === "yearly" ? "Annual observations and aggregation" : granularity === "monthly" ? "Approved monthly observations" : "Quarterly observations"} ·{" "}
               {range.start}–{range.end}
             </p>
           </section>
@@ -2433,6 +2454,7 @@ export function IndustryDashboard() {
                       globalTable={globalTable}
                       reduceMotion={reduceMotion}
                       viewLabel={viewLabel}
+                      showProvenance={canManage}
                       onOperatorChange={setOperator}
                       onDetails={(selected, trigger) => {
                         detailTrigger.current = trigger;
@@ -2454,6 +2476,7 @@ export function IndustryDashboard() {
                     globalTable={globalTable}
                     reduceMotion={reduceMotion}
                     viewLabel={`${viewLabel} · Custom`}
+                    showProvenance={canManage}
                     onOperatorChange={setOperator}
                     onDetails={(selected, trigger) => {
                       detailTrigger.current = trigger;
@@ -2468,7 +2491,7 @@ export function IndustryDashboard() {
               <FileSearch className="mx-auto text-[#9aa4ad]" size={29} aria-hidden="true" />
               <h2 className="mt-3 text-[14px] font-semibold text-[#36404a]">No indicators match</h2>
               <p className="mt-1 text-[11px] text-[#7c858e]">
-                Clear the search or choose another section.
+                {search ? "Clear the search or choose another section." : "Indicators will appear here when numeric form data for this service is approved by NCA."}
               </p>
               <button
                 type="button"
@@ -2507,6 +2530,7 @@ export function IndustryDashboard() {
               <ChevronRight size={13} aria-hidden="true" />
             </button>
           </section>
+          </>)}
         </>
       )}
 
@@ -2550,7 +2574,6 @@ export function IndustryDashboard() {
                 range={range}
                 setRange={setRange}
                 granularity={granularity}
-                setGranularity={setGranularity}
                 trendMode={trendMode}
                 setTrendMode={setTrendMode}
                 operator={operator}
@@ -2586,6 +2609,7 @@ export function IndustryDashboard() {
         operatorNames={operatorNames}
         reduceMotion={reduceMotion}
         charts={charts}
+        showProvenance={canManage}
       />
       <ForecastDialog
         open={forecastOpen}
@@ -2596,7 +2620,7 @@ export function IndustryDashboard() {
         operatorNames={operatorNames}
         reduceMotion={reduceMotion}
       />
-      <UploadDialog
+      {canManage && <UploadDialog
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
         dataset={{ ...dataset, charts }}
@@ -2621,14 +2645,14 @@ export function IndustryDashboard() {
             end: preview.latestObservedPeriod,
           }));
         }}
-      />
-      <CustomChartDialog
+      />}
+      {canManage && <CustomChartDialog
         open={customOpen}
         onClose={() => setCustomOpen(false)}
         charts={charts}
         reduceMotion={reduceMotion}
         onAdd={(chart) => setCustomCharts((current) => [...current, chart])}
-      />
+      />}
     </div>
   );
 }

@@ -22,6 +22,10 @@ interface RequestNotificationResponse {
   results: RequestNotification[];
 }
 
+interface SubmissionNotificationResponse {
+  results: { id:number; submission:number; title:string; message:string; is_read:boolean; created_at:string; form_code:string; provider_name:string }[];
+}
+
 interface DashboardSummary {
   overdue: number;
   correction_requested: number;
@@ -60,7 +64,13 @@ function NotificationPanel({ onClose, isRequester }: { onClose: () => void; isRe
     queryKey: ["data-request-notifications"],
     queryFn: () => api("/data-request-notifications/"),
     staleTime: 30 * 1000,
-    enabled: isRequester,
+    enabled: true,
+  });
+  const { data: submissionNotifications } = useQuery<SubmissionNotificationResponse>({
+    queryKey: ["submission-notifications"],
+    queryFn: () => api("/submission-notifications/"),
+    staleTime: 30 * 1000,
+    enabled: !isRequester,
   });
 
   if (isRequester) {
@@ -115,7 +125,7 @@ function NotificationPanel({ onClose, isRequester }: { onClose: () => void; isRe
       icon: <MessageSquare size={14} />,
       color: "#c0112a",
       bg: "#ffe8e8",
-      label: "Correction requested",
+      label: "Flag requested",
       count: summary?.correction_requested ?? 0,
       href: "/submissions?workflow_status=CORRECTION_REQUESTED",
     },
@@ -148,6 +158,9 @@ function NotificationPanel({ onClose, isRequester }: { onClose: () => void; isRe
     },
   ].filter(n => n.count > 0);
 
+  const workflowNotices = submissionNotifications?.results ?? [];
+  const dataRequestNotices = requestNotifications?.results ?? [];
+
   const totalAlerts = (summary?.overdue ?? 0) + (summary?.correction_requested ?? 0);
 
   return (
@@ -163,6 +176,30 @@ function NotificationPanel({ onClose, isRequester }: { onClose: () => void; isRe
       </div>
 
       {/* Alerts */}
+      {dataRequestNotices.length > 0 && (
+        <div className="max-h-[180px] divide-y divide-[#eceef0] overflow-y-auto border-b border-[#eceef0]">
+          {dataRequestNotices.slice(0, 5).map(item => (
+            <Link key={`request-${item.id}`} href={`/data-requests?id=${item.request}`} onClick={onClose}
+              className={`block px-5 py-3 hover:bg-[#f7f9fb] ${item.read_at ? "" : "bg-[#f4f8fd]"}`}>
+              <p className="text-[12px] font-semibold text-[#191c1e]">{item.title}</p>
+              <p className="mt-0.5 line-clamp-2 text-[11px] text-[#43474f]">{item.message}</p>
+              <p className="mt-1 text-[10px] text-[#737780]">Data request · {item.request_title}</p>
+            </Link>
+          ))}
+        </div>
+      )}
+      {workflowNotices.length > 0 && (
+        <div className="max-h-[220px] divide-y divide-[#eceef0] overflow-y-auto">
+          {workflowNotices.slice(0, 6).map(item => (
+            <Link key={item.id} href={`/submissions/${item.submission}/review`} onClick={onClose}
+              className={`block px-5 py-3 hover:bg-[#f7f9fb] ${item.is_read ? "" : "bg-[#f4f8fd]"}`}>
+              <p className="text-[12px] font-semibold text-[#191c1e]">{item.title}</p>
+              <p className="mt-0.5 line-clamp-2 text-[11px] text-[#43474f]">{item.message}</p>
+              <p className="mt-1 text-[10px] text-[#737780]">{item.form_code} · {item.provider_name}</p>
+            </Link>
+          ))}
+        </div>
+      )}
       {notifications.length === 0 ? (
         <div className="px-5 py-8 text-center">
           <CheckCircle2 size={24} className="mx-auto text-[#1f7a4d] mb-2" />
@@ -250,12 +287,21 @@ export function TopBar() {
     queryFn: () => api("/data-request-notifications/"),
     staleTime: 30 * 1000,
     refetchInterval: 60 * 1000,
-    enabled: isRequester,
+    enabled: user !== undefined,
+  });
+  const { data: submissionNotifications } = useQuery<SubmissionNotificationResponse>({
+    queryKey: ["submission-notifications"],
+    queryFn: () => api("/submission-notifications/?unread=true"),
+    staleTime: 30 * 1000,
+    refetchInterval: 60 * 1000,
+    enabled: user !== undefined && !isRequester,
   });
 
   const urgentCount = isRequester
     ? requestNotifications?.unread_count ?? 0
-    : (summary?.overdue ?? 0) + (summary?.correction_requested ?? 0);
+    : (summary?.overdue ?? 0) + (summary?.correction_requested ?? 0)
+      + (submissionNotifications?.results.filter(item => !item.is_read).length ?? 0)
+      + (requestNotifications?.unread_count ?? 0);
 
   // Active period for indicator
   const { data: periodsData } = useQuery<{ results: ReportingPeriod[] }>({
@@ -278,7 +324,7 @@ export function TopBar() {
   }, []);
 
   return (
-    <header className="flex h-14 shrink-0 items-center gap-4 border-b border-[#e6e8ea] bg-white px-6">
+    <header className="workspace-header relative z-30 flex h-14 shrink-0 items-center gap-4 border-b px-6">
       <div className="flex flex-1 items-center justify-end gap-2">
         {/* Notification bell */}
         <div ref={ref} className="relative">

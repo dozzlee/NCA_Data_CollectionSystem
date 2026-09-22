@@ -31,7 +31,7 @@ export default function IndustryDashboardPage() {
       <div className="flex min-h-screen flex-col bg-[#f7f9fb]">
         <ProviderTopBar />
         <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
-          <IndustryDashboard />
+          <IndustryDashboard canManage={false} providerView />
         </main>
       </div>
     );
@@ -43,7 +43,7 @@ export default function IndustryDashboardPage() {
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
-          <IndustryDashboard />
+          <IndustryDashboard canManage={user.role === "NCA_ADMIN" || user.role === "NCA_OFFICER"} />
         </main>
       </div>
     </div>

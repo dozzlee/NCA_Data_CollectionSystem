@@ -1,5 +1,7 @@
 from django.contrib import admin
-from .models import FormTemplate, FormSection, FormField, FormGrid, GridColumn, GridRow, KMZUploadRequirement
+from .models import FormTemplate, FormSection, FormField, FormGrid, GridColumn, GridRow, KMZUploadRequirement, FormRequirement, FormGapAssessment
+
+admin.site.register([FormRequirement, FormGapAssessment])
 
 
 class FormSectionInline(admin.TabularInline):

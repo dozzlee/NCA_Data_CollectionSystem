@@ -1,43 +1,16 @@
+# Compatibility image for local evaluation only. Production uses the separate
+# backend/frontend images in docker-compose.prod.yml.
 FROM python:3.12-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
-# Install system dependencies including PostgreSQL server
-RUN apt-get update && apt-get install -y \
-    postgresql \
-    postgresql-client \
-    nodejs \
-    npm \
-    libmagic1 \
-    libmagic-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends libpq5 libmagic1 \
     && rm -rf /var/lib/apt/lists/*
-
-# Backend setup
-COPY backend/requirements.txt ./backend/
+COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir -r backend/requirements.txt
-
-# Frontend setup
-COPY frontend/package*.json ./frontend/
-RUN cd frontend && npm ci
-
-# Copy all code
 COPY backend ./backend
-COPY frontend ./frontend
 
-# Expose ports
-EXPOSE 7860 8000 3000
-
-# Startup: init postgres, run migrations, seed, start both servers
-CMD bash -c "\
-    service postgresql start && \
-    sleep 3 && \
-    su -c \"psql -c \\\"CREATE USER nca WITH PASSWORD 'nca_dev_pass';\\\"\" postgres 2>/dev/null || true && \
-    su -c \"psql -c \\\"CREATE DATABASE nca_dc OWNER nca;\\\"\" postgres 2>/dev/null || true && \
-    export DATABASE_URL=postgresql://nca:nca_dev_pass@localhost:5432/nca_dc && \
-    cd /app/backend && \
-    python manage.py migrate && \
-    python manage.py seed_data && \
-    python manage.py runserver 0.0.0.0:8000 & \
-    cd /app/frontend && \
-    DJANGO_INTERNAL_URL=http://localhost:8000 npm run dev -- -p 7860\
-"
+EXPOSE 8000
+CMD ["sh", "-c", "cd /app/backend && python manage.py migrate --noinput && python manage.py runserver 0.0.0.0:8000"]

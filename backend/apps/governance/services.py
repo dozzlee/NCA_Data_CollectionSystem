@@ -1,48 +1,10 @@
 import hashlib
 import json
 from datetime import timedelta
-from django.conf import settings
 from django.db import models
 from django.utils import timezone
-from apps.audit.services import record_audit, verify_chain
-from .models import RECORD_CLASSES, RecordRetentionPolicy, LegalHold, BackupRun, RestoreDrill, OperationalTaskRun
-
-
-def readiness_report():
-    required = {value for value, _ in RECORD_CLASSES}
-    approved = set(RecordRetentionPolicy.objects.filter(status="APPROVED", retention_days__isnull=False).values_list("record_class", flat=True))
-    active_holds = LegalHold.objects.filter(status="ACTIVE").count()
-    backup = BackupRun.objects.filter(status__in=["SUCCEEDED", "VERIFIED"]).order_by("-completed_at").first()
-    restore = RestoreDrill.objects.filter(status="PASSED").order_by("-completed_at").first()
-    blockers = []
-    if required - approved: blockers.append({"code": "RETENTION_POLICIES", "detail": f"Missing approved policies: {', '.join(sorted(required-approved))}"})
-    if not getattr(settings, "TARGET_RPO_MINUTES", None): blockers.append({"code": "RPO", "detail": "TARGET_RPO_MINUTES is not configured."})
-    if not getattr(settings, "TARGET_RTO_MINUTES", None): blockers.append({"code": "RTO", "detail": "TARGET_RTO_MINUTES is not configured."})
-    if not backup: blockers.append({"code": "BACKUP", "detail": "No successful backup evidence."})
-    if not restore: blockers.append({"code": "RESTORE", "detail": "No passed restore drill."})
-    elif settings.TARGET_RTO_MINUTES and (restore.measured_rto_minutes is None or restore.measured_rto_minutes > settings.TARGET_RTO_MINUTES):
-        blockers.append({"code": "RTO_RESULT", "detail": "The latest restore drill does not meet the configured RTO."})
-    if backup and (not backup.encrypted or not backup.immutable_copy): blockers.append({"code": "BACKUP_CONTROLS", "detail": "Latest backup evidence is not encrypted and immutable."})
-    if not getattr(settings, "RECOVERY_STORAGE_CONFIGURED", False): blockers.append({"code": "RECOVERY_STORAGE", "detail": "Immutable backup/WAL storage is not configured."})
-    if not getattr(settings, "IMMUTABLE_AUDIT_STORAGE_REFERENCE", ""): blockers.append({"code": "AUDIT_ANCHOR_STORAGE", "detail": "Immutable audit-anchor storage is not configured."})
-    if not getattr(settings, "MAIL_PROVIDER_CONFIGURED", False): blockers.append({"code": "MAIL_PROVIDER", "detail": "Microsoft Graph shared-mailbox delivery is not configured; messages cannot be sent."})
-    if not getattr(settings, "APPROVED_PENALTY_REFERENCE", ""): blockers.append({"code": "PENALTY_REFERENCE", "detail": "Approved penalty wording/reference is not configured."})
-    if not getattr(settings, "UAT_SIGNOFF_REFERENCE", ""): blockers.append({"code": "UAT_SIGNOFF", "detail": "Business/provider UAT sign-off is outstanding."})
-    from apps.forms_engine.models import FormFamily, FormTemplate
-    pending_families = list(FormFamily.objects.exclude(frequency_decision_status="APPROVED").values_list("code", flat=True))
-    if pending_families: blockers.append({"code": "FREQUENCY_DECISIONS", "detail": "Pending source-owner decisions: " + ", ".join(pending_families)})
-    incomplete_forms = list(FormTemplate.objects.filter(status="ACTIVE").filter(
-        models.Q(mapping_complete=False) | ~models.Q(approval_status="APPROVED") | models.Q(source_reference__startswith="LEGACY-DEMO")
-    ).values_list("form_code", "version"))
-    if incomplete_forms: blockers.append({"code": "FORM_MAPPINGS", "detail": "Production form mappings are incomplete or demo-only: " + ", ".join(f"{code} v{version}" for code, version in incomplete_forms)})
-    stale_before = timezone.now() - timedelta(hours=26)
-    expected_tasks = {"refresh_due_states", "reconcile_compliance", "evaluate_expiry_and_retention", "create_daily_audit_anchor"}
-    stale = [name for name in expected_tasks if not OperationalTaskRun.objects.filter(task_name=name, status="SUCCEEDED", completed_at__gte=stale_before).exists()]
-    if stale: blockers.append({"code": "STALE_TASKS", "detail": "No recent successful run: " + ", ".join(sorted(stale))})
-    if verify_chain(): blockers.append({"code": "AUDIT_CHAIN", "detail": "Audit-chain verification failed."})
-    if not getattr(settings, "RETENTION_DISPOSITION_ENABLED", False): blockers.append({"code": "DISPOSITION_DISABLED", "detail": "Automated disposition is disabled."})
-    return {"ready": not blockers, "blockers": blockers, "approved_policy_count": len(approved), "required_policy_count": len(required),
-        "active_legal_holds": active_holds, "last_backup": backup.completed_at if backup else None, "last_restore": restore.completed_at if restore else None}
+from apps.audit.services import record_audit
+from .models import LegalHold
 
 
 def preview_disposition(run):

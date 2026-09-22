@@ -1,5 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  allowedDevOrigins: ["127.0.0.1", "localhost"],
+  experimental: {
+    // Django accepts workbook files up to 20 MiB. Allow a small margin for
+    // multipart field boundaries so Next's proxy never truncates a valid file.
+    proxyClientMaxBodySize: "21mb",
+  },
   // Windows/OneDrive may block the symlinks used by standalone tracing.
   // Deployments keep standalone output; local verification can opt out.
   output: process.env.NEXT_DISABLE_STANDALONE === "1" ? undefined : "standalone",

@@ -1,159 +1,55 @@
-# NCA Data Collection System — Production Smoke Test
+# NCA Publication Smoke Test
 
-Run this checklist after every fresh deployment or upgrade. Each item should pass before handing the system over to users.
+Record tester, date, release identifier and environment. A failed mandatory item blocks publication.
 
-**Tester:** ________________  
-**Date:** ________________  
-**Server IP / URL:** ________________  
-**Commit:** ________________
+## Infrastructure and security
 
----
+- [ ] PostgreSQL, Redis, backend, frontend, worker, beat, ClamAV and Nginx are healthy.
+- [ ] Production settings pass `manage.py check --deploy`; no unsafe defaults or automatic demo seeding occurs.
+- [ ] TLS redirect, secure HttpOnly auth cookies, CSRF, HSTS, CORS, host and proxy-CIDR rules behave as configured.
+- [ ] Repeated failed login locks the account; Admin temporary-password reset forces a password change.
+- [ ] `/media/` does not expose private uploads or generated files.
 
-## 1. Infrastructure
+## Seven forms and provider workflow
 
-- [ ] `docker compose -f docker-compose.prod.yml ps` — all four services (`db`, `backend`, `frontend`, `nginx`) show **Up**
-- [ ] `make logs-backend` — no Python tracebacks or migration errors on startup
-- [ ] `make logs-nginx` — no upstream connection errors
-- [ ] `curl -s -o /dev/null -w "%{http_code}" http://<SERVER_IP>/` returns **200**
-- [ ] `curl -s -o /dev/null -w "%{http_code}" http://<SERVER_IP>/api/v1/auth/login/` returns **405** (POST only)
+- [ ] Correct active versions are MNO 3.0, ISP06 3.0, ITC04 3.0, TB02 3.0, Tower 2.0, DBS05 2.0 and SUB03 2.0.
+- [ ] Tower code is visibly provisional; topology KMZ appears only on DBS05.
+- [ ] Data Entry sees server-calculated shared-queue counts, saves scalar/grid snapshots through autosave/manual save, sees precise validation, and stale revisions preserve local values with latest-editor details.
+- [ ] `DRAFT → PENDING_APPROVAL`; only the same provider's Approver sees the item.
+- [ ] A correction can target multiple sections/fields/grid cells, returns only permitted work to Data Entry, and resubmission retains history and targets.
+- [ ] Approver can edit only approval/NCA-correction stages; each save has immutable before/after evidence and a non-sensitive audit hash.
+- [ ] Approver readiness/upload/correction check plus accuracy attestation creates the official `SUBMITTED`/`RESUBMITTED` version; an Approver edit requires a change summary and Data Entry cannot do this.
+- [ ] Navigation notification/pending counts, direct links, mark-one/all-read, history submitted timestamps, receipt links and own technical-ticket history are correct.
+- [ ] NCA review uses the exact stored template, clones regulatory corrections, locks unaffected content and preserves official history.
 
----
+## Form Builder and assignment
 
-## 2. Authentication
+- [ ] Admin/Officer can create a manual draft with an arbitrary normalized code, name, version, sector, provider type and monthly/quarterly/annual frequency.
+- [ ] A private `.xlsx` larger than 20 MB, unreadable/encrypted file, unsafe scan result or unresolved blocking mapping warning cannot be confirmed.
+- [ ] Import preview contains sections/fields/grids/formulas/provenance but no workbook answer values; the reviewed mapping creates a draft, never a published form.
+- [ ] Only an Admin can publish; an Officer-created form remains pending Admin publication approval.
+- [ ] Assignment preview lists exact pairs, duplicates, exclusions and provider mismatches; mismatch override requires a reason.
+- [ ] Recurring assignments renew in matching periods using the latest approved version; manual assignments bind an exact version to one non-closed period and remain idempotent.
+- [ ] Quarterly periods require quarter 1–4, and activation creates only exact recurring/manual obligations plus provider notifications.
 
-- [ ] Login page loads at `http://<SERVER_IP>/login`
-- [ ] Incorrect password → error message shown, no crash
-- [ ] Correct NCA Admin credentials → redirect to `/dashboard`
-- [ ] JWT token stored in `localStorage` (`access_token`, `refresh_token`)
-- [ ] Navigating to `/dashboard` while logged out → redirect to `/login`
+## Roles and features
 
----
+- [ ] Admin has all functions; Officer has operational parity except Users/divisions/Data Requests.
+- [ ] Provider Data Entry has no compliance/general contact action; Approver retains it.
+- [ ] Requester sees only catalog metadata, own requests/notifications and released artifacts.
+- [ ] All roles can view/filter aggregate Industry Dashboard data and download aggregate XLSX.
+- [ ] Only Admin/Officer can update dashboard source/configuration; other roles cannot obtain source or provider-level rows.
 
-## 3. NCA Dashboard
+## Files, exports and audit
 
-- [ ] Dashboard loads without blank panels or console errors
-- [ ] All 4 stat cards render (may show 0 if no data yet)
-- [ ] All 4 charts render without JavaScript errors (may show empty state)
-- [ ] Period selector in filter bar is present
+- [ ] Excel/KMZ upload begins quarantined, stores SHA-256/scan metadata and cannot download before `CLEAN`.
+- [ ] Operational CSV/PDF includes only NCA-approved versions, scalar/grid rows, statuses and review/compliance context.
+- [ ] Admin and owning requester download the exact released request artifact; Officer and unrelated requesters are denied.
+- [ ] Workflow, authentication, validation, upload, download and export events are hash chained; daily anchor verifies.
+- [ ] Outbound messages remain `DRAFT`/`QUEUED` when no mail provider is configured.
 
----
+## Recovery and sign-off
 
-## 4. Providers
-
-- [ ] `/providers` page loads — table visible (empty or with data)
-- [ ] Search box filters results
-- [ ] Category and status dropdowns work
-- [ ] Click "View →" on a provider → detail page loads
-- [ ] Edit mode: click "Edit Provider", change a field, click "Save Changes" → success toast, change persists on reload
-
----
-
-## 5. Periods
-
-- [ ] `/periods` page loads — table visible
-- [ ] "+ New Period" form opens, fills, submits → period appears in list with DRAFT status
-- [ ] Click "View →" on a DRAFT period → detail page loads
-- [ ] "Activate Period" button present on DRAFT period; confirm dialog appears
-- [ ] After activation: period status changes to ACTIVE, expected submissions table populates
-
----
-
-## 6. Submissions (Provider Flow)
-
-_Log in as a provider user for these steps._
-
-- [ ] Provider dashboard loads at `/dashboard` — submission list visible
-- [ ] Overdue submissions show red banner (if any exist)
-- [ ] Click "Start" on a NOT_STARTED submission → form entry page loads
-- [ ] Section stepper visible on the left with all sections listed
-- [ ] Fill a text field → save → completion % updates
-- [ ] Non-filled status dropdown (Not Applicable, etc.) works and shows explanation field
-- [ ] Conditional field: verify a conditional field only appears when its parent field has the required value
-- [ ] "Submit for Approval" button visible when all required fields are filled
-- [ ] Submit for approval → workflow status changes to PENDING_APPROVAL
-
----
-
-## 7. Form Engine
-
-- [ ] Text, number, date, boolean, select, textarea field types all render correctly
-- [ ] Formula fields are read-only
-- [ ] Declaration (checkbox) field works
-- [ ] Fixed-row grid (e.g. Ghana 16 regions) renders all 16 rows
-- [ ] Repeatable grid: "Add Row" adds a new row; "Remove" deletes it
-- [ ] KMZ upload panel is **only** visible on DC-DBS05 and DC-SUB03 forms — not on any other form
-
----
-
-## 8. NCA Review
-
-- [ ] Navigate to a SUBMITTED submission → review page loads
-- [ ] Approve action → status changes to APPROVED
-- [ ] Reject action → status changes to REJECTED
-- [ ] Request Correction → status changes to CORRECTION_REQUESTED
-- [ ] Internal note → appears in review history timeline
-- [ ] Provider comment → appears with "provider-visible" indicator
-
----
-
-## 9. Compliance
-
-- [ ] `/compliance` page loads — summary cards visible
-- [ ] Overdue list populates (if any exist)
-- [ ] Select a provider, choose a template, click "Generate Draft" → email draft created and appears in email log
-- [ ] "Mark Sent" on an email draft → status changes to SENT
-
----
-
-## 10. Exports
-
-- [ ] `/exports` page loads
-- [ ] Select filters and click "Generate CSV" → file downloads (or success message if no data)
-- [ ] Export log entry created after each export action
-
----
-
-## 11. File Uploads
-
-- [ ] On a DC-DBS05 or DC-SUB03 submission: KMZ panel accepts a `.kmz` file
-- [ ] Non-KMZ file (e.g. `.pdf`) is rejected with an error message
-- [ ] Excel backup panel accepts `.xlsx` / `.xls`
-- [ ] Non-Excel file is rejected with an error message
-- [ ] File sizes above 50 MB are rejected server-side
-
----
-
-## 12. Audit Trail
-
-- [ ] Login, submit a section, and approve a submission
-- [ ] In Django Admin (`/admin/audit/auditevent/`) → confirm AuditEvent rows exist for each action
-- [ ] No AuditEvent rows can be updated or deleted via Admin (verify save is blocked)
-
----
-
-## 13. Session & Security
-
-- [ ] After 15 minutes of inactivity, session warning modal appears (or verify JWT expiry is correctly configured)
-- [ ] "Stay signed in" refreshes the token and dismisses the modal
-- [ ] "Sign out" redirects to `/login`
-- [ ] `/api/v1/dashboard/summary/` without a token → **401 Unauthorized**
-- [ ] Provider user cannot access `/api/v1/providers/` (NCA-only endpoint) → **403 Forbidden**
-
----
-
-## 14. Feedback and Issue Reporting
-
-- [ ] `POST /api/v1/feedback/` with a valid token → **201 Created**
-- [ ] `POST /api/v1/issues/` with a valid token → **201 Created**
-- [ ] Records appear in Django Admin under Feedback / System Issues
-
----
-
-## Sign-off
-
-All items checked: **Yes / No**
-
-Signed off by: ________________  
-Date: ________________
-
-If any item fails, document the failure and do not hand over to users until resolved.
+- [ ] Most recent backup and isolated restore meet approved RPO/RTO; representative private-file hashes match.
+- [ ] Retention deletion is disabled unless every policy and approval gate is complete.
+- [ ] Named browser/spreadsheet UAT and NCA business/provider sign-off are attached.

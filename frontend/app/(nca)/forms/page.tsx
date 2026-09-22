@@ -1,38 +1,26 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { useToast } from "@/components/ui/Toast";
-import type { FormTemplate, ProviderCategory, Frequency, Sector } from "@/lib/types";
+import { FormSendDialog } from "@/components/forms/FormSendDialog";
+import type { FormTemplate, Frequency, ProviderCategory } from "@/lib/types";
 import { PROVIDER_CATEGORY_LABELS, SECTOR_LABELS } from "@/lib/utils";
 
 const CATEGORIES: ProviderCategory[] = ["MNO","ISP","PAY_TV","TOWER_OPERATOR","TOWER_MAIN","DOMESTIC_FIBRE","SUBMARINE_FIBRE"];
-const FREQUENCIES: Frequency[] = ["MONTHLY","SEMI_ANNUAL","ANNUAL"];
-const FREQ_LABELS: Record<Frequency, string> = { MONTHLY:"Monthly", SEMI_ANNUAL:"Semi-Annual", ANNUAL:"Annual" };
+const FREQ_LABELS: Record<Frequency, string> = { MONTHLY:"Monthly", QUARTERLY:"Quarterly", SEMI_ANNUAL:"Bi-annual", ANNUAL:"Annual" };
 const STATUS_COLORS: Record<string, string> = {
   ACTIVE: "bg-[#e5f4eb] text-[#1f7a4d]",
   DRAFT:  "bg-[#fff3bf] text-[#7a5c00]",
   ARCHIVED: "bg-[#f2f4f6] text-[#737780]",
 };
 
-interface NewFormState {
-  form_code: string; name: string; sector: Sector; provider_category: ProviderCategory;
-  frequency: Frequency; version: string;
-}
-const EMPTY: NewFormState = {
-  form_code:"", name:"", sector:"TELECOM", provider_category:"MNO", frequency:"MONTHLY", version:"1.0"
-};
-
 export default function FormsPage() {
-  const { toast } = useToast();
-  const qc = useQueryClient();
-  const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState<NewFormState>(EMPTY);
   const [filterCat, setFilterCat] = useState("");
   const [filterSector, setFilterSector] = useState("");
+  const [sendTemplate, setSendTemplate] = useState<FormTemplate | null>(null);
 
   const { data, isLoading } = useQuery<{ results: FormTemplate[] }>({
     queryKey: ["form-templates", filterCat, filterSector],
@@ -44,83 +32,74 @@ export default function FormsPage() {
     },
   });
 
-  const createMutation = useMutation({
-    mutationFn: (d: NewFormState) =>
-      api("/form-templates/", { method:"POST", body: JSON.stringify({ ...d, status:"DRAFT", effective_from: new Date().toISOString().split("T")[0], kmz_required: false }) }),
-    onSuccess: () => {
-      toast("Form template created.", "success");
-      setShowCreate(false); setForm(EMPTY);
-      qc.invalidateQueries({ queryKey: ["form-templates"] });
-    },
-    onError: () => toast("Failed to create template.", "error"),
-  });
-
   const templates = data?.results ?? [];
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-[28px] font-semibold text-[#191c1e]">Form Templates</h1>
+          <h1 className="text-[28px] font-semibold text-[#191c1e]">Forms</h1>
           <p className="mt-1 text-[14px] text-[#43474f]">
-            Manage data collection forms, sections, and indicators. Provider types are fixed; templates and fields are fully configurable.
+            View and manage the approved forms currently available in the system.
           </p>
         </div>
-        <button onClick={() => setShowCreate(v => !v)}
-          className="rounded-[8px] bg-[#001836] px-4 py-2 text-[13px] font-semibold text-white hover:bg-[#002d5b]">
-          {showCreate ? "Cancel" : "+ New Template"}
-        </button>
       </div>
 
-      {showCreate && (
-        <form onSubmit={e => { e.preventDefault(); createMutation.mutate(form); }}
-          className="rounded-[16px] border border-[#eceef0] bg-white p-6 space-y-4">
+      {/* New-template creation is intentionally disabled; forms are provisioned through governed setup. */}{/*
+      {false && (
+        <form className="rounded-[16px] border border-[#eceef0] bg-white p-6 space-y-4">
           <h2 className="text-[15px] font-semibold text-[#191c1e]">New Form Template</h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              { key:"form_code", label:"Form Code", placeholder:"e.g. DC-ISP07" },
-              { key:"name",      label:"Form Name",  placeholder:"e.g. ISP Annual Return v2" },
-              { key:"version",   label:"Version",    placeholder:"1.0" },
-            ].map(({ key, label, placeholder }) => (
-              <div key={key}>
-                <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">{label}</label>
-                <input type="text" placeholder={placeholder} required
-                  value={(form as any)[key]}
-                  onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-                  className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none" />
-              </div>
-            ))}
             <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Sector</label>
-              <select value={form.sector}
-                onChange={e => setForm(f => ({ ...f, sector: e.target.value as Sector }))}
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Form Code</label>
+              <select value={form.form_code} required onChange={e => selectFormCode(e.target.value)}
                 className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none">
-                {Object.entries(SECTOR_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                <option value="">Select a form code</option>
+                {catalog.data?.results.map(item => <option key={item.code} value={item.code}>{item.code}{item.code_status === "PROVISIONAL" ? " (Provisional)" : ""}</option>)}
               </select>
             </div>
             <div>
-              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Provider Type</label>
-              <select value={form.provider_category}
-                onChange={e => setForm(f => ({ ...f, provider_category: e.target.value as ProviderCategory }))}
-                className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none">
-                {CATEGORIES.map(c => <option key={c} value={c}>{PROVIDER_CATEGORY_LABELS[c]}</option>)}
-              </select>
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Form Name</label>
+              <div className="mt-1 min-h-10 rounded-[8px] border border-[#d8dbe2] bg-[#f7f9fb] px-3 py-2 text-[13px] text-[#43474f]">
+                {selectedCode?.name ?? "Select a form code"}
+              </div>
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Version</label>
+              <div className="mt-1 min-h-10 rounded-[8px] border border-[#d8dbe2] bg-[#f7f9fb] px-3 py-2 text-[13px] text-[#43474f]">
+                {form.version || "Select a form code"}
+              </div>
             </div>
             <div>
               <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Frequency</label>
-              <select value={form.frequency}
-                onChange={e => setForm(f => ({ ...f, frequency: e.target.value as Frequency }))}
+              <select value={form.frequency} required onChange={e => setForm(v => ({ ...v, frequency: e.target.value as Frequency }))}
                 className="mt-1 w-full rounded-[8px] border border-[#c3c6d0] px-3 py-2 text-[13px] focus:border-[#0066cc] focus:outline-none">
-                {FREQUENCIES.map(f => <option key={f} value={f}>{FREQ_LABELS[f]}</option>)}
+                <option value="">Select frequency</option>
+                {(["MONTHLY", "QUARTERLY", "SEMI_ANNUAL", "ANNUAL"] as Frequency[]).map(value => <option key={value} value={value}>{FREQ_LABELS[value]}</option>)}
               </select>
             </div>
+            <div className="sm:col-span-2 lg:col-span-3 rounded-[10px] border border-dashed border-[#9aa5b1] bg-[#f7f9fb] p-4">
+              <label className="text-[11px] font-semibold uppercase tracking-wide text-[#737780]">Generate from source file (optional)</label>
+              <input type="file" accept=".xlsx,.pdf,.docx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                onChange={e => setWorkbook(e.target.files?.[0] ?? null)}
+                className="mt-2 block w-full text-[13px] text-[#43474f] file:mr-3 file:rounded-[8px] file:border-0 file:bg-[#e8f1fb] file:px-3 file:py-2 file:font-semibold file:text-[#004999]" />
+              <p className="mt-2 text-[11px] text-[#737780]">Up to 20 MB. Excel structure, or PDF/Word text, is imported for review; source values never become provider answers.</p>
+              {selectedCode?.code === "MNO-MONTHLY" && <p className="mt-2 text-[11px] font-medium text-[#8a4b08]">MNO-MONTHLY uses its dedicated workbook-driven creation workflow. Upload the approved MNO workbook to continue.</p>}
+              {workbook && <p className="mt-2 text-xs font-medium text-[#191c1e]">Selected: {workbook.name} · {(workbook.size / 1024 / 1024).toFixed(1)} MB</p>}
+            </div>
           </div>
-          <button type="submit" disabled={createMutation.isPending}
+          {createMutation.isPending && workbook && (
+            <div role="status" className="rounded-[10px] border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+              <p className="font-semibold">Uploading and analyzing the workbook…</p>
+              <p className="mt-1 text-xs">Each visible worksheet is being converted into a form section. Large workbooks with many formatted tabs can take up to two minutes; keep this page open.</p>
+            </div>
+          )}
+          <button type="submit" disabled={createMutation.isPending || !selectedCode || !form.version || !form.frequency || (selectedCode?.code === "MNO-MONTHLY" && !workbook)}
             className="rounded-[8px] bg-[#001836] px-5 py-2.5 text-[13px] font-semibold text-white hover:bg-[#002d5b] disabled:opacity-50">
-            {createMutation.isPending ? "Creating…" : "Create Template"}
+            {createMutation.isPending ? (workbook ? "Analyzing workbook…" : "Creating…") : workbook ? "Upload & Preview" : "Create Template"}
           </button>
         </form>
-      )}
+      )} */}
 
       {/* Filter */}
       <div className="flex gap-3">
@@ -141,7 +120,7 @@ export default function FormsPage() {
         <table className="w-full text-left">
           <thead className="border-b border-[#eceef0] bg-[#f7f9fb]">
             <tr>
-              {["Code","Name","Sector","Provider Type","Frequency","Version","Status","Sections",""].map(h => (
+              {["Code","Name","Sector","Provider Type","Frequency","Version","Status",""].map(h => (
                 <th key={h} className="px-5 py-3 text-[11px] font-semibold uppercase tracking-wide text-[#43474f]">{h}</th>
               ))}
             </tr>
@@ -149,7 +128,7 @@ export default function FormsPage() {
           <tbody className="divide-y divide-[#eceef0]">
             {isLoading
               ? Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={i}>{Array.from({ length: 9 }).map((_, j) => (
+                  <tr key={i}>{Array.from({ length: 8 }).map((_, j) => (
                     <td key={j} className="px-5 py-3.5"><Skeleton className="h-3.5 w-full" /></td>
                   ))}</tr>
                 ))
@@ -166,17 +145,18 @@ export default function FormsPage() {
                       {t.status}
                     </span>
                   </td>
-                  <td className="px-5 py-3.5 text-[13px] text-[#737780]">—</td>
                   <td className="px-5 py-3.5">
-                    <Link href={`/forms/${t.id}`} className="text-[13px] font-medium text-[#0066cc] hover:underline">
-                      Build →
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <Link href={`/forms/${t.id}`} className="rounded-lg border border-[#c3c6d0] px-3 py-1.5 text-[12px] font-semibold text-[#43474f] hover:bg-[#f2f4f6]">Open</Link>
+                      <button type="button" onClick={() => setSendTemplate(t)} disabled={t.status!=="ACTIVE"||t.approval_status!=="APPROVED"} title={t.status!=="ACTIVE"||t.approval_status!=="APPROVED"?"Only active, approved templates can be sent.":"Send this exact template version to providers"} className="rounded-lg bg-[#0066cc] px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-[#0056ad] disabled:cursor-not-allowed disabled:bg-[#c3c6d0]">Send</button>
+                    </div>
                   </td>
                 </tr>
               ))}
           </tbody>
         </table>
       </div>
+      {sendTemplate&&<FormSendDialog template={sendTemplate} open onClose={()=>setSendTemplate(null)}/>}
     </div>
   );
 }

@@ -47,12 +47,15 @@ class User(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(unique=True)
     name = models.CharField(max_length=255)
     organization = models.ForeignKey(Organization, on_delete=models.PROTECT, null=True, blank=True)
+    division = models.ForeignKey("NCADivision", on_delete=models.PROTECT, null=True, blank=True, related_name="users")
+    grade = models.CharField(max_length=120, blank=True)
     role = models.CharField(max_length=30, choices=ROLE_CHOICES)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     mfa_enabled = models.BooleanField(default=False)
     failed_login_attempts = models.PositiveIntegerField(default=0)
     locked_until = models.DateTimeField(null=True, blank=True)
+    must_change_password = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     last_login_at = models.DateTimeField(null=True, blank=True)
 
@@ -71,6 +74,20 @@ class User(AbstractBaseUser, PermissionsMixin):
     @property
     def is_provider(self):
         return self.role in ("PROVIDER_DATA_ENTRY", "PROVIDER_APPROVER")
+
+    class Meta:
+        ordering = ["name"]
+
+
+class NCADivision(models.Model):
+    code = models.SlugField(max_length=80, unique=True)
+    name = models.CharField(max_length=255, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
 
     class Meta:
         ordering = ["name"]
